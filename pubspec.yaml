@@ -1,0 +1,108 @@
+name: rouvy_pro
+description: >
+  Plataforma premium de ciclismo indoor — arquitectura base (Clean Architecture)
+  para Android, iOS y Web.
+publish_to: 'none'
+version: 0.1.0+1
+
+environment:
+  sdk: '>=3.3.0 <4.0.0'
+  flutter: '>=3.19.0'
+
+dependencies:
+  flutter:
+    sdk: flutter
+  flutter_localizations:
+    sdk: flutter
+
+  # --- Gestión de estado ---
+  flutter_riverpod: ^2.5.1
+  riverpod_annotation: ^2.3.5
+
+  # --- Navegación ---
+  go_router: ^14.2.0
+
+  # --- Firebase ---
+  firebase_core: ^3.1.0
+  firebase_auth: ^5.1.0
+  cloud_firestore: ^5.0.1
+  firebase_storage: ^12.1.0
+  firebase_messaging: ^15.0.1
+  firebase_analytics: ^11.1.0
+  firebase_crashlytics: ^4.0.1
+
+  # --- Login social ---
+  google_sign_in: ^6.2.1
+  sign_in_with_apple: ^6.1.1
+  crypto: ^3.0.5 # genera el nonce requerido por Sign in with Apple
+
+  # --- Programación funcional / manejo de errores ---
+  dartz: ^0.10.1
+  equatable: ^2.0.5
+
+  # --- Inyección de dependencias ---
+  get_it: ^7.7.0
+  injectable: ^2.4.2
+
+  # --- Red / conectividad ---
+  connectivity_plus: ^6.0.3
+  dio: ^5.4.3+1
+
+  # --- Persistencia local ---
+  shared_preferences: ^2.2.3
+  flutter_secure_storage: ^9.2.2
+
+  # --- Bluetooth (rodillos inteligentes) ---
+  flutter_blue_plus: ^1.32.10
+  permission_handler: ^11.3.1
+
+  # --- Wearables on-device (Apple Health / Google Fit vía Health Connect) ---
+  # Sin necesidad de aprobación de partner: solo requieren permisos del
+  # sistema operativo. Ver ARCHITECTURE_DECISIONS.md y WEARABLES_INTEGRATION.md.
+  # ⚠️ Verificar la última versión compatible en pub.dev antes de `pub get`
+  # (el ecosistema de este plugin cambia versión con cierta frecuencia).
+  
+
+  # --- Wearables: Apple Health (HealthKit) y Google Fit ---
+  # Un solo paquete cubre ambas plataformas: en Android usa Health Connect
+  # (el sucesor oficial de la API de Google Fit, que Google dejó de dar
+  # servicio en 2024 — ver ARCHITECTURE_DECISIONS.md, sección 1) y en iOS
+  # usa HealthKit nativo. Sin esto, integrar cada uno requeriría un plugin
+  # distinto con APIs distintas.
+  intl: ^0.20.2
+
+  # --- Utilidades ---
+  health: ^13.3.1
+  logger: ^2.3.0
+  freezed_annotation: ^2.4.4
+  json_annotation: ^4.9.0
+
+  cupertino_icons: ^1.0.8
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  integration_test:
+    sdk: flutter
+
+  # --- Generación de código ---
+  build_runner: ^2.4.11
+  injectable_generator: ^2.6.2
+  freezed: ^2.5.5
+  json_serializable: ^6.8.0
+  riverpod_generator: ^2.4.0
+
+  # --- Testing ---
+  mocktail: ^1.0.4
+  
+
+  # --- Lint ---
+  flutter_lints: ^4.0.0
+
+flutter:
+  uses-material-design: true
+  generate: true # habilita la generación de l10n desde l10n.yaml
+
+  assets:
+    - assets/images/
+    - assets/icons/

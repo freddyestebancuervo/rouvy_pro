@@ -1,0 +1,130 @@
+name: CI
+
+# Se ejecuta automáticamente en cada push/PR — y también se puede disparar
+# a mano desde la pestaña "Actions" de GitHub (botón "Run workflow"),
+# accesible desde el navegador del celular sin necesidad de terminal.
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+  workflow_dispatch: {}
+
+jobs:
+  # =========================================================================
+  # Job 1 — Tests del cliente Flutter (análisis estático + tests unitarios)
+  # =========================================================================
+  flutter-checks:
+    name: Flutter — analyze + test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: subosito/flutter-action@v2
+        with:
+          flutter-version: '3.24.0'
+          channel: stable
+
+      - name: Instalar dependencias
+        run: flutter pub get
+
+      - name: Analizar código (equivalente a "flutter analyze")
+        run: flutter analyze --fatal-infos
+
+      - name: Correr todos los tests unitarios
+        run: flutter test --coverage
+
+      # El reporte de cobertura queda disponible como artefacto
+      # descargable desde la propia página del run en GitHub — no hace
+      # falta ninguna herramienta adicional para verlo.
+      - name: Publicar reporte de cobertura
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: flutter-coverage
+          path: coverage/lcov.info
+
+  # =========================================================================
+  # Job 2 — Tests de seguridad de Firestore (A3/A5, ROADMAP_M0_M1.md)
+  # =========================================================================
+  firestore-rules-tests:
+    name: Firestore — reglas de seguridad (A3/A5)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: firebase/rules-tests
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Instalar Firebase CLI
+        run: npm install -g firebase-tools
+
+      - name: Instalar dependencias del proyecto de tests
+        run: npm install
+
+      - name: Correr la suite de seguridad contra el emulador
+        run: npm test
+
+  # =========================================================================
+  # Job 3 — Tests e2e del backend (C2, ROADMAP_M0_M1.md), con Postgres real
+  # =========================================================================
+  backend-tests:
+    name: Backend — migración + e2e (C2)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: backend
+
+    # GitHub Actions puede levantar un contenedor de servicio junto al
+    # job — esto es una instancia de Postgres REAL, no un mock, corriendo
+    # en la propia infraestructura de GitHub durante el run. Es
+    # exactamente el mismo Postgres que `VERIFICATION_GUIDE.md` pedía
+    # levantar con Docker localmente, solo que acá lo levanta CI solo.
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: ridepro
+          POSTGRES_PASSWORD: devpassword
+          POSTGRES_DB: ridepro_dev
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    env:
+      DATABASE_URL: postgres://ridepro:devpassword@localhost:5432/ridepro_dev
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Instalar dependencias
+        run: npm install
+
+      - name: Aplicar la migración inicial (0001_init.sql)
+        run: psql "$DATABASE_URL" -f migrations/0001_init.sql
+
+      - name: Levantar el servidor y verificar /v1/health
+        run: |
+          npm run start:dev &
+          npx wait-on http://localhost:3000/v1/health --timeout 30000
+          curl -sf http://localhost:3000/v1/health | tee health_response.json
+          kill %1
+
+      - name: Correr los tests e2e
+        run: npm run test:e2e

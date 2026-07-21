@@ -1,0 +1,278 @@
+{
+  "@@locale": "en",
+  "appName": "RidePro",
+  "welcomeTitle": "Train like never before",
+  "welcomeSubtitle": "Real-world routes, live multiplayer and AI training plans — all in a faster app.",
+  "welcomeCreateAccount": "Create account",
+  "welcomeLogin": "I already have an account",
+  "loginTitle": "Welcome back",
+  "loginSubtitle": "Sign in to keep training",
+  "emailLabel": "Email",
+  "passwordLabel": "Password",
+  "confirmPasswordLabel": "Confirm password",
+  "loginButton": "Sign in",
+  "noAccountText": "Don't have an account?",
+  "createAccountLink": "Create account",
+  "forgotPasswordLink": "Forgot your password?",
+  "orDividerText": "or",
+  "continueWithGoogle": "Continue with Google",
+  "continueWithApple": "Continue with Apple",
+  "registerTitle": "Create your account",
+  "registerSubtitle": "Start training in minutes",
+  "nameLabel": "Name",
+  "registerButton": "Sign up",
+  "hasAccountText": "Already have an account?",
+  "loginLink": "Sign in",
+  "termsAcceptText": "By signing up you accept the Terms and Privacy Policy",
+  "forgotPasswordTitle": "Reset your password",
+  "forgotPasswordSubtitle": "We'll send a link to your email to reset it",
+  "sendResetLinkButton": "Send link",
+  "resetLinkSentMessage": "Check your inbox — we sent you a link to reset your password.",
+  "backToLoginLink": "Back to sign in",
+  "verifyEmailTitle": "Verify your email",
+  "verifyEmailMessage": "We sent a confirmation link to {email}. Open it to activate your account.",
+  "@verifyEmailMessage": {
+    "placeholders": {
+      "email": {
+        "type": "String"
+      }
+    }
+  },
+  "resendEmailButton": "Resend email",
+  "resendEmailCooldown": "You can resend in {seconds}s",
+  "@resendEmailCooldown": {
+    "placeholders": {
+      "seconds": {
+        "type": "int"
+      }
+    }
+  },
+  "iVerifiedButton": "I already verified my email",
+  "emailVerificationSentMessage": "Verification email sent.",
+  "useAnotherAccountLink": "Use another account",
+  "profileTitle": "My profile",
+  "editProfileTitle": "Edit profile",
+  "ftpLabel": "FTP (watts)",
+  "weightLabel": "Weight (kg)",
+  "saveChangesButton": "Save changes",
+  "profileUpdatedMessage": "Profile updated successfully.",
+  "changePhotoAction": "Change photo",
+  "accountSectionTitle": "Account",
+  "logoutAction": "Sign out",
+  "logoutConfirmTitle": "Sign out",
+  "logoutConfirmMessage": "Are you sure you want to sign out?",
+  "cancelAction": "Cancel",
+  "confirmAction": "Confirm",
+  "validationEmailRequired": "Enter your email",
+  "validationEmailInvalid": "Enter a valid email",
+  "validationPasswordRequired": "Enter your password",
+  "validationPasswordTooShort": "Minimum 8 characters",
+  "validationPasswordMissingNumber": "Must include at least one number",
+  "validationPasswordMissingUppercase": "Must include at least one uppercase letter",
+  "validationNameRequired": "Enter your name",
+  "validationNameTooShort": "Name is too short",
+  "validationConfirmPasswordMismatch": "Passwords don't match",
+  "homeGreeting": "Hi, {name}",
+  "@homeGreeting": {
+    "placeholders": {
+      "name": {
+        "type": "String"
+      }
+    }
+  },
+  "homeTodaySession": "Today's session",
+  "homeRecommendedRoutes": "Recommended routes",
+  "genericErrorMessage": "Something went wrong. Please try again.",
+  "retryAction": "Retry",
+  "socialSignInCancelledMessage": "Sign-in cancelled.",
+  "deviceManagementTitle": "Devices",
+  "connectedDevicesSection": "Connected",
+  "availableDevicesSection": "Available devices",
+  "scanForDevicesButton": "Scan for devices",
+  "stopScanButton": "Stop scanning",
+  "scanningInProgressMessage": "Scanning for nearby devices…",
+  "noDevicesFoundMessage": "No devices found. Make sure they're powered on and nearby.",
+  "noConnectedDevicesMessage": "You don't have any connected devices yet.",
+  "connectAction": "Connect",
+  "disconnectAction": "Disconnect",
+  "forgetDeviceAction": "Forget device",
+  "forgetDeviceConfirmTitle": "Forget device",
+  "forgetDeviceConfirmMessage": "It will be removed from your saved devices and won't auto-reconnect. Continue?",
+  "autoReconnectLabel": "Auto-reconnect",
+  "bluetoothOffMessage": "Bluetooth is off. Turn it on to scan for devices.",
+  "permissionsRequiredTitle": "Bluetooth permissions needed",
+  "permissionsRequiredMessage": "RidePro needs Bluetooth permission to connect to your trainer and sensors.",
+  "grantPermissionAction": "Grant permission",
+  "openSettingsAction": "Open settings",
+  "deviceTypeSmartTrainer": "Smart trainer",
+  "deviceTypePowerMeter": "Power meter",
+  "deviceTypeHeartRateMonitor": "Heart rate monitor",
+  "deviceTypeCadenceSensor": "Cadence sensor",
+  "deviceTypeSpeedSensor": "Speed sensor",
+  "deviceTypeSpeedCadenceCombo": "Speed/cadence sensor",
+  "deviceTypeUnknown": "Device",
+  "statusConnected": "Connected",
+  "statusConnecting": "Connecting…",
+  "statusReconnecting": "Reconnecting…",
+  "statusDisconnected": "Disconnected",
+  "statusConnectionFailed": "Connection failed",
+  "statusScanning": "Scanning…",
+  "signalExcellent": "Excellent signal",
+  "signalGood": "Good signal",
+  "signalWeak": "Weak signal",
+  "signalVeryWeak": "Very weak signal",
+  "batteryLabel": "Battery",
+  "liveSpeedLabel": "Spd",
+  "livePowerLabel": "Pwr",
+  "liveCadenceLabel": "Cad",
+  "liveHeartRateLabel": "HR",
+  "manageDevicesMenuLabel": "Connected devices",
+  "wearablesTitle": "Watches & health apps",
+  "wearablesMenuLabel": "Watches & health apps",
+  "wearableConnectAction": "Connect",
+  "wearableDisconnectAction": "Disconnect",
+  "wearableImportAction": "Import activities",
+  "wearableSimulatedBadge": "Simulated — pending official approval",
+  "wearableLastSyncLabel": "Last synced: {date}",
+  "providerNameAppleHealth": "Apple Health",
+  "providerNameGoogleFit": "Google Fit",
+  "providerNameGarmin": "Garmin",
+  "providerNamePolar": "Polar",
+  "providerNameCoros": "Coros",
+  "providerNameSuunto": "Suunto",
+  "wearableStatusNotConnected": "Not connected",
+  "wearableStatusConnecting": "Connecting…",
+  "wearableStatusConnected": "Connected",
+  "wearableStatusSyncing": "Syncing…",
+  "wearableStatusError": "Connection error",
+  "wearableStatusPendingApproval": "Pending approval",
+  "activitiesImportedMessage": "{count} activities imported.",
+  "webBluetoothUnsupportedTitle": "Bluetooth unavailable in this browser",
+  "webBluetoothUnsupportedMessage": "To connect your trainer and sensors from the Web you need Google Chrome or Microsoft Edge. The rest of the app works normally.",
+  "webBluetoothUseAppMessage": "For the best training experience, use the app on Android or iOS.",
+  "openInChromeOrEdgeAction": "Open this page in Chrome or Edge",
+  "mobileAppRecommendedBanner": "RidePro offers the full training experience on Android and iOS.",
+  "@wearableLastSyncLabel": {
+    "placeholders": {
+      "date": {
+        "type": "String"
+      }
+    }
+  },
+  "@activitiesImportedMessage": {
+    "placeholders": {
+      "count": {
+        "type": "int"
+      }
+    }
+  },
+  "startTrainingAction": "Train now",
+  "trainingPageTitle": "Free training",
+  "pauseAction": "Pause",
+  "resumeAction": "Resume",
+  "finishSessionAction": "Finish",
+  "finishSessionConfirmTitle": "Finish session",
+  "finishSessionConfirmMessage": "Are you sure you want to end the workout?",
+  "noDevicesConnectedHint": "You don't have any devices connected — you can still train, but without speed, power or cadence data.",
+  "connectDevicesAction": "Connect devices",
+  "metricSpeedLabel": "Speed",
+  "metricPowerLabel": "Power",
+  "metricCadenceLabel": "Cadence",
+  "metricHeartRateLabel": "Heart rate",
+  "metricDistanceLabel": "Distance",
+  "metricCaloriesLabel": "Calories",
+  "metricTimeLabel": "Time",
+  "sessionSummaryTitle": "Session summary",
+  "sessionSummarySubtitle": "Great work!",
+  "lastReadingsLabel": "Last readings",
+  "noReadingsMessage": "No readings recorded (no devices were connected during the session).",
+  "backToHomeAction": "Back to home",
+  "devicesUsedLabel": "{count} device(s) connected during the session",
+  "@devicesUsedLabel": {
+    "placeholders": {
+      "count": {
+        "type": "int"
+      }
+    }
+  },
+  "savingSessionLabel": "Saving…",
+  "sessionSavedLabel": "Saved",
+  "sessionSaveErrorLabel": "Couldn't save (offline). Your data is still shown here.",
+  "rideHistoryTitle": "Training history",
+  "noSessionsYetMessage": "No saved sessions yet. Finish your first workout to see it here!",
+  "offlineBannerMessage": "You're offline — your changes will be saved and synced automatically.",
+  "syncingBannerMessage": "Syncing pending changes…",
+  "recoverSessionTitle": "Unfinished session found",
+  "recoverSessionMessage": "You had a {duration}, {distanceKm} km session that wasn't finished (the app closed unexpectedly). Continue it?",
+  "discardSessionAction": "Discard",
+  "resumeSessionAction": "Resume session",
+  "@recoverSessionMessage": {
+    "placeholders": {
+      "duration": {
+        "type": "String"
+      },
+      "distanceKm": {
+        "type": "String"
+      }
+    }
+  },
+  "statisticsTitle": "Statistics",
+  "weeklyActivityLabel": "This week's activity",
+  "personalRecordsLabel": "Personal records",
+  "longestSessionLabel": "Longest session",
+  "totalSessionsLabel": "{count} sessions logged",
+  "streakLabel": "{days} days in a row training!",
+  "@totalSessionsLabel": {
+    "placeholders": {
+      "count": {
+        "type": "int"
+      }
+    }
+  },
+  "@streakLabel": {
+    "placeholders": {
+      "days": {
+        "type": "int"
+      }
+    }
+  },
+  "achievementsTitle": "Achievements",
+  "achievementsProgressLabel": "{unlocked} of {total} unlocked",
+  "@achievementsProgressLabel": {
+    "placeholders": {
+      "unlocked": {
+        "type": "int"
+      },
+      "total": {
+        "type": "int"
+      }
+    }
+  },
+  "showPasswordAction": "Show password",
+  "hidePasswordAction": "Hide password",
+  "noSignalLabel": "No signal",
+  "routesCatalogTitle": "Route catalog",
+  "routeDetailTitle": "Route detail",
+  "noRoutesAvailableMessage": "No routes available right now.",
+  "routeDifficultyEasy": "Easy",
+  "routeDifficultyModerate": "Moderate",
+  "routeDifficultyHard": "Hard",
+  "routeDifficultyExtreme": "Extreme",
+  "routeContentVideo": "Video",
+  "routeContentTerrain3d": "3D terrain",
+  "startTrainingOnRouteAction": "Train this route",
+  "routeTrainingNote": "Training on this specific route (synchronized video/3D) is coming in a future module — for now it starts a free session.",
+  "settingsTitle": "Settings",
+  "appearanceSectionTitle": "Appearance",
+  "themeSystemAction": "Follow system",
+  "themeLightAction": "Light",
+  "themeDarkAction": "Dark",
+  "languageSectionTitle": "Language",
+  "languageSystemAction": "Follow system",
+  "otherSectionTitle": "Other",
+  "unitsLabel": "Units",
+  "unitsMetricValue": "Metric (km, kg)",
+  "notificationsLabel": "Notifications",
+  "notificationsEnabledValue": "Enabled",
+  "exploreCatalogHint": "Explore the full catalog"
+}

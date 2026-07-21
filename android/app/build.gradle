@@ -1,0 +1,61 @@
+// build.gradle (app)
+//
+// PLACEHOLDER a reemplazar: `applicationId` — debe coincidir EXACTAMENTE
+// con el "Package name" que registres en Firebase Console (ver
+// SETUP_SOCIAL_LOGIN.md, sección 2), o google-services.json no
+// encontrará la configuración correcta en tiempo de ejecución.
+
+plugins {
+    id "com.android.application"
+    id "kotlin-android"
+    id "dev.flutter.flutter-gradle-plugin"
+    // Aplica el plugin registrado en el build.gradle raíz — es lo que
+    // procesa android/app/google-services.json.
+    id "com.google.gms.google-services"
+}
+
+android {
+    namespace "com.ridepro.app" // TODO: reemplazar por tu namespace real
+    compileSdk flutter.compileSdkVersion
+    ndkVersion flutter.ndkVersion
+
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_1_8
+        targetCompatibility JavaVersion.VERSION_1_8
+    }
+
+    kotlinOptions {
+        jvmTarget = '1.8'
+    }
+
+    defaultConfig {
+        // ⚠️ PLACEHOLDER — reemplazar por tu Application ID real, idéntico
+        // al "Package name" configurado en Firebase Console.
+        applicationId "com.ridepro.app.YOUR_APPLICATION_ID"
+
+        // flutter_blue_plus (BLE) requiere minSdk 21 como mínimo; se fija
+        // en 26 aquí porque algunas APIs de Bluetooth usadas en el módulo
+        // device_connection (p. ej. ciertos callbacks de conexión) son más
+        // estables a partir de Android 8.0.
+        minSdkVersion 26
+        targetSdkVersion flutter.targetSdkVersion
+        versionCode flutterVersionCode.toInteger()
+        versionName flutterVersionName
+    }
+
+    buildTypes {
+        release {
+            // TODO: configurar firma de release real antes de publicar —
+            // por ahora firma con la de debug para que `flutter run --release` funcione.
+            signingConfig signingConfigs.debug
+        }
+    }
+}
+
+flutter {
+    source '../..'
+}
+
+dependencies {
+    implementation "org.jetbrains.kotlin:kotlin-stdlib-jdk7:$kotlin_version"
+}

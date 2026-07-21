@@ -1,0 +1,48 @@
+{
+  "_COMMENT": "⚠️ ESTE ES UN ARCHIVO PLACEHOLDER — NO es un google-services.json válido. Debe reemplazarse ENTERO (no editarse campo por campo) por el archivo real descargado desde Firebase Console → Configuración del proyecto → Tus apps → Android → 'google-services.json'. Ver SETUP_SOCIAL_LOGIN.md, sección 10.",
+  "project_info": {
+    "project_number": "000000000000",
+    "project_id": "YOUR_FIREBASE_PROJECT_ID",
+    "storage_bucket": "YOUR_FIREBASE_PROJECT_ID.appspot.com"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:000000000000:android:0000000000000000000000",
+        "android_client_info": {
+          "package_name": "com.ridepro.app.YOUR_APPLICATION_ID"
+        }
+      },
+      "oauth_client": [
+        {
+          "client_id": "000000000000-YOUR_ANDROID_OAUTH_CLIENT_ID.apps.googleusercontent.com",
+          "client_type": 1,
+          "android_info": {
+            "package_name": "com.ridepro.app.YOUR_APPLICATION_ID",
+            "certificate_hash": "YOUR_SHA1_FINGERPRINT_NO_COLONS_LOWERCASE"
+          }
+        },
+        {
+          "client_id": "000000000000-YOUR_WEB_OAUTH_CLIENT_ID.apps.googleusercontent.com",
+          "client_type": 3
+        }
+      ],
+      "api_key": [
+        {
+          "current_key": "YOUR_ANDROID_API_KEY"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": [
+            {
+              "client_id": "000000000000-YOUR_WEB_OAUTH_CLIENT_ID.apps.googleusercontent.com",
+              "client_type": 3
+            }
+          ]
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}

@@ -1,0 +1,82 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>CFBundleDevelopmentRegion</key>
+	<string>$(DEVELOPMENT_LANGUAGE)</string>
+	<key>CFBundleDisplayName</key>
+	<string>RidePro</string>
+	<key>CFBundleExecutable</key>
+	<string>$(EXECUTABLE_NAME)</string>
+	<key>CFBundleIdentifier</key>
+	<string>$(PRODUCT_BUNDLE_IDENTIFIER)</string>
+	<key>CFBundleInfoDictionaryVersion</key>
+	<string>6.0</string>
+	<key>CFBundleName</key>
+	<string>rouvy_pro</string>
+	<key>CFBundlePackageType</key>
+	<string>APPL</string>
+	<key>CFBundleShortVersionString</key>
+	<string>$(FLUTTER_BUILD_NAME)</string>
+	<key>CFBundleSignature</key>
+	<string>????</string>
+	<key>CFBundleVersion</key>
+	<string>$(FLUTTER_BUILD_NUMBER)</string>
+	<key>LSRequiresIPhoneOS</key>
+	<true/>
+	<key>UILaunchStoryboardName</key>
+	<string>LaunchScreen</string>
+	<key>UIMainStoryboardFile</key>
+	<string>Main</string>
+	<key>UISupportedInterfaceOrientations</key>
+	<array>
+		<string>UIInterfaceOrientationPortrait</string>
+		<string>UIInterfaceOrientationLandscapeLeft</string>
+		<string>UIInterfaceOrientationLandscapeRight</string>
+	</array>
+	<key>UIApplicationSupportsIndirectInputEvents</key>
+	<true/>
+
+	<!-- ===================== Bluetooth (módulo device_connection) =====================
+	     Ver BLE_PERMISSIONS.md — OBLIGATORIO desde iOS 13, sin esto la app
+	     crashea al primer uso del adaptador Bluetooth. -->
+	<key>NSBluetoothAlwaysUsageDescription</key>
+	<string>RidePro necesita acceso a Bluetooth para conectarse a tu rodillo, pulsómetro y sensores de cadencia/velocidad durante el entrenamiento.</string>
+	<key>NSBluetoothPeripheralUsageDescription</key>
+	<string>RidePro necesita acceso a Bluetooth para conectarse a tu rodillo, pulsómetro y sensores de cadencia/velocidad durante el entrenamiento.</string>
+
+	<!-- ===================== Google Sign-In =====================
+	     ⚠️ PLACEHOLDER — reemplazar "com.googleusercontent.apps.YOUR_REVERSED_CLIENT_ID"
+	     por el valor REVERSED_CLIENT_ID real, tal cual aparece en tu
+	     GoogleService-Info.plist (clave REVERSED_CLIENT_ID).
+	     Ver SETUP_SOCIAL_LOGIN.md, sección 3 y 9. -->
+	<key>CFBundleURLTypes</key>
+	<array>
+		<dict>
+			<key>CFBundleTypeRole</key>
+			<string>Editor</string>
+			<key>CFBundleURLSchemes</key>
+			<array>
+				<string>com.googleusercontent.apps.YOUR_REVERSED_CLIENT_ID</string>
+			</array>
+		</dict>
+	</array>
+
+	<!-- ===================== Apple Sign-In =====================
+	     No requiere ninguna clave adicional en Info.plist: la capability
+	     "Sign in with Apple" se habilita a nivel de proyecto Xcode
+	     (Runner.xcodeproj → Signing & Capabilities), no aquí.
+	     Ver SETUP_SOCIAL_LOGIN.md, sección 5. -->
+
+	<!-- ===================== Apple Health (módulo wearables) =====================
+	     Integración REAL, sin aprobación de partner — ver ARCHITECTURE_DECISIONS.md
+	     sección 2 y WEARABLES_SETUP.md. Además de estas dos claves, hay que
+	     añadir la capability "HealthKit" en Xcode (Runner → Signing &
+	     Capabilities → + Capability → HealthKit), igual que con Apple Sign-In. -->
+	<key>NSHealthShareUsageDescription</key>
+	<string>RidePro necesita leer tus datos de salud (entrenamientos, frecuencia cardíaca) para importar tus actividades desde Apple Health.</string>
+	<key>NSHealthUpdateUsageDescription</key>
+	<string>RidePro necesita escribir tus entrenamientos en Apple Health para mantener tu historial de actividad actualizado.</string>
+
+</dict>
+</plist>

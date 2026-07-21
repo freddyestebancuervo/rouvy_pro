@@ -1,0 +1,96 @@
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+
+    <!-- ===================== Bluetooth (módulo device_connection) =====================
+         Ver BLE_PERMISSIONS.md para la explicación completa de por qué se
+         declaran permisos distintos según la versión de Android. -->
+    <uses-permission android:name="android.permission.BLUETOOTH_SCAN"
+        android:usesPermissionFlags="neverForLocation" />
+    <uses-permission android:name="android.permission.BLUETOOTH_CONNECT" />
+    <uses-permission android:name="android.permission.BLUETOOTH" android:maxSdkVersion="30" />
+    <uses-permission android:name="android.permission.BLUETOOTH_ADMIN" android:maxSdkVersion="30" />
+    <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" android:maxSdkVersion="30" />
+    <uses-feature android:name="android.hardware.bluetooth_le" android:required="true" />
+
+    <!-- ===================== Red (Firebase Auth / Firestore / login social) ===================== -->
+    <uses-permission android:name="android.permission.INTERNET" />
+    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
+
+    <!-- ===================== Google Fit / Health Connect (módulo wearables) =====================
+         Integración REAL, sin aprobación de partner — ver ARCHITECTURE_DECISIONS.md
+         sección 2 y WEARABLES_SETUP.md. Health Connect es el sucesor
+         oficial de la API REST de Google Fit (descontinuada por Google). -->
+    <uses-permission android:name="android.permission.health.READ_EXERCISE" />
+    <uses-permission android:name="android.permission.health.READ_HEART_RATE" />
+    <uses-permission android:name="android.permission.health.READ_ACTIVE_CALORIES_BURNED" />
+    <uses-permission android:name="android.permission.health.READ_DISTANCE" />
+
+    <application
+        android:label="RidePro"
+        android:name="${applicationName}"
+        android:icon="@mipmap/ic_launcher">
+
+        <activity
+            android:name=".MainActivity"
+            android:exported="true"
+            android:launchMode="singleTop"
+            android:theme="@style/LaunchTheme"
+            android:configChanges="orientation|keyboardHidden|keyboard|screenSize|smallestScreenSize|locale|layoutDirection|fontScale|screenLayout|density|uiMode"
+            android:hardwareAccelerated="true"
+            android:windowSoftInputMode="adjustResize">
+
+            <meta-data
+              android:name="io.flutter.embedding.android.NormalTheme"
+              android:resource="@style/NormalTheme" />
+
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN"/>
+                <category android:name="android.intent.category.LAUNCHER"/>
+            </intent-filter>
+        </activity>
+
+        <meta-data
+            android:name="flutterEmbedding"
+            android:value="2" />
+
+        <!-- ===================== Google Sign-In =====================
+             No requiere ninguna entrada adicional aquí: el plugin
+             `google_sign_in` se configura automáticamente a partir de
+             `android/app/google-services.json` (ver SETUP_SOCIAL_LOGIN.md,
+             sección 2 y 10) — NO hay que pegar el Client ID en este archivo. -->
+
+        <!-- ===================== Health Connect: rationale de privacidad =====================
+             Requerido por Health Connect a partir de Android 14 (API 34)
+             para cualquier app que solicite permisos de salud: el usuario
+             debe poder ver, desde la propia pantalla de permisos de Health
+             Connect, un enlace a la política de privacidad de la app.
+             ⚠️ Verificar el nombre exacto de la acción del intent contra la
+             documentación vigente de Health Connect antes de publicar — ver
+             HEALTH_SETUP.md, sección "Mantenimiento del plugin". El valor
+             usado aquí (`androidx.health.ACTION_SHOW_PERMISSIONS_RATIONALE`)
+             es el documentado a la fecha de esta implementación. -->
+        <activity-alias
+            android:name="ViewPermissionUsageActivity"
+            android:exported="true"
+            android:targetActivity=".MainActivity"
+            android:permission="android.permission.START_VIEW_PERMISSION_USAGE">
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW_PERMISSION_USAGE" />
+                <category android:name="android.intent.category.HEALTH_PERMISSIONS" />
+            </intent-filter>
+        </activity-alias>
+
+    </application>
+
+    <!-- Requerido a partir de Android 11 (API 30) para que la app pueda
+         detectar si hay un navegador disponible durante el flujo OAuth de
+         Google Sign-In, y si la app Health Connect está instalada. -->
+    <queries>
+        <intent>
+            <action android:name="android.intent.action.VIEW" />
+            <category android:name="android.intent.category.BROWSABLE" />
+            <data android:scheme="https" />
+        </intent>
+        <package android:name="com.google.android.apps.healthdata" />
+    </queries>
+
+</manifest>

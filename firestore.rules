@@ -1,0 +1,105 @@
+rules_version = '2';
+
+// ============================================================================
+// REGLAS DE SEGURIDAD DE FIRESTORE — RidePro
+//
+// Ver docs/SECURITY_AUDIT.md para el detalle completo de la vulnerabilidad
+// que este archivo corrige (tarea A3, ROADMAP_M0_M1.md) y
+// docs/TECHNICAL_SPECIFICATION_M0_M1.md sección 5.4 para el contexto de
+// diseño original (que tenía el hueco aquí cerrado).
+//
+// PRINCIPIO GENERAL: denegar por defecto. Cada colección se abre
+// explícitamente con las condiciones mínimas necesarias; la regla
+// catch-all al final cierra cualquier colección futura que alguien
+// olvide proteger explícitamente.
+// ============================================================================
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    function isOwner(uid) {
+      return request.auth != null && request.auth.uid == uid;
+    }
+
+    // Campos que NINGÚN cliente puede fijar a un valor arbitrario, ni en
+    // create ni en update — solo Firebase Admin SDK / Cloud Functions
+    // (que se ejecutan con privilegios de servidor y SE SALTAN estas
+    // reglas por diseño de Firestore) pueden escribirlos.
+    function protectedFields() {
+      return ['role', 'permissions', 'subscription', 'isAdmin', 'customClaims', 'premium'];
+    }
+
+    // --- users/{uid} ---------------------------------------------------
+
+    match /users/{uid} {
+      allow read: if isOwner(uid);
+
+      // CREATE: el propio usuario puede crear su documento inicial
+      // (ocurre en el primer login/registro, ver
+      // `AuthRemoteDataSourceImpl` en el cliente Flutter), pero:
+      //   - 'permissions', 'subscription', 'isAdmin' y 'customClaims' NO
+      //     pueden aparecer en absoluto — no existe un "valor por
+      //     defecto seguro" que tenga sentido que el cliente proponga
+      //     para estos campos; si en el futuro se necesitan, los fija
+      //     una Cloud Function después de la creación.
+      //   - 'role', SI aparece, debe ser exactamente 'user' — el único
+      //     valor de entrada seguro. Cualquier otro valor (p. ej.
+      //     'admin') rechaza la escritura COMPLETA (Firestore no permite
+      //     "crear parcialmente" un documento).
+      //   - 'premium', SI aparece, debe ser exactamente `false` por el
+      //     mismo motivo.
+      allow create: if isOwner(uid) && _hasSafeDefaultsOnCreate(request.resource.data);
+
+      // UPDATE: el propio usuario puede actualizar su documento, pero
+      // ninguno de los campos protegidos puede estar entre los que
+      // cambian de valor — comparando el documento ANTES (`resource.data`)
+      // contra el propuesto (`request.resource.data`).
+      allow update: if isOwner(uid) && _protectedFieldsUnchanged(resource.data, request.resource.data);
+
+      // Sin borrado directo — el ciclo de vida de borrado de cuenta
+      // (soft delete de 30 días, ver spec sección 2.2) lo gestiona una
+      // Cloud Function con Admin SDK, nunca el cliente directamente.
+      allow delete: if false;
+
+      // --- users/{uid}/ride_sessions/{sessionId} ------------------------
+      match /ride_sessions/{sessionId} {
+        allow read: if isOwner(uid);
+
+        // Append-only por diseño (ver docs/OFFLINE_FIRST.md sección 3,
+        // que ya asumía esto para el modelo de resolución de
+        // conflictos) — se permite crear, nunca editar ni borrar una
+        // sesión ya guardada.
+        allow create: if isOwner(uid);
+        allow update: if false;
+        allow delete: if false;
+      }
+    }
+
+    // --- Cualquier otra colección: denegar por defecto ------------------
+    // Sin esto, una colección nueva añadida en el futuro (p. ej. `routes`,
+    // `challenges`) quedaría SIN NINGUNA regla y, por comportamiento por
+    // defecto de Firestore, completamente inaccesible — lo cual es seguro
+    // pero confuso de depurar. Se declara explícitamente aquí para que el
+    // "denegado" sea una decisión visible, no un olvido.
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    // ------------------------------------------------------------------
+    // Funciones auxiliares (deben ir al final del bloque `service` en
+    // algunos linters de reglas, pero Firestore las acepta en cualquier
+    // posición dentro de `match /databases/{database}/documents`).
+    // ------------------------------------------------------------------
+
+    function _hasSafeDefaultsOnCreate(data) {
+      let noDefaultAllowed = ['permissions', 'subscription', 'isAdmin', 'customClaims'];
+      return !data.keys().hasAny(noDefaultAllowed)
+             && (!('role' in data) || data.role == 'user')
+             && (!('premium' in data) || data.premium == false);
+    }
+
+    function _protectedFieldsUnchanged(before, after) {
+      return !after.diff(before).affectedKeys().hasAny(protectedFields());
+    }
+  }
+}
