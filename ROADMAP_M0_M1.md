@@ -57,6 +57,83 @@ corregido. Detalle completo en el historial de la conversación; resumen:
   entorno); pruebas de rendimiento (sin dispositivo/emulador
   disponible aquí).
 
+## Sesión de estabilización (continuación) — 2026-07-21
+
+Se retomó el proyecto desde una copia fuera de OneDrive
+(`C:\proyectos\rouvy_proZIP\rouvy_pro`) que había perdido el historial
+de git. Se recuperó `.git` desde la copia original en OneDrive (commit
+`7b5a238`, el de la sesión de arriba) y se comparó archivo por archivo
+contra el estado local: la copia local resultó ser, casi en su
+totalidad, una **reversión accidental al estado previo a la
+estabilización** (no trabajo nuevo) — incluía de vuelta el bug de
+navegación fantasma, el `AppColors.success` fuera de WCAG AA, imports
+rotos en `device_repository.dart`, y un `pubspec.yaml` con la clave
+`health:` duplicada (rompía cualquier comando `flutter`). Se descartó
+todo lo regresivo y se restauró el árbol de trabajo al commit estable
+(respaldo del estado previo en la rama `backup/local-pre-limpieza-2026-07-21`,
+no tocar).
+
+Con el árbol ya limpio se hizo la primera verificación REAL de
+compilación nativa de este proyecto (hasta ahora "compila limpio" solo
+se había confirmado con `flutter analyze`/`flutter test`, que no tocan
+Android nativo):
+
+- **Scaffolding de Android nunca había estado completo en git** — faltaban
+  `settings.gradle`, el wrapper de Gradle, `MainActivity`, `gradle.properties`
+  y los recursos por defecto; solo estaban versionados los archivos editados
+  a mano (`build.gradle`, `AndroidManifest.xml`, `google-services.json`,
+  `GeneratedPluginRegistrant.java`). Se regeneró con `flutter create
+  --platforms=android .` y se fusionó a mano la configuración específica
+  del proyecto (plugin de `google-services`, `namespace`/`applicationId`
+  placeholder con sus comentarios originales, `minSdk 26` por BLE) dentro
+  de los nuevos `build.gradle.kts`/`settings.gradle.kts` (Kotlin DSL, el
+  formato que ya trae el Flutter SDK de este entorno). Se eliminaron los
+  `build.gradle` Groovy viejos (quedaban en conflicto con los `.kts`) y se
+  corrigió el paquete de `MainActivity.kt` (`flutter create` lo generó en
+  `com.ridepro.rouvy_pro`, pero el `namespace` real del proyecto es
+  `com.ridepro.app` — no coincidir rompe el build).
+- **Gradle 8.4 → 9.1.0**: AGP 9.0.1 (el que trae este Flutter SDK) exige
+  Gradle ≥9.1.0. Actualizado en `gradle-wrapper.properties`.
+- **AndroidX habilitado explícitamente** (`android.useAndroidX`/
+  `android.enableJetifier=true` en `gradle.properties`) — faltaba, warning
+  de Flutter.
+- **`applicationId`/`google-services.json` siguen siendo placeholders a
+  propósito** (`YOUR_APPLICATION_ID`, `YOUR_FIREBASE_PROJECT_ID`) — no se
+  tocaron: configurar el proyecto Firebase real es una decisión de
+  producto, no algo deducible del código (ver `SETUP_SOCIAL_LOGIN.md`).
+- **`flutter build apk --debug`: ✅ compiló exitosamente** —
+  `build/app/outputs/flutter-apk/app-debug.apk`. Primera verificación real
+  de compilación nativa Android de todo el proyecto (hasta ahora "compila
+  limpio" solo se había confirmado con `analyze`/`test`, que no tocan
+  Gradle). Tras el fix, `flutter test` completo se volvió a correr
+  (166/166 en verde) para confirmar que los cambios de Android/
+  `settings_page.dart` no rompieron nada del lado Dart.
+- **Pendiente real, no bloqueante:** el log de build muestra un warning de
+  Flutter sobre plugins que aplican Kotlin Gradle Plugin directamente
+  (`device_info_plus`, `firebase_analytics`, `health`,
+  `sign_in_with_apple`) — versiones futuras de Flutter podrían dejar de
+  compilar con estos si no se actualizan a "Built-in Kotlin". No es un
+  error hoy, solo deuda a vigilar en `flutter pub outdated`.
+- **Deuda de `Radio`/`RadioGroup` resuelta** (ya no pendiente): migrado
+  `settings_page.dart` al widget `RadioGroup<T>` ancestro (API que
+  reemplaza `groupValue`/`onChanged` por widget desde Flutter 3.32).
+  Junto con la migración de `Color.red/green/blue` → `.r/.g/.b` en
+  `core/utils/color_contrast.dart`, `flutter analyze --fatal-infos` (el
+  gate exacto que usa `.github/workflows/ci.yml`) pasó de 15 issues a
+  **0** — antes de este fix, CI habría fallado el paso `analyze` incluso
+  sobre el commit "estable", porque nadie había corrido `analyze` con
+  `--fatal-infos` localmente.
+- **`test/widget_test.dart` eliminado**: boilerplate por defecto de
+  `flutter create` (test de un contador contra una clase `MyApp` que no
+  existe en este proyecto) — no pertenecía a la suite real y causaba un
+  error de compilación en `flutter analyze`.
+- **Aclaración sobre `RoutesRepository` y `demo_overrides.dart`**: no le
+  faltaba nada. `RoutesRepository` se resuelve en producción y en demo vía
+  GetIt (`sl()`, registrado en `demo_injection.dart`, ver sesión de
+  arriba) — `demo_overrides.dart` solo cubre providers de Riverpod que
+  producción resuelve con `Override`, un mecanismo distinto a propósito
+  (ver el comentario al inicio de ese archivo). Nada que corregir ahí.
+
 Basado en `docs/TECHNICAL_SPECIFICATION_M0_M1.md`. Cada tarea es lo
 bastante pequeña para completarse en una sesión de trabajo concreta, en
 el orden en que deben abordarse (las posteriores asumen que las

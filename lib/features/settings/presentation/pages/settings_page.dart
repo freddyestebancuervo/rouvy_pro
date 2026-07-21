@@ -23,54 +23,59 @@ class SettingsPage extends ConsumerWidget {
             Text(l10n.appearanceSectionTitle, style: Theme.of(context).textTheme.titleSmall),
             const SizedBox(height: 8),
             Card(
-              child: Column(
-                children: <Widget>[
-                  RadioListTile<ThemeMode>(
-                    title: Text(l10n.themeSystemAction),
-                    value: ThemeMode.system,
-                    groupValue: themeMode,
-                    onChanged: (ThemeMode? mode) => ref.read(themeModeProvider.notifier).setThemeMode(mode!),
-                  ),
-                  RadioListTile<ThemeMode>(
-                    title: Text(l10n.themeLightAction),
-                    value: ThemeMode.light,
-                    groupValue: themeMode,
-                    onChanged: (ThemeMode? mode) => ref.read(themeModeProvider.notifier).setThemeMode(mode!),
-                  ),
-                  RadioListTile<ThemeMode>(
-                    title: Text(l10n.themeDarkAction),
-                    value: ThemeMode.dark,
-                    groupValue: themeMode,
-                    onChanged: (ThemeMode? mode) => ref.read(themeModeProvider.notifier).setThemeMode(mode!),
-                  ),
-                ],
+              child: RadioGroup<ThemeMode>(
+                groupValue: themeMode,
+                onChanged: (ThemeMode? mode) => ref.read(themeModeProvider.notifier).setThemeMode(mode!),
+                child: Column(
+                  children: <Widget>[
+                    RadioListTile<ThemeMode>(
+                      title: Text(l10n.themeSystemAction),
+                      value: ThemeMode.system,
+                    ),
+                    RadioListTile<ThemeMode>(
+                      title: Text(l10n.themeLightAction),
+                      value: ThemeMode.light,
+                    ),
+                    RadioListTile<ThemeMode>(
+                      title: Text(l10n.themeDarkAction),
+                      value: ThemeMode.dark,
+                    ),
+                  ],
+                ),
               ),
             ),
             const SizedBox(height: 24),
             Text(l10n.languageSectionTitle, style: Theme.of(context).textTheme.titleSmall),
             const SizedBox(height: 8),
             Card(
-              child: Column(
-                children: <Widget>[
-                  RadioListTile<String>(
-                    title: Text(l10n.languageSystemAction),
-                    value: 'system',
-                    groupValue: localeOverride?.languageCode ?? 'system',
-                    onChanged: (_) => ref.read(localeOverrideProvider.notifier).setLocale(null),
-                  ),
-                  RadioListTile<String>(
-                    title: const Text('Español'),
-                    value: 'es',
-                    groupValue: localeOverride?.languageCode ?? 'system',
-                    onChanged: (_) => ref.read(localeOverrideProvider.notifier).setLocale(const Locale('es')),
-                  ),
-                  RadioListTile<String>(
-                    title: const Text('English'),
-                    value: 'en',
-                    groupValue: localeOverride?.languageCode ?? 'system',
-                    onChanged: (_) => ref.read(localeOverrideProvider.notifier).setLocale(const Locale('en')),
-                  ),
-                ],
+              child: RadioGroup<String>(
+                groupValue: localeOverride?.languageCode ?? 'system',
+                onChanged: (String? code) {
+                  switch (code) {
+                    case 'es':
+                      ref.read(localeOverrideProvider.notifier).setLocale(const Locale('es'));
+                    case 'en':
+                      ref.read(localeOverrideProvider.notifier).setLocale(const Locale('en'));
+                    default:
+                      ref.read(localeOverrideProvider.notifier).setLocale(null);
+                  }
+                },
+                child: Column(
+                  children: <Widget>[
+                    RadioListTile<String>(
+                      title: Text(l10n.languageSystemAction),
+                      value: 'system',
+                    ),
+                    const RadioListTile<String>(
+                      title: Text('Español'),
+                      value: 'es',
+                    ),
+                    const RadioListTile<String>(
+                      title: Text('English'),
+                      value: 'en',
+                    ),
+                  ],
+                ),
               ),
             ),
             const SizedBox(height: 24),

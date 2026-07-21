@@ -34,16 +34,8 @@ abstract class ColorContrast {
       return c <= 0.03928 ? c / 12.92 : math.pow((c + 0.055) / 1.055, 2.4).toDouble();
     }
 
-    // Se usa `.red`/`.green`/`.blue` (enteros 0-255, API estable desde las
-    // primeras versiones de Flutter) en vez de los getters `.r`/`.g`/`.b`
-    // (doubles normalizados) introducidos en versiones más recientes —
-    // este proyecto fija `sdk: flutter: '>=3.19.0'` en `pubspec.yaml`, y
-    // sin poder ejecutar `flutter pub get`/compilar en este entorno para
-    // confirmar qué getters expone esa versión mínima exacta, se prefiere
-    // la API de compatibilidad más amplia conocida en vez de arriesgar un
-    // error de compilación no detectable aquí.
-    return 0.2126 * channel(color.red / 255.0) +
-        0.7152 * channel(color.green / 255.0) +
-        0.0722 * channel(color.blue / 255.0);
+    // `.r`/`.g`/`.b` ya vienen normalizados 0.0-1.0 — `.red`/`.green`/`.blue`
+    // (enteros 0-255) están deprecados desde Flutter 3.27.
+    return 0.2126 * channel(color.r) + 0.7152 * channel(color.g) + 0.0722 * channel(color.b);
   }
 }
