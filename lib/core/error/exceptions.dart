@@ -24,7 +24,6 @@ class CacheException implements Exception {
 
 class NetworkException implements Exception {
   const NetworkException([this.message = 'Sin conexión a internet.']);
-  final String message;
 }
 
 /// Lanzada por los adapters de `features/wearables` (HealthKit/Health

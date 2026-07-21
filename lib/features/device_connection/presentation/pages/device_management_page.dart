@@ -105,12 +105,10 @@ class _DeviceManagementBody extends ConsumerWidget {
             }
             return Column(
               children: devices
-                  .map(
-                    (BleDevice d) => Padding(
-                      padding: const EdgeInsets.only(bottom: 10),
-                      child: DeviceTile(device: d),
-                    ),
-                  )
+                  .map((BleDevice d) => Padding(
+                        padding: const EdgeInsets.only(bottom: 10),
+                        child: DeviceTile(device: d),
+                      ))
                   .toList(),
             );
           },

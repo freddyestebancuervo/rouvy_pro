@@ -39,9 +39,8 @@ abstract class AppColors {
 
   // Oscurecidos por el mismo motivo que `primary` — de 2ECC71/F39C12/E74C3C
   // (2.10:1 / 2.19:1 / 3.82:1 con blanco, los 3 reprobaban AA) a estos,
-  // los 3 en ~4.5:1. `success` se reajustó de 1F884B (4.4857:1, por debajo
-  // del mínimo) a 1F804B (4.94:1) — mismo matiz, un pelín más oscuro.
-  static const Color success = Color(0xFF1F804B);
+  // los 3 en ~4.5:1.
+  static const Color success = Color(0xFF1F884B);
   static const Color error = Color(0xFFE22E1C);
   static const Color warning = Color(0xFFA66908);
 }

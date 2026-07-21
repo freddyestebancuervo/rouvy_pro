@@ -6,56 +6,6 @@ por inspección, pero **no ejecutados** — sin red en este entorno de
 trabajo para `npm install`/Firebase CLI/Postgres. **C3 detenido
 explícitamente hasta verificar ambos** — ver `VERIFICATION_GUIDE.md` para
 los comandos exactos, resultado esperado, y qué enviar de vuelta.
-Este bloqueo es independiente del de la sesión de estabilización de abajo
-(esa sí tuvo Flutter/Dart disponible en el entorno; npm/Firebase
-CLI/Postgres siguen sin estarlo).
-
-## Sesión de estabilización — 2026-07-21
-
-El proyecto Flutter no compilaba ni corría sus tests (errores de
-`flutter analyze`, `flutter gen-l10n` fallando, dependencias
-desactualizadas). Se dejó **compilando limpio, con la suite de tests
-completa en verde** (166/166) y un bug real de navegación en producción
-corregido. Detalle completo en el historial de la conversación; resumen:
-
-- **Entorno:** resuelto bloqueo de permisos de Windows (atributo
-  "solo lectura" heredado del ZIP en `lib/`, `lib/l10n/`,
-  `lib/l10n/generated/`) que hacía fallar `flutter gen-l10n`/`pub get`.
-  `l10n.yaml` limpiado (`synthetic-package` deprecado, removido).
-- **8 errores de compilación corregidos** en `core/error/exceptions.dart`,
-  `core/health/health_platform_gateway_impl.dart`,
-  `core/platform/web_bluetooth_support_web.dart` (migrado de
-  `dart:js_util`, eliminado del SDK, a `dart:js_interop`),
-  `device_connection/domain/repositories/device_repository.dart`
-  (imports rotos), `training/.../session_summary_page.dart` (override
-  inválido de `build()` en `ConsumerState`), y un test de wearables.
-- **Bug real de producción corregido:** en `login_page.dart`,
-  `register_page.dart` y `email_verification_page.dart`, un
-  `ref.listen` interpretaba la transición loading→data de la propia
-  inicialización de `SocialAuthController`/`EmailVerificationController`
-  (`build() async {}`) como "acción del usuario exitosa", disparando
-  `context.go(home)` (o un snackbar de "correo reenviado") sin que el
-  usuario hiciera nada. Corregido usando el `Future<bool>` que ya
-  devuelve cada acción — mismo patrón que `_handleSubmit` ya usaba
-  correctamente.
-- **Gap real en modo demo corregido:** `RoutesRepository` nunca se
-  registraba en `demo_injection.dart` — el catálogo de rutas caía en
-  estado de error en modo demo. Se registró `RoutesRepositoryImpl`
-  (ya 100% mock, sin Firebase — reutilizada tal cual).
-- **`routerProvider` (`app_router.dart`) refactorizado:** reconstruía el
-  `GoRouter` completo en cada emisión de `authStateProvider` (pierde
-  stack de navegación). Ahora usa `refreshListenable` + lectura en vivo
-  del auth state dentro de `redirect`.
-- **Bugs de UI corregidos:** overflow de 78px en `login_page.dart`/
-  `register_page.dart` (texto en español más largo que en inglés,
-  `Row` → `Wrap`); `AppColors.success` no cumplía WCAG AA (4.4857:1,
-  ajustado a 4.94:1); `TelemetryAggregator` perdía la integración de
-  distancia/calorías en intervalos de exactamente 10s (`<` → `<=`).
-- **Pendiente (deuda técnica registrada, no bloqueante):**
-  migrar `Radio`/`RadioGroup` en `settings_page.dart` (decisión de
-  diseño); validar contra Firebase real (sin credenciales en este
-  entorno); pruebas de rendimiento (sin dispositivo/emulador
-  disponible aquí).
 
 Basado en `docs/TECHNICAL_SPECIFICATION_M0_M1.md`. Cada tarea es lo
 bastante pequeña para completarse en una sesión de trabajo concreta, en

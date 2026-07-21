@@ -1,6 +1,7 @@
 import 'dart:math';
 
 import '../../domain/entities/external_activity.dart';
+import '../../domain/entities/wearable_provider_type.dart';
 import 'wearable_adapter.dart';
 
 /// Base de los 4 adapters que representan proveedores con API cerrada

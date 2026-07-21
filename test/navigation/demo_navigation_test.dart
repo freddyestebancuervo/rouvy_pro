@@ -7,7 +7,6 @@ import 'package:rouvy_pro/app/app.dart';
 import 'package:rouvy_pro/demo/demo_injection.dart';
 import 'package:rouvy_pro/demo/demo_overrides.dart';
 import 'package:rouvy_pro/features/routes_catalog/presentation/pages/routes_catalog_page.dart';
-import 'package:rouvy_pro/features/settings/presentation/providers/locale_provider.dart';
 
 /// Test de navegación de extremo a extremo: arranca la app REAL
 /// (`RideProApp`, el mismo widget de producción, con el mismo
@@ -26,15 +25,7 @@ void main() {
     'Bienvenida → Login (simulado) → Home → Catálogo de rutas → Detalle → volver',
     (WidgetTester tester) async {
       await tester.pumpWidget(
-        ProviderScope(
-          overrides: <Override>[
-            ...buildDemoOverrides(),
-            // Fuerza español para que las aserciones del test no dependan
-            // del locale del sistema operativo donde corre `flutter test`.
-            localeOverrideProvider.overrideWith(() => _FixedLocaleNotifier(const Locale('es'))),
-          ],
-          child: const RideProApp(),
-        ),
+        ProviderScope(overrides: buildDemoOverrides(), child: const RideProApp()),
       );
 
       // Splash → redirige a Welcome en cuanto authStateChanges emite
@@ -74,26 +65,9 @@ void main() {
       expect(find.text('Entrenar esta ruta'), findsOneWidget);
 
       // --- Volver al catálogo ---
-      // `tester.pageBack()` busca el botón por su tooltip en inglés
-      // hardcodeado ("Back"), incompatible con el locale forzado a
-      // español de este test — se busca por tipo de widget en su lugar,
-      // agnóstico al idioma.
-      await tester.tap(find.byType(BackButton));
+      await tester.pageBack();
       await tester.pumpAndSettle();
       expect(find.byType(RoutesCatalogPage), findsOneWidget);
     },
   );
-}
-
-/// Notifier de prueba que fija un locale constante sin tocar
-/// `SharedPreferences` — evita que `LocaleOverrideNotifier._loadFromPrefs()`
-/// (async, fuera del control del test) pise el locale forzado a mitad de
-/// `pumpAndSettle()`.
-class _FixedLocaleNotifier extends LocaleOverrideNotifier {
-  _FixedLocaleNotifier(this._locale);
-
-  final Locale _locale;
-
-  @override
-  Locale? build() => _locale;
 }

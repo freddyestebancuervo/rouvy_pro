@@ -102,9 +102,8 @@ void main() {
 
       expect(
         () => adapter.connect(),
-        throwsA(
-          isA<HealthException>().having((e) => e.status, 'status', HealthPermissionStatus.permanentlyDenied),
-        ),
+        throwsA(isA<HealthException>()
+            .having((e) => e.status, 'status', HealthPermissionStatus.permanentlyDenied)),
       );
     });
   });

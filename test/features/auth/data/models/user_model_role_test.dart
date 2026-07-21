@@ -6,7 +6,7 @@ void main() {
   group('UserModel.fromMap — campo role', () {
     test('lee el rol cuando el documento ya lo tiene', () {
       final UserModel model = UserModel.fromMap(
-        const <String, dynamic>{'email': 'coach@ridepro.com', 'displayName': 'Coach', 'role': 'coach'},
+        <String, dynamic>{'email': 'coach@ridepro.com', 'displayName': 'Coach', 'role': 'coach'},
         'uid-1',
         emailVerified: true,
         providerType: AuthProviderType.password,
@@ -17,7 +17,7 @@ void main() {
 
     test('usa UserRole.user cuando el documento es anterior a la tarea A2 (sin campo role)', () {
       final UserModel model = UserModel.fromMap(
-        const <String, dynamic>{'email': 'legacy@ridepro.com', 'displayName': 'Legacy'},
+        <String, dynamic>{'email': 'legacy@ridepro.com', 'displayName': 'Legacy'},
         'uid-2',
         emailVerified: true,
         providerType: AuthProviderType.password,

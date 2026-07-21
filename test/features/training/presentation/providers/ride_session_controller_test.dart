@@ -42,7 +42,7 @@ void main() {
   late ProviderContainer container;
 
   const String trainerId = 'trainer-1';
-  const BleDevice connectedTrainer = BleDevice(
+  final BleDevice connectedTrainer = BleDevice(
     id: trainerId,
     name: 'Wahoo KICKR',
     type: SportDeviceType.smartTrainer,

@@ -24,17 +24,20 @@ class AuthFailure extends Failure {
 
 /// Error de red (sin conexión, timeout).
 class NetworkFailure extends Failure {
-  const NetworkFailure([super.message = 'No hay conexión a internet.']);
+  const NetworkFailure([String message = 'No hay conexión a internet.'])
+      : super(message);
 }
 
 /// Error del servidor (Firestore, Cloud Functions, API propia).
 class ServerFailure extends Failure {
-  const ServerFailure([super.message = 'Error del servidor. Intenta de nuevo.']);
+  const ServerFailure([String message = 'Error del servidor. Intenta de nuevo.'])
+      : super(message);
 }
 
 /// Error de caché/almacenamiento local.
 class CacheFailure extends Failure {
-  const CacheFailure([super.message = 'Error al leer datos locales.']);
+  const CacheFailure([String message = 'Error al leer datos locales.'])
+      : super(message);
 }
 
 /// Error de validación de datos de entrada (formularios, etc.)
@@ -46,7 +49,8 @@ class ValidationFailure extends Failure {
 /// manejador centralizado de errores, nunca debería mostrarse tal cual al
 /// usuario sin pasar antes por un mensaje amigable.
 class UnexpectedFailure extends Failure {
-  const UnexpectedFailure([super.message = 'Ocurrió un error inesperado.']);
+  const UnexpectedFailure([String message = 'Ocurrió un error inesperado.'])
+      : super(message);
 }
 
 /// Error del módulo de wearables (HealthKit/Health Connect) — conserva

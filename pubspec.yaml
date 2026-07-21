@@ -61,7 +61,7 @@ dependencies:
   # sistema operativo. Ver ARCHITECTURE_DECISIONS.md y WEARABLES_INTEGRATION.md.
   # ⚠️ Verificar la última versión compatible en pub.dev antes de `pub get`
   # (el ecosistema de este plugin cambia versión con cierta frecuencia).
-  
+  health: ^10.2.0
 
   # --- Wearables: Apple Health (HealthKit) y Google Fit ---
   # Un solo paquete cubre ambas plataformas: en Android usa Health Connect
@@ -69,10 +69,10 @@ dependencies:
   # servicio en 2024 — ver ARCHITECTURE_DECISIONS.md, sección 1) y en iOS
   # usa HealthKit nativo. Sin esto, integrar cada uno requeriría un plugin
   # distinto con APIs distintas.
-  intl: ^0.20.2
+  health: ^10.2.0
 
   # --- Utilidades ---
-  health: ^13.3.1
+  intl: ^0.19.0
   logger: ^2.3.0
   freezed_annotation: ^2.4.4
   json_annotation: ^4.9.0
@@ -94,7 +94,7 @@ dev_dependencies:
 
   # --- Testing ---
   mocktail: ^1.0.4
-  
+  riverpod_test: ^0.1.0
 
   # --- Lint ---
   flutter_lints: ^4.0.0

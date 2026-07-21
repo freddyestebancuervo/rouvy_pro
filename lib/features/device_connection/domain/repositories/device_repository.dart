@@ -1,8 +1,8 @@
 import 'package:dartz/dartz.dart';
 
 import '../../../../core/error/failures.dart';
-import '../entities/ble_device.dart';
-import '../entities/telemetry_snapshot.dart';
+import 'entities/ble_device.dart';
+import 'entities/telemetry_snapshot.dart';
 
 /// Puerto (interfaz) del módulo BLE. La capa `data` (`DeviceRepositoryImpl`)
 /// es la única que sabe que detrás de esto hay `flutter_blue_plus` — el

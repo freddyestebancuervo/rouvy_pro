@@ -56,13 +56,12 @@ class HealthPlatformGatewayImpl implements HealthPlatformGateway {
 
     if (Platform.isAndroid) {
       try {
-        final HealthConnectSdkStatus? status = await _health.getHealthConnectSdkStatus();
+        final HealthConnectSdkStatus status = await _health.getHealthConnectSdkStatus();
         switch (status) {
           case HealthConnectSdkStatus.sdkAvailable:
             return HealthAvailability.available;
           case HealthConnectSdkStatus.sdkUnavailableProviderUpdateRequired:
           case HealthConnectSdkStatus.sdkUnavailable:
-          case null:
             // En ambos casos la app Health Connect necesita instalarse o
             // actualizarse desde Play Store antes de poder usarse — desde
             // la perspectiva de esta app, el flujo de recuperación es el

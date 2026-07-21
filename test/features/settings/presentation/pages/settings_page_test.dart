@@ -18,11 +18,10 @@ Widget _settingsPageHarness({required void Function(ProviderContainer) onContain
     child: Consumer(
       builder: (BuildContext context, WidgetRef ref, _) {
         onContainerReady(ProviderScope.containerOf(context));
-        return const MaterialApp(
-          locale: Locale('es'),
+        return MaterialApp(
           localizationsDelegates: AppLocalizations.localizationsDelegates,
           supportedLocales: AppLocalizations.supportedLocales,
-          home: SettingsPage(),
+          home: const SettingsPage(),
         );
       },
     ),

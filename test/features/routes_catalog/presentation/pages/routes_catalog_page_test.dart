@@ -44,7 +44,6 @@ Widget _wrap(Widget child, {required RoutesRepository repository}) {
   return ProviderScope(
     overrides: <Override>[routesRepositoryProvider.overrideWithValue(repository)],
     child: MaterialApp(
-      locale: const Locale('es'),
       localizationsDelegates: AppLocalizations.localizationsDelegates,
       supportedLocales: AppLocalizations.supportedLocales,
       home: child,

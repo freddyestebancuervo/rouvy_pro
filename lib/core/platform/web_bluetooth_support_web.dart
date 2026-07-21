@@ -1,11 +1,5 @@
-import 'dart:js_interop';
-
-/// Getter externo vía JS interop a `navigator.bluetooth`. Si la propiedad
-/// no existe en el objeto `navigator` del motor del navegador, devuelve
-/// `null` en vez de lanzar — así el feature-detection de abajo puede
-/// resolverse con una simple comprobación de nulidad.
-@JS('navigator.bluetooth')
-external JSAny? get _navigatorBluetooth;
+import 'dart:html' as html;
+import 'dart:js_util' as js_util;
 
 /// Comprueba, vía JS interop, si `navigator.bluetooth` existe en el
 /// objeto `window.navigator` del motor del navegador. Es "feature
@@ -15,7 +9,8 @@ external JSAny? get _navigatorBluetooth;
 /// `ARCHITECTURE_DECISIONS.md` sección 4).
 Future<bool> isWebBluetoothSupported() async {
   try {
-    return _navigatorBluetooth != null;
+    final Object navigator = html.window.navigator;
+    return js_util.hasProperty(navigator, 'bluetooth');
   } catch (_) {
     // Cualquier error de interop (muy improbable, pero un navegador
     // exótico podría comportarse distinto) se trata como "no soportado"

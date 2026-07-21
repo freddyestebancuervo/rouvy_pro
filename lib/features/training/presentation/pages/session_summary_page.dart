@@ -32,7 +32,7 @@ class _SessionSummaryPageState extends ConsumerState<SessionSummaryPage> {
   }
 
   @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context, WidgetRef ref) {
     final AppLocalizations l10n = AppLocalizations.of(context);
     final RideSessionSummary? summary = ref.watch(rideSessionControllerProvider).summary;
     final AsyncValue<void> saveState = ref.watch(saveSessionControllerProvider);

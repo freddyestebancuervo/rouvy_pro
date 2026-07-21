@@ -55,7 +55,7 @@ class TelemetryAggregator {
     double newCalories = _state.caloriesKcal;
 
     final double effectiveSpeed = snapshot.speedKmh ?? _state.speedKmh;
-    if (elapsedSeconds > 0 && elapsedSeconds <= 10) {
+    if (elapsedSeconds > 0 && elapsedSeconds < 10) {
       // El límite superior de 10s evita saltos irreales de distancia si
       // hubo un hueco largo de desconexión entre snapshots.
       newDistance += (effectiveSpeed / 3.6) * elapsedSeconds;

@@ -2,11 +2,9 @@ import 'package:shared_preferences/shared_preferences.dart';
 
 import '../core/ble/ble_permission_handler.dart';
 import '../core/di/injection.dart';
-import '../features/routes_catalog/data/repositories/routes_repository_impl.dart';
-import '../features/routes_catalog/domain/repositories/routes_repository.dart';
 import '../features/training/data/datasources/ride_session_snapshot_local_datasource.dart';
 
-/// Registra en el MISMO contenedor global de GetIt (`sl`) solo las
+/// Registra en el MISMO contenedor global de GetIt (`sl`) solo las 3
 /// piezas que:
 /// (a) algún provider de producción resuelve directamente vía `sl()`
 ///     (no vía un `Override` de Riverpod, ver `demo_overrides.dart`), y
@@ -39,15 +37,5 @@ Future<void> initDemoDependencyInjection() async {
     sl.registerLazySingleton<RideSessionSnapshotLocalDataSource>(
       () => RideSessionSnapshotLocalDataSourceImpl(sl()),
     );
-  }
-
-  // Real también — el catálogo de rutas todavía no tiene backend en
-  // producción (ver el comentario de `TrainingRoute`): `RoutesRepositoryImpl`
-  // ya es 100% datos fijos en memoria (`RoutesMockDataSource`), sin
-  // Firebase. Sin este registro, `routesRepositoryProvider` (que resuelve
-  // vía `sl()`, igual que en producción) lanzaría "not registered" apenas
-  // se abriera el catálogo en modo demo.
-  if (!sl.isRegistered<RoutesRepository>()) {
-    sl.registerLazySingleton<RoutesRepository>(RoutesRepositoryImpl.new);
   }
 }

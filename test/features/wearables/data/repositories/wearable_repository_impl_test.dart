@@ -60,8 +60,8 @@ void main() {
     await repository.connect(WearableProviderType.appleHealth);
 
     // Suscripción TARDÍA — después de que el estado ya cambió.
-    final List<WearableConnection> first = await repository.connectionsStream.first;
+    final WearableConnection first = await repository.connectionsStream.first;
 
-    expect(first.first.status, WearableConnectionStatus.connected);
+    expect(first.status, WearableConnectionStatus.connected);
   });
 }
