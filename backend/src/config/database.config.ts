@@ -17,11 +17,19 @@ export function createDatabasePool(): Pool {
 
   const config: PoolConfig = {
     connectionString,
-    // Límites conservadores para desarrollo local; en producción, ajustar
-    // según el tamaño real del pool de conexiones de Postgres disponible.
-    max: 10,
-    idleTimeoutMillis: 30000,
-    connectionTimeoutMillis: 5000,
+    // Límites conservadores para desarrollo local por defecto; ajustables
+    // vía env var para producción, sin tocar código (mismos defaults que
+    // ya se venían usando si no se configuran).
+    max: Number(process.env.DATABASE_POOL_MAX ?? 10),
+    idleTimeoutMillis: Number(process.env.DATABASE_IDLE_TIMEOUT_MS ?? 30000),
+    connectionTimeoutMillis: Number(process.env.DATABASE_CONNECTION_TIMEOUT_MS ?? 5000),
+    // Opt-in: la mayoría de los Postgres administrados (RDS, Cloud SQL,
+    // etc.) exigen TLS. `rejectUnauthorized: false` porque estos
+    // proveedores suelen usar certificados de una CA no incluida en el
+    // store por defecto de Node — mismo patrón estándar que usa la
+    // documentación de `pg` para este caso. Sin este flag, `DATABASE_URL`
+    // solo (aunque incluya `?sslmode=require`) no siempre alcanza.
+    ...(process.env.DATABASE_SSL === 'true' ? { ssl: { rejectUnauthorized: false } } : {}),
   };
 
   return new Pool(config);

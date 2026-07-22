@@ -1,6 +1,9 @@
 import { ValidationPipe } from '@nestjs/common';
 import { NestFactory } from '@nestjs/core';
+import { NestExpressApplication } from '@nestjs/platform-express';
+import helmet from 'helmet';
 import { AppModule } from './app.module';
+import { ApiExceptionFilter } from './common/filters/api-exception.filter';
 
 /**
  * Scaffold de la tarea C2 (ROADMAP_M0_M1.md) — levanta el servidor y
@@ -9,7 +12,31 @@ import { AppModule } from './app.module';
  * son la tarea C3, deliberadamente separada de esta.
  */
 async function bootstrap(): Promise<void> {
-  const app = await NestFactory.create(AppModule);
+  const app = await NestFactory.create<NestExpressApplication>(AppModule);
+
+  // Headers HTTP estándar de seguridad (X-Content-Type-Options,
+  // X-Frame-Options, oculta X-Powered-By, etc.) — hallazgo de la revisión
+  // de seguridad de cierre de fase (Bloque C): no había ninguna
+  // protección a este nivel. `crossOriginResourcePolicy`/CSP por defecto
+  // de helmet apuntan a apps que sirven HTML — esta es una API JSON pura
+  // consumida por la app móvil, así que se desactivan las políticas
+  // pensadas para navegador que no aplican y podrían interferir sin
+  // aportar nada acá.
+  app.use(
+    helmet({
+      contentSecurityPolicy: false,
+      crossOriginEmbedderPolicy: false,
+    }),
+  );
+
+  // Solo confía en `X-Forwarded-For` (usado para `req.ip`, la base del
+  // rate limiting por IP) si el operador confirma explícitamente que hay
+  // un proxy/load balancer real por delante — confiar en él por defecto
+  // permitiría a cualquier cliente falsificar su IP y saltarse el rate
+  // limiting con un header falso.
+  if (process.env.TRUST_PROXY === 'true') {
+    app.set('trust proxy', 1);
+  }
 
   // Coincide con el prefijo `/v1` usado en todos los contratos de
   // docs/TECHNICAL_SPECIFICATION_M0_M1.md sección 1.2 — así el path real
@@ -28,6 +55,9 @@ async function bootstrap(): Promise<void> {
       transform: true,
     }),
   );
+
+  // Sobre de error único de la spec sección 1.2 — ver ApiExceptionFilter.
+  app.useGlobalFilters(new ApiExceptionFilter());
 
   const port = process.env.PORT ?? 3000;
   await app.listen(port);

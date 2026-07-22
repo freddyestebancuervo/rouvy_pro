@@ -1,24 +1,19 @@
 import { Module } from '@nestjs/common';
+import { RefreshTokensModule } from '../refresh-tokens/refresh-tokens.module';
+import { UsersModule } from '../users/users.module';
+import { AuthController } from './auth.controller';
+import { AuthService } from './auth.service';
+import { RefreshThrottleGuard } from './refresh-throttle.guard';
 
 /**
- * Vacío a propósito — la tarea C2 (este scaffold) solo deja la
- * estructura de carpetas/módulos lista. Los endpoints reales
- * (`POST /auth/register`, `POST /auth/login`, siguiendo el contrato
- * exacto de docs/TECHNICAL_SPECIFICATION_M0_M1.md sección 1.2) son la
- * tarea C3.
- *
- * Estructura esperada al completar C3 (siguiendo el mismo patrón de
- * capas ya usado en el cliente Flutter — domain/application/infrastructure,
- * ver documento de arquitectura general):
- *   auth/
- *     domain/           — entidades de dominio del backend (no las de Flutter)
- *     application/       — casos de uso (RegisterUserUseCase, LoginUseCase...)
- *     infrastructure/
- *       auth.controller.ts
- *       auth.service.ts
- *       dto/
- *         register.dto.ts
- *         login.dto.ts
+ * `POST /auth/register`, `POST /auth/login` (C3) y `POST /auth/refresh`
+ * con rotación + detección de reuso (C4) — contrato de
+ * `docs/TECHNICAL_SPECIFICATION_M0_M1.md` sección 1.2 / 5.2. `TokenService`
+ * no se provee acá — viene de `JwtModule` (global, ver `src/jwt/`).
  */
-@Module({})
+@Module({
+  imports: [UsersModule, RefreshTokensModule],
+  controllers: [AuthController],
+  providers: [AuthService, RefreshThrottleGuard],
+})
 export class AuthModule {}

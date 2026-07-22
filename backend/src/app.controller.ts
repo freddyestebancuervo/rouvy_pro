@@ -1,21 +1,15 @@
-import { Controller, Get, ServiceUnavailableException } from '@nestjs/common';
+import { Controller, Get, Inject, ServiceUnavailableException } from '@nestjs/common';
 import { Pool } from 'pg';
-import { createDatabasePool } from './config/database.config';
+import { PG_POOL } from './database/database.module';
 
 /**
- * `GET /v1/health` — único endpoint de este scaffold (C2). Sirve para
- * verificar, sin ninguna lógica de negocio de por medio, que el servidor
- * arrancó Y que la conexión a Postgres funciona de verdad (no solo que
- * el proceso Node esté vivo) — es la prueba de humo mínima antes de
- * empezar la tarea C3.
+ * `GET /v1/health` — verifica, sin ninguna lógica de negocio de por medio,
+ * que el servidor arrancó Y que la conexión a Postgres funciona de verdad
+ * (no solo que el proceso Node esté vivo).
  */
 @Controller('health')
 export class AppController {
-  private readonly pool: Pool;
-
-  constructor() {
-    this.pool = createDatabasePool();
-  }
+  constructor(@Inject(PG_POOL) private readonly pool: Pool) {}
 
   @Get()
   async check(): Promise<{ status: string; database: string }> {
