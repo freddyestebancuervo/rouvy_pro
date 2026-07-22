@@ -6,6 +6,7 @@ import { AppController } from './app.controller';
 import { DatabaseModule } from './database/database.module';
 import { JwtModule } from './jwt/jwt.module';
 import { AuthModule } from './modules/auth/auth.module';
+import { EquipmentModule } from './modules/equipment/equipment.module';
 import { UsersModule } from './modules/users/users.module';
 
 @Module({
@@ -31,6 +32,7 @@ import { UsersModule } from './modules/users/users.module';
     JwtModule,
     AuthModule,
     UsersModule,
+    EquipmentModule,
   ],
   controllers: [AppController],
   providers: [{ provide: APP_GUARD, useClass: ThrottlerGuard }],
