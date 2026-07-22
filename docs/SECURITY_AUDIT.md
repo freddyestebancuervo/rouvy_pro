@@ -1,8 +1,8 @@
 # Auditoría de seguridad — Escalada de privilegios vía `firestore.rules`
 
-**Severidad:** Crítica · **Estado:** Mitigado en código (`firestore.rules`),
-**pendiente de verificación con tests ejecutados en un entorno real** (ver
-sección final).
+**Severidad:** Crítica · **Estado:** Mitigado en código (`firestore.rules`) y
+**verificado con tests ejecutados contra el emulador real** (ver sección
+final) — 2026-07-21.
 
 ---
 
@@ -134,31 +134,36 @@ emulador de Firestore, cubriendo exactamente los 4 ataques exigidos más
 casos de control positivos (ver `firebase/rules-tests/README.md` para el
 desglose completo y las instrucciones de ejecución).
 
-## 8. Cómo verificar (pendiente — léase con atención)
+## 8. Verificación ejecutada — 2026-07-21
 
-**Estos tests NO se han ejecutado.** El entorno en el que se escribió esta
-corrección tiene Node.js (v22), Java (OpenJDK 21) y npm disponibles — lo
-que falta es **acceso a red**: `npm install` devuelve `403 Forbidden`
-contra el registro de npm (política de la sandbox, no una limitación de
-herramientas). Sin poder instalar `firebase-tools` ni las dependencias del
-propio proyecto de tests (`@firebase/rules-unit-testing`, `firebase`,
-`jest`), no hay forma de levantar el emulador ni correr la suite desde
-aquí.
-
-**Antes de dar por cerrada la tarea A3 y de desplegar `firestore.rules` a
-producción**, es obligatorio:
+Corrido en un entorno con Node.js, Java (OpenJDK 21) y red disponibles
+(`npm install` en `firebase/rules-tests` sin `403`/`ENOTFOUND`). Sin
+`firebase-tools` instalado globalmente, se invocó vía `npx firebase-tools`
+(evita una instalación global; equivalente al `npm test` documentado en
+`firebase/rules-tests/package.json`):
 
 ```bash
 cd firebase/rules-tests
 npm install
-npm test
+npx firebase-tools emulators:exec --config ../../firebase.json \
+  --project=demo-ridepro-security-tests --only firestore "npx jest --runInBand"
 ```
 
-y confirmar que la totalidad de los tests (~20) pasan. Si alguno falla,
-**no desplegar** — revisar si la regla es demasiado laxa (dejó pasar un
-ataque) o demasiado estricta (rompió un caso de control legítimo) antes
-de corregir.
+Resultado — **28/28 tests pasaron**, los 4 ataques descritos arriba
+(escalada en creación, escalada post-creación, campos protegidos
+adicionales, acceso cruzado entre usuarios) más los casos de control de
+uso legítimo:
 
-Este documento se actualizará con el resultado real de esa ejecución en
-cuanto se corra en un entorno con las herramientas disponibles — hasta
-entonces, la tarea A3 se considera **implementada pero no verificada**.
+```
+Test Suites: 1 passed, 1 total
+Tests:       28 passed, 28 total
+Snapshots:   0 total
+Time:        6.198 s
+```
+
+La tarea A3 (y A5, misma suite) se consideran **implementadas y
+verificadas**. `firestore.rules` queda habilitado para desplegarse con
+`firebase deploy --only firestore:rules` cuando exista un proyecto de
+Firebase real configurado (ver `SETUP_SOCIAL_LOGIN.md` — el
+`applicationId`/`google-services.json` siguen siendo placeholders a
+propósito).

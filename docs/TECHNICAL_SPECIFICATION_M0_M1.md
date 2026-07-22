@@ -350,10 +350,19 @@ CREATE TABLE users (
     deleted_at      TIMESTAMPTZ,          -- soft delete (ver 5.6, derecho al olvido)
     CONSTRAINT users_email_unique UNIQUE (email)
 );
-CREATE INDEX idx_users_email_lower ON users (LOWER(email));
 -- Índice parcial: acelera la query más común del panel admin ("usuarios
 -- premium activos") sin cargar el índice con usuarios free/borrados.
 CREATE INDEX idx_users_premium_active ON users (premium) WHERE deleted_at IS NULL AND premium = TRUE;
+
+-- 0002_users_email_case_insensitive_unique.sql (cierre de fase Bloque C)
+-- `users_email_unique` de arriba es sensible a mayúsculas/minúsculas —
+-- "Rider@x.com" y "rider@x.com" pasaban como cuentas distintas. Se
+-- reemplaza `idx_users_email_lower` (índice normal) por un índice ÚNICO
+-- sobre `LOWER(email)`: ahora la unicidad case-insensitive la garantiza
+-- la propia base, cerrando una condición de carrera real entre dos
+-- registros concurrentes (ver `AuthService.register` para la traducción
+-- del `23505` resultante al mismo `409 EMAIL_ALREADY_EXISTS`).
+CREATE UNIQUE INDEX users_email_lower_unique ON users (LOWER(email));
 
 CREATE TABLE roles (
     id      SMALLINT PRIMARY KEY,

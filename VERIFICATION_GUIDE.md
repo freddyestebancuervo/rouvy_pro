@@ -1,13 +1,16 @@
-# Guía de verificación — A3 (Firestore) y C2 (Backend/Postgres)
+# Guía de verificación — A3 (Firestore), C2 (Backend/Postgres) y D1 (Equipamiento)
 
 > **¿Sin acceso a una terminal (por ejemplo, trabajando solo desde el
 > celular)?** Ver `CI_CD_GUIDE.md` — configuré GitHub Actions para correr
-> estos mismos 3 tracks automáticamente en la nube, viendo los resultados
+> estos mismos tracks automáticamente en la nube, viendo los resultados
 > desde el navegador del celular, sin instalar nada localmente.
 
-**Antes de seguir con C3**, según lo acordado. Dos tracks independientes
-— podés correrlos en cualquier orden, o en paralelo en dos terminales.
-Ninguno depende del otro.
+Originalmente escrita "antes de seguir con C3"; el Track 3 (D1,
+Equipamiento) se agregó después, sobre la misma base de Postgres del
+Track 2 — no lo repite desde cero. Track 1 y Track 2 son independientes
+entre sí (podés correrlos en cualquier orden, o en paralelo en dos
+terminales); Track 3 depende de que el Track 2 ya se haya corrido al
+menos una vez (mismo contenedor y `.env`).
 
 ---
 
@@ -77,7 +80,10 @@ ataques + los casos de control.
 ### Prerrequisitos
 
 ```bash
-node --version   # 18+
+node --version   # 20+ (subido de 18+ tras el cierre de fase de Bloque C:
+                 # el override de `file-type` en package.json, aplicado
+                 # para resolver GHSA-5v7r-6r5c-r473/GHSA-j47w-4g3g-c36v,
+                 # requiere Node >=20 — mismo mínimo que ya usa CI)
 ```
 
 Necesitás una instancia de PostgreSQL accesible. Dos opciones — elegí
@@ -187,19 +193,93 @@ check).
 
 ---
 
+## Track 3 — Backend Equipamiento (D1, Bloque D)
+
+> Este track asume que ya corriste el Track 2 al menos una vez (mismo
+> contenedor `ridepro-postgres`, mismo `.env`) — si es la primera vez que
+> tocás este backend, hacé el Track 2 primero.
+
+Con C1-C5 y D1 (módulo `equipment`, ver
+`docs/TECHNICAL_SPECIFICATION_BLOQUE_D.md` sección 2) implementados, este
+track agrega la migración `0003` y verifica el CRUD completo de
+equipamiento contra Postgres real.
+
+### Comandos exactos
+
+Con el contenedor `ridepro-postgres` corriendo (`docker ps` debería
+mostrarlo `Up`):
+
+```bash
+cd backend
+docker exec -i ridepro-postgres psql -U ridepro -d ridepro_dev < migrations/0003_equipment.sql
+```
+
+**Qué esperar de este comando específicamente:**
+```
+CREATE TABLE
+INSERT 0 8
+CREATE TABLE
+CREATE INDEX
+CREATE INDEX
+CREATE INDEX
+CREATE INDEX
+```
+(2 `CREATE TABLE` — `equipment_categories` y `equipment` —, 1
+`INSERT 0 8` — las 8 categorías sembradas: `bike`, `smart_trainer`,
+`power_meter`, `heart_rate_monitor`, `cadence_sensor`, `speed_sensor`,
+`speed_cadence_combo`, `other` —, 4 `CREATE INDEX`. Si ves algún
+`ERROR:` en vez de esto, copiámelo tal cual — lo más probable es que el
+Track 2 no se haya corrido antes, y la migración `0003` depende de que
+`users` ya exista.)
+
+Suite completa (unitarios + e2e — no hace falta levantar el servidor a
+mano para este track, `test:e2e` levanta su propia instancia):
+
+```bash
+npm run lint
+npx tsc --noEmit
+npm run build
+npm run test
+npm run test:e2e
+```
+
+**Qué esperar:**
+- `lint`/`tsc --noEmit`/`build`: sin salida de error (silenciosos si todo
+  está bien).
+- `npm run test`: `Tests: 45 passed, 45 total` (6 test suites — incluye
+  `src/common/database/pg-error.util.spec.ts`, extraído en la auditoría
+  de mantenimiento post-D1 para no duplicar la extracción de errores de
+  `pg` entre `AuthService` y `EquipmentService`).
+- `npm run test:e2e`: `Tests: 41 passed, 41 total` (6 test suites,
+  incluyendo `equipment.e2e-spec.ts` con 21 tests — CRUD completo, 401
+  sin token, 404 de recursos inexistentes/ajenos, validación de
+  categoría y de campos, soft-delete idempotente, y un test de
+  concurrencia real con 5 requests simultáneas).
+
+### Qué enviarme
+
+1. La salida completa de aplicar `migrations/0003_equipment.sql` (las 7
+   líneas de arriba, o el error si algo falló).
+2. El resumen final de `npm run test` y de `npm run test:e2e` (los
+   bloques `Test Suites` / `Tests` / `Time` de cada uno).
+3. Si `lint`, `tsc --noEmit` o `build` mostraron algo (aunque sea un
+   warning): pegámelo tal cual, incluso si el resto pasó.
+
+---
+
 ## Qué pasa después de que me envíes esto
 
-- **Si ambos tracks pasan sin errores:** marco A3 y C2 como verificadas
-  en `ROADMAP_M0_M1.md` y `docs/SECURITY_AUDIT.md`, y arranco C3
-  (`POST /auth/register` y `POST /auth/login` reales) sobre una base ya
-  confirmada.
-- **Si algo falla:** con el log exacto reviso si es un problema de las
-  reglas/código (lo corrijo) o de configuración de tu entorno (te guío
-  para resolverlo) — no avanzo a C3 hasta que ambos tracks estén verdes.
-- **Si no podés correr uno de los dos tracks** (por ejemplo, no tenés
+- **Si los tres tracks pasan sin errores:** marco A3, C2 y D1 como
+  verificados en `ROADMAP_M0_M1.md`, y arranco D2 (Entrenamientos) sobre
+  una base ya confirmada.
+- **Si algo falla:** con el log exacto reviso si es un problema del
+  código (lo corrijo) o de configuración de tu entorno (te guío para
+  resolverlo) — no avanzo a la siguiente tarea hasta que los tracks
+  relevantes estén verdes.
+- **Si no podés correr alguno de los tracks** (por ejemplo, no tenés
   Docker ni Postgres instalable ahora mismo): decímelo y seguimos solo
-  con el que sí podés validar, dejando el otro explícitamente pendiente
-  — no asumo que "probablemente funciona" solo porque el otro track pasó.
+  con los que sí podés validar, dejando el resto explícitamente pendiente
+  — no asumo que "probablemente funciona" solo porque otro track pasó.
 
 ---
 
