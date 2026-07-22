@@ -1,4 +1,5 @@
 import { HttpStatus, Injectable } from '@nestjs/common';
+import { isPgUniqueViolation, pgConstraintName } from '../../common/database/pg-error.util';
 import { ApiException } from '../../common/exceptions/api.exception';
 import { assertOwned } from '../../common/ownership/assert-owned.util';
 import { CreateEquipmentDto } from './dto/create-equipment.dto';
@@ -69,12 +70,13 @@ const EQUIPMENT_DEFAULT_CONFLICT = (): ApiException =>
     'Otra actualización en curso ya cambió el equipo default de esta categoría — reintentá.',
   );
 
-/** Código de error de Postgres para `unique_violation` (`23505`). */
+/** Nombre de la constraint si el error es un `unique_violation`, o `null`
+ * en cualquier otro caso — usa el helper compartido con `AuthService`
+ * (`src/common/database/pg-error.util.ts`, hallazgo de la revisión de
+ * limpieza post-D1: antes cada servicio reimplementaba esta extracción
+ * por separado). */
 function uniqueViolationConstraint(error: unknown): string | null {
-  if (typeof error !== 'object' || error === null) return null;
-  const pgError = error as { code?: unknown; constraint?: unknown };
-  if (pgError.code !== '23505') return null;
-  return typeof pgError.constraint === 'string' ? pgError.constraint : null;
+  return isPgUniqueViolation(error) ? pgConstraintName(error) : null;
 }
 
 @Injectable()

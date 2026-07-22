@@ -1,5 +1,6 @@
 import { HttpStatus, Injectable, Logger } from '@nestjs/common';
 import * as bcrypt from 'bcryptjs';
+import { isPgUniqueViolation } from '../../common/database/pg-error.util';
 import { ApiException } from '../../common/exceptions/api.exception';
 import { TokenService } from '../../jwt/token.service';
 import { RefreshTokensRepository } from '../refresh-tokens/refresh-tokens.repository';
@@ -49,16 +50,6 @@ const EMAIL_ALREADY_EXISTS = (): ApiException =>
     'Ya existe una cuenta con ese correo.',
   );
 
-/** Código de error de Postgres para `unique_violation` (`23505`). */
-function isUniqueViolation(error: unknown): boolean {
-  return (
-    typeof error === 'object' &&
-    error !== null &&
-    'code' in error &&
-    (error as { code?: unknown }).code === '23505'
-  );
-}
-
 @Injectable()
 export class AuthService {
   private readonly logger = new Logger(AuthService.name);
@@ -92,7 +83,7 @@ export class AuthService {
       // `users_email_lower_unique` (migración 0002) es quien realmente
       // cierra la carrera; acá solo se traduce su `23505` al mismo error
       // de contrato que el chequeo rápido de arriba.
-      if (isUniqueViolation(error)) {
+      if (isPgUniqueViolation(error)) {
         throw EMAIL_ALREADY_EXISTS();
       }
       throw error;
