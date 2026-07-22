@@ -9,15 +9,27 @@ rendimiento/duplicación/deuda técnica completa, incluyendo una condición
 de carrera real (unicidad de email) encontrada y corregida con test de
 concurrencia real. 36 tests (16 unit + 20 e2e) en verde. Ver "Cierre de
 fase — Auditoría técnica del Bloque C" para el detalle completo.
-**Bloque D en curso — D1 (Equipamiento) implementado y verificado
-(2026-07-22)** contra Postgres real: 86 tests (45 unit + 41 e2e — antes
-36), `lint`/`tsc --noEmit`/`build` limpios. Ver sesión "Implementación de
-D1 (Equipamiento)" y "Auditoría de mantenimiento post-D1" abajo para el
-detalle completo. D2 (Entrenamientos) es la siguiente prioridad —
-**no iniciada**.
-**⚠️ Hallazgo crítico de proceso, sin resolver:** todo el backend
-(Bloque C completo + D1) está sin commitear — ver "Auditoría de
-mantenimiento post-D1" para el detalle y la recomendación.
+**Bloque D en curso.** D1 (Equipamiento) y D2 (Entrenamientos)
+implementados y verificados contra Postgres real: **125 tests (68 unit +
+57 e2e)**, `lint`/`tsc --noEmit`/`build` limpios. D3 (Rutas) es la
+siguiente prioridad — **no iniciada**.
+
+**✅ Hallazgo crítico de proceso resuelto (2026-07-22):** el backend
+completo (Bloque C + D1) estaba sin commitear desde hacía varias
+sesiones — ver "Auditoría de mantenimiento post-D1" para el detalle
+original. Se reconstruyó en 4 commits lógicos verificados uno por uno en
+`git worktree` aislado (`feat(backend): complete Block C authentication`,
+`feat(backend): implement Equipment module (D1)`,
+`refactor(backend): extract shared postgres error utilities`,
+`docs: synchronize technical documentation`) y se subieron a
+`origin/main`. `main` está sincronizada con `origin/main`, sin cambios
+pendientes de commitear (fuera de lo explícitamente diferido:
+`.claude/settings.local.json` ahora ignorado en el `.gitignore` del
+repo).
+
+**D2 se desarrolló en la rama `feature/d2`** (creada desde `main` tras la
+reconstrucción de historial) — **todavía no mergeada a `main`**. Ver
+sesión "Implementación de D2 (Entrenamientos)" abajo.
 
 ## Fase de diseño — Bloque D (núcleo funcional del usuario) — 2026-07-22
 
@@ -222,6 +234,95 @@ funcionalidad nueva. Un hallazgo real corregido, uno crítico sin resolver
   como una unidad, D1 como otra) en vez de un solo commit gigante que
   mezcle 5+ sesiones de trabajo no relacionado — decisión pendiente de
   aprobación explícita antes de ejecutar ningún `git add`/`commit`.
+
+## Reconstrucción de historial de Bloque C/D1 en 4 commits — 2026-07-22
+
+Con el plan de la auditoría anterior aprobado, se reconstruyó el
+historial real en 4 commits lógicos, **cada uno verificado de forma
+aislada en `git worktree`** (checkout separado con solo el contenido
+realmente commiteado hasta ese punto — ni un archivo de más filtrándose
+desde el working tree) antes de avanzar al siguiente:
+
+1. `feat(backend): complete Block C authentication` — auth/users/jwt/
+   refresh-tokens/guards, migración 0002. 16 unit + 20 e2e.
+2. `feat(backend): implement Equipment module (D1)` — migración 0003,
+   módulo `equipment` completo. 40 unit + 41 e2e acumulado.
+3. `refactor(backend): extract shared postgres error utilities` —
+   dedup de `isUniqueViolation`/`uniqueViolationConstraint` en
+   `pg-error.util.ts`, sin cambio de comportamiento. 45 unit + 41 e2e.
+4. `docs: synchronize technical documentation`.
+
+**Los dos archivos que mezclaban contenido de más de un commit lógico**
+(`app.module.ts` — registra `EquipmentModule` recién en el commit 2;
+`auth.service.ts`/`equipment.service.ts` — usan el helper compartido
+recién en el commit 3) se resolvieron reescribiendo temporalmente su
+contenido al estado exacto de cada commit (nunca moviendo archivos del
+árbol) — más simple y seguro que partir con `git add -p` un archivo
+nuevo sin historial previo. Cada worktree de verificación usó una
+*junction* NTFS hacia `node_modules` (sin reinstalar) y una copia de
+`.env`/`secrets/` (gitignored, necesarios para levantar la app).
+
+Subido a `origin/main` sin incidentes. Cierre: se auditaron también los
+3 archivos untracked restantes (`.claude/`,
+`firebase/rules-tests/.gitignore`, `firebase/rules-tests/
+package-lock.json`) — los 4 legítimos, ninguno artefacto local. Se
+versionó `.claude/settings.json` (config de equipo, sin secretos), se
+agregó `.claude/settings.local.json` al `.gitignore` del repo (antes
+solo ignorado por el gitignore *global* del usuario, frágil para otros
+clones), y se versionaron el `.gitignore`/lockfile faltantes de
+`firebase/rules-tests/` (su `package.json` ya estaba trackeado desde
+Bloque A). Commit `chore: version shared Claude Code config and firebase
+rules-tests lockfile`, subido a `origin/main`. `main` quedó limpia y
+sincronizada — confirmado con `git status`/`git log --oneline`.
+
+## Implementación de D2 (Entrenamientos) — 2026-07-22
+
+Sobre `main` ya limpia, se creó la rama `feature/d2` y se implementó
+**D2 completo** siguiendo el plan aprobado, verificado contra Postgres
+real:
+
+- **Migración `0004_workouts.sql`**: `workouts` + `workout_intervals`,
+  sin dependencias de otras tablas de Bloque D.
+- **Tres decisiones de implementación tomadas durante la construcción**
+  (documentadas en `docs/TECHNICAL_SPECIFICATION_BLOQUE_D.md` sección
+  3.10, no silenciosas): `position` se deriva del índice del array
+  recibido (nunca un campo del cliente); `estimated_duration_seconds` se
+  calcula en el servidor como la suma de los intervalos; los intervalos
+  quedan **inmutables tras la creación** (`PATCH` solo edita
+  `name`/`description`/`isPublic` — para otra estructura, archivar y
+  crear de nuevo).
+- **Primer módulo de Bloque D con lectura cross-usuario real** — a
+  diferencia de Equipment (D1, estrictamente `/me`-scoped), `GET`
+  expone catálogo (`owner_id IS NULL`) y workouts marcados públicos por
+  su dueño. Las escrituras (`PATCH`/`DELETE`) siguen siendo
+  estrictamente del dueño: se reutilizó `assertOwned` **tal cual**
+  (sin escribir una segunda función de ownership) mapeando
+  `ownerId ?? '__catalog__'` — un sentinel que nunca coincide con un
+  UUID real, así que un workout de catálogo o ajeno cae limpio en
+  "no encontrado" para escritura.
+- **Validación de `targetLow`/`targetHigh` por `targetType`** (power
+  0-300, heart_rate 60-220, `none` sin ningún target permitido) en el
+  servicio — DTO valida forma/rango genérico, la validación cruzada con
+  el tipo del workout padre vive en `WorkoutsService`.
+- **23 tests unitarios + 16 tests e2e nuevos**, todos en verde en el
+  primer intento (sin fallos que corregir). Cobertura: 401, CRUD
+  completo, visibilidad propio/público/catálogo/ajeno (incluyendo que un
+  workout público ajeno es **visible pero no editable**), validación de
+  intervalos (rango, `none` con target, array vacío), 409 sobre
+  archivado, soft-delete idempotente. **Sin test de concurrencia
+  dedicado** — a diferencia de Equipment, ninguna invariante compartida
+  entre filas lo requiere.
+- **Suite completa: 125 tests (68 unit + 57 e2e), todos en verde** —
+  verificado dos veces: en el working tree y en un `git worktree`
+  aislado del commit real. `lint`/`tsc --noEmit`/`build` limpios.
+- **Commit** `feat(backend): implement Workouts module (D2)` en
+  `feature/d2` — **sin mergear a `main` todavía**.
+- **Nota de cobertura documentada, no un gap oculto**: la visibilidad de
+  catálogo (`ownerId IS NULL`) no tiene forma de ejercitarse por HTTP
+  (`POST /workouts` siempre asigna el dueño autenticado; crear una fila
+  de catálogo real es tarea de un panel admin, fuera de alcance de D2,
+  mismo criterio que Rutas/D3) — cubierto a nivel unitario con mocks, no
+  en el e2e.
 
 ## Sesión de verificación — 2026-07-21
 
@@ -917,10 +1018,16 @@ reordenar sin revisar esa sección primero.*
       tests totales en el backend, antes 36). Ver sesión "Implementación
       de D1 (Equipamiento)" arriba para el detalle completo.
 
-- [ ] **D2. Entrenamientos** — modelo de entrenamientos estructurados
-      con intervalos (`workouts`/`workout_intervals`, migración `0004`,
-      sin dependencias). Dominio completamente nuevo: hoy la app solo
-      soporta sesión libre sin objetivos.
+- [x] **D2. Entrenamientos** ✅ Implementado y **verificado**
+      (2026-07-22) contra Postgres real, en la rama `feature/d2`
+      (**sin mergear a `main` todavía**) — modelo de entrenamientos
+      estructurados con intervalos (`workouts`/`workout_intervals`,
+      migración `0004`, sin dependencias). Primer módulo con lectura
+      cross-usuario real (catálogo + workouts públicos), intervalos
+      inmutables tras la creación, `position`/`estimated_duration_seconds`
+      derivados en el servidor. 23 tests unitarios + 16 e2e (125 tests
+      totales en el backend, antes 86). Ver sesión "Implementación de D2
+      (Entrenamientos)" arriba para el detalle completo.
 
 - [ ] **D3. Rutas** — catálogo real en Postgres (`routes`, migración
       `0005`, sin dependencias) que reemplaza el `RoutesMockDataSource`

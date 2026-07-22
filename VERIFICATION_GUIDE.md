@@ -1,16 +1,19 @@
-# Guía de verificación — A3 (Firestore), C2 (Backend/Postgres) y D1 (Equipamiento)
+# Guía de verificación — A3 (Firestore), C2 (Backend/Postgres), D1 (Equipamiento) y D2 (Entrenamientos)
 
 > **¿Sin acceso a una terminal (por ejemplo, trabajando solo desde el
 > celular)?** Ver `CI_CD_GUIDE.md` — configuré GitHub Actions para correr
 > estos mismos tracks automáticamente en la nube, viendo los resultados
 > desde el navegador del celular, sin instalar nada localmente.
 
-Originalmente escrita "antes de seguir con C3"; el Track 3 (D1,
-Equipamiento) se agregó después, sobre la misma base de Postgres del
-Track 2 — no lo repite desde cero. Track 1 y Track 2 son independientes
-entre sí (podés correrlos en cualquier orden, o en paralelo en dos
-terminales); Track 3 depende de que el Track 2 ya se haya corrido al
-menos una vez (mismo contenedor y `.env`).
+Originalmente escrita "antes de seguir con C3"; los Tracks 3 (D1,
+Equipamiento) y 4 (D2, Entrenamientos) se agregaron después, sobre la
+misma base de Postgres del Track 2 — ninguno lo repite desde cero. Track
+1 y Track 2 son independientes entre sí (podés correrlos en cualquier
+orden, o en paralelo en dos terminales); Tracks 3 y 4 dependen de que el
+Track 2 ya se haya corrido al menos una vez (mismo contenedor y `.env`).
+**Track 4 vive en la rama `feature/d2`**, no en `main` — hacé
+`git checkout feature/d2` antes de correrlo si estás verificando desde
+`main`.
 
 ---
 
@@ -267,11 +270,64 @@ npm run test:e2e
 
 ---
 
+## Track 4 — Backend Entrenamientos (D2, Bloque D, rama `feature/d2`)
+
+> Este track vive en la rama `feature/d2`, todavía sin mergear a `main`.
+> `git checkout feature/d2` primero si venís de `main`. Asume que ya
+> corriste el Track 2 (mismo contenedor `ridepro-postgres`, mismo
+> `.env`) — Track 3 (migración `0003`) no es un prerrequisito estricto
+> para este track (`workouts` no depende de `equipment`), pero si ya la
+> corriste no hace falta deshacerla.
+
+### Comandos exactos
+
+```bash
+git checkout feature/d2
+cd backend
+docker exec -i ridepro-postgres psql -U ridepro -d ridepro_dev < migrations/0004_workouts.sql
+```
+
+**Qué esperar de este comando específicamente:**
+```
+CREATE TABLE
+CREATE TABLE
+CREATE INDEX
+CREATE INDEX
+```
+(2 `CREATE TABLE` — `workouts` y `workout_intervals` —, 2 `CREATE
+INDEX`. Si ves algún `ERROR:` en vez de esto, lo más probable es que el
+Track 2 no se haya corrido antes.)
+
+```bash
+npm run lint
+npx tsc --noEmit
+npm run build
+npm run test
+npm run test:e2e
+```
+
+**Qué esperar:**
+- `lint`/`tsc --noEmit`/`build`: sin salida de error.
+- `npm run test`: `Tests: 68 passed, 68 total` (7 test suites —
+  incluye `workouts.service.spec.ts` con 23 tests).
+- `npm run test:e2e`: `Tests: 57 passed, 57 total` (7 test suites,
+  incluyendo `workouts.e2e-spec.ts` con 16 tests — CRUD completo, 401
+  sin token, visibilidad propio/público/ajeno, validación de
+  intervalos, 409 sobre archivado, soft-delete idempotente).
+
+### Qué enviarme
+
+1. La salida completa de aplicar `migrations/0004_workouts.sql`.
+2. El resumen final de `npm run test` y de `npm run test:e2e`.
+3. Si `lint`, `tsc --noEmit` o `build` mostraron algo: pegámelo tal cual.
+
+---
+
 ## Qué pasa después de que me envíes esto
 
-- **Si los tres tracks pasan sin errores:** marco A3, C2 y D1 como
-  verificados en `ROADMAP_M0_M1.md`, y arranco D2 (Entrenamientos) sobre
-  una base ya confirmada.
+- **Si los cuatro tracks pasan sin errores:** marco A3, C2, D1 y D2 como
+  verificados en `ROADMAP_M0_M1.md`, y arranco D3 (Rutas) sobre una base
+  ya confirmada.
 - **Si algo falla:** con el log exacto reviso si es un problema del
   código (lo corrijo) o de configuración de tu entorno (te guío para
   resolverlo) — no avanzo a la siguiente tarea hasta que los tracks

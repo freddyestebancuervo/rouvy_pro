@@ -617,6 +617,54 @@ el día que se implemente asignación coach→atleta (M7), sin romper nada
 de lo construido aquí — se documenta la intención, no se agrega la
 columna todavía (sin caso de uso real hoy).
 
+### 3.10 Desviaciones reales de implementación (2026-07-22)
+
+> **✅ Implementado y verificado** — D2 completo en la rama
+> `feature/d2` (23 tests unitarios + 16 e2e, todos en verde en el primer
+> intento, sin fallos que corregir). El código se apartó del boceto de
+> arriba en tres puntos concretos, todos deliberados:
+
+1. **`position` no se recibe del cliente.** El boceto proponía validar
+   en servicio que fuera "secuencial sin huecos" — en cambio, el
+   servidor lo asigna directamente a partir del índice del array de
+   `intervals` recibido en el payload (`0..N-1`). Convierte la
+   invariante en una garantía estructural del propio código de
+   inserción, en vez de una validación reactiva contra un valor
+   arbitrario que el cliente podría enviar mal.
+2. **`estimated_duration_seconds` se calcula en el servidor**
+   (`SUM(intervals.durationSeconds)`), no se acepta como campo del
+   cliente — el boceto no resolvía explícitamente esto; se decidió así
+   para que no pueda existir un valor que no coincida con la suma real
+   de los intervalos.
+3. **Los intervalos son inmutables tras la creación.** `PATCH
+   /workouts/:id` edita únicamente `name`/`description`/`isPublic`
+   (mismo criterio que `categoryCode` inmutable en Equipment). El
+   boceto no detallaba qué significa "editar" un intervalo individual
+   (¿reordenar? ¿insertar uno nuevo? ¿qué pasa con el snapshot de
+   actividades que ya ejecutaron ese workout?) — en vez de resolver esa
+   ambigüedad con una API compleja, la decisión es: para una estructura
+   distinta, archivar y crear un workout nuevo.
+4. **Ownership reutiliza `assertOwned` literal, vía un sentinel, no una
+   segunda función.** `ownerId ?? '__catalog__'` — un valor que nunca
+   coincide con un UUID real — permite que el mismo helper compartido de
+   Equipment (0.1.4) resuelva también el caso "catálogo" sin escribir
+   una función de ownership paralela (lo que hubiera repetido
+   exactamente el tipo de duplicación que la auditoría de mantenimiento
+   post-D1 ya encontró y corrigió una vez).
+5. **`GET /workouts` (lista) no incluye `intervals`** — solo `GET
+   /workouts/:id` los trae. No estaba explícito en los endpoints del
+   boceto ("incluye sus intervals" solo se mencionaba para el detalle);
+   se interpretó como intencional para mantener el listado liviano.
+6. **Campo de respuesta nuevo `isMine`** (calculado, no una columna) —
+   necesario porque D2 es el primer módulo donde `GET` devuelve
+   contenido que no es del usuario autenticado (catálogo/públicos); el
+   cliente lo necesita para decidir si mostrar controles de edición.
+7. **Sin cobertura e2e de la visibilidad de catálogo**
+   (`ownerId IS NULL`) — no hay forma de crear una fila así por HTTP en
+   este bloque (`POST` siempre asigna el dueño autenticado); cubierto
+   únicamente a nivel unitario con mocks. Documentado como decisión de
+   cobertura, no como gap oculto.
+
 ---
 
 ## 4. Actividades e historial
