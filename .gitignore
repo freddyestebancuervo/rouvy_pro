@@ -19,6 +19,9 @@ migrate_working_dir/
 # VS Code related
 .vscode/
 
+# Claude Code — configuración local, no compartida
+.claude/settings.local.json
+
 # Flutter/Dart/Pub related
 **/doc/api/
 .dart_tool/
