@@ -1,7 +1,9 @@
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:connectivity_plus/connectivity_plus.dart';
+import 'package:dio/dio.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/foundation.dart' show kIsWeb;
+import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:get_it/get_it.dart';
 import 'package:google_sign_in/google_sign_in.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -10,8 +12,14 @@ import '../ble/ble_permission_handler.dart';
 import '../config/social_login_config.dart';
 import '../health/health_platform_gateway.dart';
 import '../health/health_platform_gateway_impl.dart';
+import '../network/backend_auth_service.dart';
+import '../network/backend_dio_client.dart';
+import '../network/backend_session.dart';
 import '../network/network_info.dart';
 import '../sync/firestore_sync_service.dart';
+import '../../features/workouts/data/datasources/workouts_remote_datasource.dart';
+import '../../features/workouts/data/repositories/workouts_repository_impl.dart';
+import '../../features/workouts/domain/repositories/workouts_repository.dart';
 import '../../features/auth/data/datasources/auth_remote_datasource.dart';
 import '../../features/auth/data/repositories/auth_repository_impl.dart';
 import '../../features/auth/domain/repositories/auth_repository.dart';
@@ -90,6 +98,32 @@ Future<void> initDependencyInjection() async {
   // resto del código la use de forma síncrona vía `sl<SharedPreferences>()`.
   final SharedPreferences sharedPreferences = await SharedPreferences.getInstance();
   sl.registerLazySingleton<SharedPreferences>(() => sharedPreferences);
+
+  // ---------------------------------------------------------------------
+  // Backend propio (NestJS, Bloque D — Equipment/Workouts) — sistema de
+  // auth y transporte COMPLETAMENTE independiente de Firebase. Dos
+  // instancias de Dio con nombre porque cumplen roles distintos: la
+  // "authless" es la que usa `BackendAuthService` para sus propias
+  // llamadas de login/registro/refresh (sin el interceptor, para no
+  // disparar un ciclo de auth-dentro-de-auth); la "backendDio" es la que
+  // consumen los datasources de features, ya con el token adjunto solo.
+  // ---------------------------------------------------------------------
+  sl.registerLazySingleton<FlutterSecureStorage>(() => const FlutterSecureStorage());
+  sl.registerLazySingleton<BackendSessionStore>(() => BackendSessionStore(sl()));
+  sl.registerLazySingleton<Dio>(
+    createAuthlessBackendDio,
+    instanceName: 'backendAuthlessDio',
+  );
+  sl.registerLazySingleton<BackendAuthService>(
+    () => BackendAuthService(
+      authlessDio: sl<Dio>(instanceName: 'backendAuthlessDio'),
+      store: sl(),
+    ),
+  );
+  sl.registerLazySingleton<Dio>(
+    () => createAuthenticatedBackendDio(sl()),
+    instanceName: 'backendDio',
+  );
 
   // ---------------------------------------------------------------------
   // Core
@@ -201,4 +235,16 @@ Future<void> initDependencyInjection() async {
   // absoluto — es seguro tenerlo activo en producción ya mismo.
   // ---------------------------------------------------------------------
   sl.registerLazySingleton<RoutesRepository>(RoutesRepositoryImpl.new);
+
+  // ---------------------------------------------------------------------
+  // Feature: Entrenamientos (D2, Bloque D) — backend NestJS propio, ver
+  // el bloque "Backend propio" más arriba. Primer feature del cliente que
+  // habla con ese backend en vez de Firebase.
+  // ---------------------------------------------------------------------
+  sl.registerLazySingleton<WorkoutsRemoteDataSource>(
+    () => WorkoutsRemoteDataSourceImpl(sl<Dio>(instanceName: 'backendDio')),
+  );
+  sl.registerLazySingleton<WorkoutsRepository>(
+    () => WorkoutsRepositoryImpl(sl()),
+  );
 }

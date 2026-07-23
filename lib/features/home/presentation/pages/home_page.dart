@@ -70,12 +70,16 @@ class HomePage extends ConsumerWidget {
                             children: <Widget>[
                               Expanded(child: _TodaySessionCard(l10n: l10n)),
                               const SizedBox(width: 16),
+                              Expanded(child: _WorkoutsCard(l10n: l10n)),
+                              const SizedBox(width: 16),
                               Expanded(child: _RecommendedRoutesCard(l10n: l10n)),
                             ],
                           )
                         : Column(
                             children: <Widget>[
                               _TodaySessionCard(l10n: l10n),
+                              const SizedBox(height: 16),
+                              _WorkoutsCard(l10n: l10n),
                               const SizedBox(height: 16),
                               _RecommendedRoutesCard(l10n: l10n),
                             ],
@@ -109,6 +113,43 @@ class _TodaySessionCard extends StatelessWidget {
             const SizedBox(height: 12),
             const Text('Plan de entrenamiento IA — próximamente en M8/M9.'),
           ],
+        ),
+      ),
+    );
+  }
+}
+
+class _WorkoutsCard extends StatelessWidget {
+  const _WorkoutsCard({required this.l10n});
+
+  final AppLocalizations l10n;
+
+  @override
+  Widget build(BuildContext context) {
+    return Card(
+      clipBehavior: Clip.antiAlias,
+      child: InkWell(
+        onTap: () => context.push(AppRoute.workouts),
+        child: Padding(
+          padding: const EdgeInsets.all(20),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: <Widget>[
+              Row(
+                children: <Widget>[
+                  Expanded(
+                    child: Text(l10n.workoutsTitle, style: Theme.of(context).textTheme.titleMedium),
+                  ),
+                  const Icon(Icons.chevron_right),
+                ],
+              ),
+              const SizedBox(height: 8),
+              Text(
+                l10n.workoutsHomeHint,
+                style: TextStyle(color: Theme.of(context).colorScheme.outline),
+              ),
+            ],
+          ),
         ),
       ),
     );

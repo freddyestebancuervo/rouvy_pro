@@ -1,0 +1,13 @@
+{
+  "name": "ridepro-firebase-emulator-seed",
+  "private": true,
+  "version": "1.0.0",
+  "description": "Siembra datos de QA (usuario Auth + documentos Firestore) contra el Local Emulator Suite — nunca contra el proyecto real. Ver README.md.",
+  "scripts": {
+    "seed": "node seed_emulator.js"
+  },
+  "devDependencies": {
+    "firebase": "^10.12.0",
+    "firebase-admin": "^12.7.0"
+  }
+}

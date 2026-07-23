@@ -198,6 +198,13 @@ class _ProfileBodyState extends ConsumerState<_ProfileBody> {
               const SizedBox(height: 32),
               ListTile(
                 contentPadding: EdgeInsets.zero,
+                leading: const Icon(Icons.fitness_center_outlined),
+                title: Text(l10n.workoutsTitle),
+                trailing: const Icon(Icons.chevron_right),
+                onTap: () => context.push(AppRoute.workouts),
+              ),
+              ListTile(
+                contentPadding: EdgeInsets.zero,
                 leading: const Icon(Icons.bluetooth),
                 title: Text(l10n.manageDevicesMenuLabel),
                 trailing: const Icon(Icons.chevron_right),

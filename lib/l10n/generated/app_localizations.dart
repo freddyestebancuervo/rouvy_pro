@@ -1291,6 +1291,264 @@ abstract class AppLocalizations {
   /// In es, this message translates to:
   /// **'Explora el catálogo completo'**
   String get exploreCatalogHint;
+
+  /// No description provided for @workoutsTitle.
+  ///
+  /// In es, this message translates to:
+  /// **'Entrenamientos'**
+  String get workoutsTitle;
+
+  /// No description provided for @workoutsHomeHint.
+  ///
+  /// In es, this message translates to:
+  /// **'Crea y explora tus entrenamientos'**
+  String get workoutsHomeHint;
+
+  /// No description provided for @workoutsMineFilterLabel.
+  ///
+  /// In es, this message translates to:
+  /// **'Míos'**
+  String get workoutsMineFilterLabel;
+
+  /// No description provided for @workoutsAllFilterLabel.
+  ///
+  /// In es, this message translates to:
+  /// **'Todos'**
+  String get workoutsAllFilterLabel;
+
+  /// No description provided for @noWorkoutsAvailableMessage.
+  ///
+  /// In es, this message translates to:
+  /// **'No hay entrenamientos disponibles todavía.'**
+  String get noWorkoutsAvailableMessage;
+
+  /// No description provided for @newWorkoutAction.
+  ///
+  /// In es, this message translates to:
+  /// **'Nuevo entrenamiento'**
+  String get newWorkoutAction;
+
+  /// No description provided for @workoutDetailTitle.
+  ///
+  /// In es, this message translates to:
+  /// **'Detalle del entrenamiento'**
+  String get workoutDetailTitle;
+
+  /// No description provided for @workoutIntervalsTitle.
+  ///
+  /// In es, this message translates to:
+  /// **'Intervalos'**
+  String get workoutIntervalsTitle;
+
+  /// No description provided for @workoutIntervalsCount.
+  ///
+  /// In es, this message translates to:
+  /// **'{count} intervalos'**
+  String workoutIntervalsCount(int count);
+
+  /// No description provided for @workoutEstimatedDurationLabel.
+  ///
+  /// In es, this message translates to:
+  /// **'Duración estimada'**
+  String get workoutEstimatedDurationLabel;
+
+  /// No description provided for @workoutTargetTypeLabel.
+  ///
+  /// In es, this message translates to:
+  /// **'Tipo de objetivo'**
+  String get workoutTargetTypeLabel;
+
+  /// No description provided for @workoutTargetTypePower.
+  ///
+  /// In es, this message translates to:
+  /// **'Potencia (%FTP)'**
+  String get workoutTargetTypePower;
+
+  /// No description provided for @workoutTargetTypeHeartRate.
+  ///
+  /// In es, this message translates to:
+  /// **'Frecuencia cardíaca'**
+  String get workoutTargetTypeHeartRate;
+
+  /// No description provided for @workoutTargetTypeNone.
+  ///
+  /// In es, this message translates to:
+  /// **'Libre'**
+  String get workoutTargetTypeNone;
+
+  /// No description provided for @workoutPublicLabel.
+  ///
+  /// In es, this message translates to:
+  /// **'Público'**
+  String get workoutPublicLabel;
+
+  /// No description provided for @workoutPrivateLabel.
+  ///
+  /// In es, this message translates to:
+  /// **'Privado'**
+  String get workoutPrivateLabel;
+
+  /// No description provided for @workoutCatalogLabel.
+  ///
+  /// In es, this message translates to:
+  /// **'Catálogo'**
+  String get workoutCatalogLabel;
+
+  /// No description provided for @workoutArchivedLabel.
+  ///
+  /// In es, this message translates to:
+  /// **'Archivado'**
+  String get workoutArchivedLabel;
+
+  /// No description provided for @createWorkoutTitle.
+  ///
+  /// In es, this message translates to:
+  /// **'Crear entrenamiento'**
+  String get createWorkoutTitle;
+
+  /// No description provided for @editWorkoutTitle.
+  ///
+  /// In es, this message translates to:
+  /// **'Editar entrenamiento'**
+  String get editWorkoutTitle;
+
+  /// No description provided for @workoutDescriptionLabel.
+  ///
+  /// In es, this message translates to:
+  /// **'Descripción (opcional)'**
+  String get workoutDescriptionLabel;
+
+  /// No description provided for @workoutPublicSwitchLabel.
+  ///
+  /// In es, this message translates to:
+  /// **'Hacer público'**
+  String get workoutPublicSwitchLabel;
+
+  /// No description provided for @workoutPublicSwitchHint.
+  ///
+  /// In es, this message translates to:
+  /// **'Otros usuarios podrán verlo, pero no editarlo.'**
+  String get workoutPublicSwitchHint;
+
+  /// No description provided for @addIntervalAction.
+  ///
+  /// In es, this message translates to:
+  /// **'Agregar intervalo'**
+  String get addIntervalAction;
+
+  /// No description provided for @removeAction.
+  ///
+  /// In es, this message translates to:
+  /// **'Quitar'**
+  String get removeAction;
+
+  /// No description provided for @intervalNumberLabel.
+  ///
+  /// In es, this message translates to:
+  /// **'Intervalo {number}'**
+  String intervalNumberLabel(int number);
+
+  /// No description provided for @intervalDurationLabel.
+  ///
+  /// In es, this message translates to:
+  /// **'Duración (segundos)'**
+  String get intervalDurationLabel;
+
+  /// No description provided for @intervalTargetLowLabel.
+  ///
+  /// In es, this message translates to:
+  /// **'Objetivo mínimo'**
+  String get intervalTargetLowLabel;
+
+  /// No description provided for @intervalTargetHighLabel.
+  ///
+  /// In es, this message translates to:
+  /// **'Objetivo máximo'**
+  String get intervalTargetHighLabel;
+
+  /// No description provided for @intervalLabelLabel.
+  ///
+  /// In es, this message translates to:
+  /// **'Etiqueta (opcional)'**
+  String get intervalLabelLabel;
+
+  /// No description provided for @createWorkoutButton.
+  ///
+  /// In es, this message translates to:
+  /// **'Crear entrenamiento'**
+  String get createWorkoutButton;
+
+  /// No description provided for @archiveWorkoutAction.
+  ///
+  /// In es, this message translates to:
+  /// **'Archivar'**
+  String get archiveWorkoutAction;
+
+  /// No description provided for @archiveWorkoutConfirmTitle.
+  ///
+  /// In es, this message translates to:
+  /// **'¿Archivar este entrenamiento?'**
+  String get archiveWorkoutConfirmTitle;
+
+  /// No description provided for @archiveWorkoutConfirmMessage.
+  ///
+  /// In es, this message translates to:
+  /// **'Podrás seguir viéndolo, pero ya no podrás editarlo.'**
+  String get archiveWorkoutConfirmMessage;
+
+  /// No description provided for @workoutArchivedSuccessMessage.
+  ///
+  /// In es, this message translates to:
+  /// **'Entrenamiento archivado.'**
+  String get workoutArchivedSuccessMessage;
+
+  /// No description provided for @workoutCreatedSuccessMessage.
+  ///
+  /// In es, this message translates to:
+  /// **'Entrenamiento creado.'**
+  String get workoutCreatedSuccessMessage;
+
+  /// No description provided for @workoutUpdatedSuccessMessage.
+  ///
+  /// In es, this message translates to:
+  /// **'Entrenamiento actualizado.'**
+  String get workoutUpdatedSuccessMessage;
+
+  /// No description provided for @workoutReadOnlyNotice.
+  ///
+  /// In es, this message translates to:
+  /// **'Este entrenamiento no es tuyo — solo puedes verlo.'**
+  String get workoutReadOnlyNotice;
+
+  /// No description provided for @workoutArchivedNotice.
+  ///
+  /// In es, this message translates to:
+  /// **'Este entrenamiento está archivado y no se puede editar.'**
+  String get workoutArchivedNotice;
+
+  /// No description provided for @backendSessionUnavailableMessage.
+  ///
+  /// In es, this message translates to:
+  /// **'No se pudo conectar con el backend de entrenamientos. Verifica tu conexión e intenta de nuevo.'**
+  String get backendSessionUnavailableMessage;
+
+  /// No description provided for @validationAtLeastOneInterval.
+  ///
+  /// In es, this message translates to:
+  /// **'Agrega al menos un intervalo.'**
+  String get validationAtLeastOneInterval;
+
+  /// No description provided for @validationDurationRequired.
+  ///
+  /// In es, this message translates to:
+  /// **'Ingresa una duración válida (1 a 36000 segundos).'**
+  String get validationDurationRequired;
+
+  /// No description provided for @validationTargetRangeInvalid.
+  ///
+  /// In es, this message translates to:
+  /// **'El objetivo mínimo no puede ser mayor que el máximo.'**
+  String get validationTargetRangeInvalid;
 }
 
 class _AppLocalizationsDelegate

@@ -42,6 +42,22 @@ class ValidationFailure extends Failure {
   const ValidationFailure(super.message);
 }
 
+/// El recurso solicitado no existe o no es accesible para el usuario
+/// actual (`404` del backend propio — p. ej. `WORKOUT_NOT_FOUND`). El
+/// backend usa deliberadamente 404 tanto para "no existe" como para "no es
+/// tuyo" (ver `assertOwned`), así que la UI no distingue esos dos casos.
+class NotFoundFailure extends Failure {
+  const NotFoundFailure([super.message = 'No se encontró el recurso solicitado.']);
+}
+
+/// La operación no se puede completar por el estado actual del recurso
+/// (`409` del backend propio — p. ej. `WORKOUT_ARCHIVED`: no se puede
+/// editar algo ya archivado). Distinto de [ValidationFailure] (datos mal
+/// formados) y de [ServerFailure] (fallo genérico).
+class ConflictFailure extends Failure {
+  const ConflictFailure([super.message = 'La operación no se puede completar en el estado actual.']);
+}
+
 /// Error genérico no anticipado — se usa como último recurso en el
 /// manejador centralizado de errores, nunca debería mostrarse tal cual al
 /// usuario sin pasar antes por un mensaje amigable.
