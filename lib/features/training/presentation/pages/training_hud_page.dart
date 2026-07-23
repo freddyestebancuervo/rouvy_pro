@@ -155,63 +155,65 @@ class _TrainingHudPageState extends ConsumerState<TrainingHudPage> {
                 ),
               Expanded(
                 child: Center(
-                  child: Column(
-                    mainAxisSize: MainAxisSize.min,
-                    children: <Widget>[
-                      Text(
-                        DurationFormatter.format(session.elapsed),
-                        style: Theme.of(context).textTheme.displayMedium?.copyWith(fontWeight: FontWeight.w700),
-                      ),
-                      Text(l10n.metricTimeLabel, style: Theme.of(context).textTheme.bodySmall),
-                      const SizedBox(height: 32),
-                      GridView.count(
-                        shrinkWrap: true,
-                        physics: const NeverScrollableScrollPhysics(),
-                        crossAxisCount: 2,
-                        mainAxisSpacing: 32,
-                        crossAxisSpacing: 16,
-                        childAspectRatio: 1.8,
-                        padding: const EdgeInsets.symmetric(horizontal: 24),
-                        children: <Widget>[
-                          MetricDisplay(
-                            label: l10n.metricSpeedLabel,
-                            value: t.speedKmh.toStringAsFixed(1),
-                            unit: 'km/h',
-                          ),
-                          MetricDisplay(
-                            label: l10n.metricPowerLabel,
-                            value: t.powerWatts.toString(),
-                            unit: 'W',
-                          ),
-                          MetricDisplay(
-                            label: l10n.metricCadenceLabel,
-                            value: t.cadenceRpm.toString(),
-                            unit: 'rpm',
-                          ),
-                          MetricDisplay(
-                            label: l10n.metricHeartRateLabel,
-                            value: t.heartRateBpm?.toString() ?? '--',
-                            unit: 'bpm',
-                            color: t.heartRateBpm != null ? Colors.redAccent : null,
-                          ),
-                        ],
-                      ),
-                      const SizedBox(height: 24),
-                      Row(
-                        mainAxisAlignment: MainAxisAlignment.center,
-                        children: <Widget>[
-                          Text(
-                            '${(t.distanceMeters / 1000).toStringAsFixed(2)} km',
-                            style: Theme.of(context).textTheme.titleMedium,
-                          ),
-                          const SizedBox(width: 24),
-                          Text(
-                            '${t.caloriesKcal.round()} kcal',
-                            style: Theme.of(context).textTheme.titleMedium,
-                          ),
-                        ],
-                      ),
-                    ],
+                  child: SingleChildScrollView(
+                    child: Column(
+                      mainAxisSize: MainAxisSize.min,
+                      children: <Widget>[
+                        Text(
+                          DurationFormatter.format(session.elapsed),
+                          style: Theme.of(context).textTheme.displayMedium?.copyWith(fontWeight: FontWeight.w700),
+                        ),
+                        Text(l10n.metricTimeLabel, style: Theme.of(context).textTheme.bodySmall),
+                        const SizedBox(height: 32),
+                        GridView.count(
+                          shrinkWrap: true,
+                          physics: const NeverScrollableScrollPhysics(),
+                          crossAxisCount: 2,
+                          mainAxisSpacing: 32,
+                          crossAxisSpacing: 16,
+                          childAspectRatio: 1.8,
+                          padding: const EdgeInsets.symmetric(horizontal: 24),
+                          children: <Widget>[
+                            MetricDisplay(
+                              label: l10n.metricSpeedLabel,
+                              value: t.speedKmh.toStringAsFixed(1),
+                              unit: 'km/h',
+                            ),
+                            MetricDisplay(
+                              label: l10n.metricPowerLabel,
+                              value: t.powerWatts.toString(),
+                              unit: 'W',
+                            ),
+                            MetricDisplay(
+                              label: l10n.metricCadenceLabel,
+                              value: t.cadenceRpm.toString(),
+                              unit: 'rpm',
+                            ),
+                            MetricDisplay(
+                              label: l10n.metricHeartRateLabel,
+                              value: t.heartRateBpm?.toString() ?? '--',
+                              unit: 'bpm',
+                              color: t.heartRateBpm != null ? Colors.redAccent : null,
+                            ),
+                          ],
+                        ),
+                        const SizedBox(height: 24),
+                        Row(
+                          mainAxisAlignment: MainAxisAlignment.center,
+                          children: <Widget>[
+                            Text(
+                              '${(t.distanceMeters / 1000).toStringAsFixed(2)} km',
+                              style: Theme.of(context).textTheme.titleMedium,
+                            ),
+                            const SizedBox(width: 24),
+                            Text(
+                              '${t.caloriesKcal.round()} kcal',
+                              style: Theme.of(context).textTheme.titleMedium,
+                            ),
+                          ],
+                        ),
+                      ],
+                    ),
                   ),
                 ),
               ),
