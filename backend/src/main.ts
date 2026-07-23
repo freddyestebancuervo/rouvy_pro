@@ -29,6 +29,17 @@ async function bootstrap(): Promise<void> {
     }),
   );
 
+  // `ApiConfig.backendBaseUrl` (cliente Flutter) apunta este backend
+  // también desde Flutter WEB (`kIsWeb`), no solo desde la app móvil — a
+  // diferencia de un cliente nativo, un navegador SÍ aplica CORS a esas
+  // llamadas. Sin esto, cualquier request desde el origen del dev server
+  // de Flutter Web (puerto distinto al de este backend) falla en el
+  // preflight con "No 'Access-Control-Allow-Origin' header" antes
+  // siquiera de llegar a un controller. Todavía no existe un origen de
+  // producción configurado (ver el TODO de `ApiConfig`), así que no hay
+  // una allowlist real que aplicar todavía.
+  app.enableCors();
+
   // Solo confía en `X-Forwarded-For` (usado para `req.ip`, la base del
   // rate limiting por IP) si el operador confirma explícitamente que hay
   // un proxy/load balancer real por delante — confiar en él por defecto
