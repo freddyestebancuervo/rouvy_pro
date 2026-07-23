@@ -25,6 +25,12 @@ plugins {
     // build — sin este plugin, la app compila pero Firebase Auth lanza
     // una excepción de configuración al iniciar.
     id("com.google.gms.google-services") version "4.4.2" apply false
+    // Requerido por android/app/build.gradle.kts, que aplica este plugin
+    // sin versión — Gradle exige que se declare aquí exactamente una vez.
+    // Sin esto, el build falla con "Plugin [id: 'com.google.firebase.crashlytics']
+    // was not found". v3 requiere AGP >= 8.1 y google-services >= 4.4.1
+    // (ambos satisfechos arriba).
+    id("com.google.firebase.crashlytics") version "3.0.6" apply false
 }
 
 include(":app")

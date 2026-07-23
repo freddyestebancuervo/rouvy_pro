@@ -19,6 +19,12 @@ migrate_working_dir/
 # VS Code related
 .vscode/
 
+# Node dependencies (cualquier subcarpeta, p. ej. firebase/seed/)
+node_modules/
+
+# Playwright MCP — artefactos de sesión (screenshots/snapshots), no código
+.playwright-mcp/
+
 # Claude Code — configuración local, no compartida
 .claude/settings.local.json
 
