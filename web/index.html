@@ -7,12 +7,17 @@
   <meta content="IE=Edge" http-equiv="X-UA-Compatible">
   <meta name="description" content="RidePro — Entrena como nunca antes.">
 
-  <!-- ===================== Google Sign-In (Web) =====================
-       ⚠️ PLACEHOLDER — reemplazar "YOUR_GOOGLE_WEB_CLIENT_ID" por el Web
-       client ID real (mismo valor que en
-       lib/core/config/social_login_config.dart).
-       Ver SETUP_SOCIAL_LOGIN.md, sección 4. -->
-  <meta name="google-signin-client_id" content="YOUR_GOOGLE_WEB_CLIENT_ID.apps.googleusercontent.com">
+  <!-- Google Sign-In (Web): el Client ID NO se declara aquí. Se pasa
+       explícitamente vía `GoogleSignIn(clientId: ...)` en
+       lib/core/di/injection.dart, que lo toma de
+       lib/core/config/social_login_config.dart — única fuente de verdad.
+       El meta tag `google-signin-client_id` se retiró a propósito: la
+       librería de Google Identity Services lo auto-detecta y dispara su
+       propia llamada a `initialize()` en paralelo con la del plugin,
+       compitiendo por cuál "gana" según el orden de carga async
+       (causaba el warning "initialize() is called multiple times" y
+       enviaba, de forma no determinística, un client_id distinto al
+       configurado). -->
 
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-status-bar-style" content="black">

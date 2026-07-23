@@ -13,5 +13,6 @@ abstract class SocialLoginConfig {
   /// Firebase Console → Authentication → Sign-in method → Google →
   /// "Web SDK configuration" → Web client ID.
   /// Formato esperado: `XXXXXXXXXXXX-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx.apps.googleusercontent.com`
-  static const String googleWebClientId = 'YOUR_GOOGLE_WEB_CLIENT_ID.apps.googleusercontent.com';
+  static const String googleWebClientId =
+      '731660820861-3jkse9cbmat7bl4nk9ig9qj2728cv2r9.apps.googleusercontent.com';
 }
