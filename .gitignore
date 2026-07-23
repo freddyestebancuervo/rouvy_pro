@@ -3,12 +3,24 @@
 *.log
 *.pyc
 *.swp
+*.tmp
 .DS_Store
+# Basura de índice de carpetas de Windows Explorer — mismo criterio que
+# .DS_Store para macOS; el equipo desarrolla también desde Windows.
+Thumbs.db
+ehthumbs.db
+desktop.ini
 .atom/
 .buildlog/
 .history
 .svn/
 migrate_working_dir/
+
+# Reportes de cobertura (p. ej. `flutter test --coverage` → coverage/lcov.info,
+# el mismo artefacto que sube el job "Flutter — analyze + test" de CI) —
+# generado localmente, nunca debe versionarse. El de backend/ ya estaba
+# cubierto por backend/.gitignore; esto cierra el mismo hueco a nivel raíz.
+coverage/
 
 # IntelliJ related
 *.iml
