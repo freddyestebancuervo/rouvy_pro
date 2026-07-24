@@ -4,6 +4,7 @@ import { NestExpressApplication } from '@nestjs/platform-express';
 import helmet from 'helmet';
 import { AppModule } from './app.module';
 import { ApiExceptionFilter } from './common/filters/api-exception.filter';
+import { resolveCorsOptions } from './config/cors.config';
 
 /**
  * Scaffold de la tarea C2 (ROADMAP_M0_M1.md) — levanta el servidor y
@@ -32,13 +33,10 @@ async function bootstrap(): Promise<void> {
   // `ApiConfig.backendBaseUrl` (cliente Flutter) apunta este backend
   // también desde Flutter WEB (`kIsWeb`), no solo desde la app móvil — a
   // diferencia de un cliente nativo, un navegador SÍ aplica CORS a esas
-  // llamadas. Sin esto, cualquier request desde el origen del dev server
-  // de Flutter Web (puerto distinto al de este backend) falla en el
-  // preflight con "No 'Access-Control-Allow-Origin' header" antes
-  // siquiera de llegar a un controller. Todavía no existe un origen de
-  // producción configurado (ver el TODO de `ApiConfig`), así que no hay
-  // una allowlist real que aplicar todavía.
-  app.enableCors();
+  // llamadas. Allowlist explícita vía `CORS_ALLOWED_ORIGINS`, con un
+  // fallback de conveniencia solo-localhost fuera de producción — nunca
+  // "cualquier origen". Ver el docblock de `resolveCorsOptions`.
+  app.enableCors(resolveCorsOptions());
 
   // Solo confía en `X-Forwarded-For` (usado para `req.ip`, la base del
   // rate limiting por IP) si el operador confirma explícitamente que hay
