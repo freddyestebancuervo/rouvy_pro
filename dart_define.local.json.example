@@ -1,0 +1,9 @@
+{
+  "_comment": "Copiar a dart_define.local.json y rellenar con valores locales — dart_define.local.json NUNCA se commitea (ver .gitignore). Ninguno de estos valores debe hardcodearse en el código Dart. Ver lib/core/config/dev_backend_test_user.dart y lib/core/config/qa_emulator_config.dart.",
+
+  "QA_BACKEND_EMAIL": "qa.workouts@ridepro.local",
+  "QA_BACKEND_PASSWORD": "elegir-una-contraseña-solo-local",
+  "QA_BACKEND_DISPLAY_NAME": "QA Workouts",
+
+  "USE_FIREBASE_EMULATORS": false
+}

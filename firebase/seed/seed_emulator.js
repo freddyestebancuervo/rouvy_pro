@@ -26,7 +26,16 @@
 //     (`firestore.rules`), igual que un login real.
 //
 // Uso: con los emuladores ya arriba (`firebase emulators:start --only
-// auth,firestore`), correr `npm run seed` en este directorio.
+// auth,firestore`), correr `npm run seed` en este directorio, con
+// QA_EMULATOR_EMAIL/QA_EMULATOR_PASSWORD definidas en un `.env` local
+// (ver `.env.example`) — `npm run seed` ya invoca node con `--env-file`.
+//
+// Auditoría 2026-07-23: antes QA_EMAIL/QA_PASSWORD estaban hardcodeados
+// acá mismo. Se leen ahora de variables de entorno para que ningún valor
+// quede en el código fuente ni en el historial de git — aunque, a
+// diferencia de la cuenta QA del backend NestJS, esta SOLO existe dentro
+// del Auth Emulator (ver nota más abajo), nunca es válida contra un
+// proyecto Firebase real.
 
 process.env.FIRESTORE_EMULATOR_HOST = 'localhost:8080';
 process.env.FIREBASE_AUTH_EMULATOR_HOST = 'localhost:9099';
@@ -65,13 +74,17 @@ const PROJECT_ID = 'ridepro-dbafe';
 
 admin.initializeApp({ projectId: PROJECT_ID });
 
-const QA_EMAIL = 'qa.emulator@ridepro.local';
-// No es un secreto real: esta cuenta solo existe dentro del Auth
-// Emulator (localhost:9099) de una máquina de desarrollo — nunca es
-// válida contra un proyecto Firebase real. Mismo criterio ya aplicado a
-// `DevBackendTestUser` (lib/core/config/dev_backend_test_user.dart).
-const QA_PASSWORD = 'QaEmulator#2026';
-const QA_DISPLAY_NAME = 'QA Emulator';
+const QA_EMAIL = process.env.QA_EMULATOR_EMAIL;
+const QA_PASSWORD = process.env.QA_EMULATOR_PASSWORD;
+const QA_DISPLAY_NAME = process.env.QA_EMULATOR_DISPLAY_NAME || 'QA Emulator';
+
+if (!QA_EMAIL || !QA_PASSWORD) {
+  console.error(
+    'Faltan QA_EMULATOR_EMAIL/QA_EMULATOR_PASSWORD. Definilas en ' +
+      'firebase/seed/.env (ver .env.example) y corré:\n  npm run seed',
+  );
+  process.exit(1);
+}
 
 function daysAgo(n, hour = 7) {
   const d = new Date();

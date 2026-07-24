@@ -58,6 +58,15 @@ class BackendAuthService {
       );
     }
 
+    if (!DevBackendTestUser.isConfigured) {
+      throw StateError(
+        'DevBackendTestUser no está configurada: corré la app con '
+        '--dart-define-from-file=dart_define.local.json (ver '
+        'dart_define.local.json.example en la raíz del repo) para poder '
+        'probar Equipment/Workouts sin una pantalla de login propia.',
+      );
+    }
+
     final BackendSession session = await _loginOrRegisterTestUser();
     await _store.save(session);
     return session.accessToken;

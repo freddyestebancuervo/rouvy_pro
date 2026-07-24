@@ -1,21 +1,36 @@
-// Siembra un par de workouts de ejemplo para la cuenta QA
-// (`qa.workouts@ridepro.local`, ver
-// `lib/core/config/dev_backend_test_user.dart`) contra el backend NestJS
-// YA corriendo en local (`GET /v1/health`) — no crea infraestructura
-// nueva, solo llama a los endpoints reales de auth/workouts con fetch
-// nativo de Node (sin dependencias nuevas).
+// Siembra un par de workouts de ejemplo para la cuenta QA contra el
+// backend NestJS YA corriendo en local (`GET /v1/health`) — no crea
+// infraestructura nueva, solo llama a los endpoints reales de
+// auth/workouts con fetch nativo de Node (sin dependencias nuevas).
 //
-// Uso: node backend/scripts/seed_qa_workouts.js
+// Uso (desde backend/, con QA_BACKEND_EMAIL/QA_BACKEND_PASSWORD en .env
+// — ver .env.example): npm run seed:qa-workouts
 // (requiere el backend arriba en http://localhost:3000)
+//
+// Auditoría 2026-07-23: antes QA_EMAIL/QA_PASSWORD estaban hardcodeados
+// acá mismo. Se leen ahora de variables de entorno (mismas que
+// `lib/core/config/dev_backend_test_user.dart` consume vía
+// --dart-define-from-file) para que ningún valor real quede en el
+// código fuente ni en el historial de git.
+
+// Ya presente en node_modules como dependencia transitiva de
+// @nestjs/config — no es una dependencia nueva del proyecto.
+require('dotenv').config();
 
 const BASE_URL = 'http://localhost:3000/v1';
 
-// Credencial ya existente y ya commiteada intencionalmente en
-// dev_backend_test_user.dart — no es un secreto nuevo. Solo sirve contra
-// este backend local (Postgres en Docker), nunca contra un entorno real.
-const QA_EMAIL = 'qa.workouts@ridepro.local';
-const QA_PASSWORD = 'QaWorkouts#2026';
-const QA_DISPLAY_NAME = 'QA Workouts';
+const QA_EMAIL = process.env.QA_BACKEND_EMAIL;
+const QA_PASSWORD = process.env.QA_BACKEND_PASSWORD;
+const QA_DISPLAY_NAME = process.env.QA_BACKEND_DISPLAY_NAME || 'QA Workouts';
+
+if (!QA_EMAIL || !QA_PASSWORD) {
+  console.error(
+    'Faltan QA_BACKEND_EMAIL/QA_BACKEND_PASSWORD. Definilas en backend/.env ' +
+      '(ver .env.example) y corré este script con:\n' +
+      '  npm run seed:qa-workouts',
+  );
+  process.exit(1);
+}
 
 const SAMPLE_WORKOUTS = [
   {

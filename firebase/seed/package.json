@@ -4,7 +4,7 @@
   "version": "1.0.0",
   "description": "Siembra datos de QA (usuario Auth + documentos Firestore) contra el Local Emulator Suite — nunca contra el proyecto real. Ver README.md.",
   "scripts": {
-    "seed": "node seed_emulator.js"
+    "seed": "node --env-file=.env seed_emulator.js"
   },
   "devDependencies": {
     "firebase": "^10.12.0",

@@ -14,7 +14,8 @@
     "migrate:down": "node-pg-migrate down -m migrations",
     "lint": "eslint \"{src,test}/**/*.ts\" --fix",
     "test": "jest",
-    "test:e2e": "jest --config ./test/jest-e2e.json"
+    "test:e2e": "jest --config ./test/jest-e2e.json",
+    "seed:qa-workouts": "node scripts/seed_qa_workouts.js"
   },
   "dependencies": {
     "@nestjs/common": "^10.3.10",

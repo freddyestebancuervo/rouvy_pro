@@ -109,5 +109,10 @@ key.properties
 *.keystore
 *.jks
 
+# Credenciales QA para `flutter run/build --dart-define-from-file=...`
+# (ver dev_backend_test_user.dart) — mismo criterio que *.env: el real
+# nunca se versiona, solo dart_define.local.json.example.
+dart_define.local.json
+
 # Exceptions to above rules.
 !/packages/flutter_tools/test/data/dart_dependencies_test/**/.packages
