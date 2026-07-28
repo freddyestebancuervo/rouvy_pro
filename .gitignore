@@ -22,6 +22,16 @@ migrate_working_dir/
 # cubierto por backend/.gitignore; esto cierra el mismo hueco a nivel raíz.
 coverage/
 
+# Caché local del CLI de Firebase Hosting (`firebase deploy`/`firebase
+# hosting:channel:*`) — hallazgo real de la consolidación post-Fase 4.1:
+# quedaba sin ninguna regla que lo cubriera, expuesto a un `git add -A`.
+.firebase/
+
+# Caché incremental de TypeScript (`"incremental": true` en tsconfig) —
+# se regenera en cada build/lint; mismo hallazgo de la consolidación
+# post-Fase 4.1, sin ninguna regla previa que lo cubriera.
+*.tsbuildinfo
+
 # IntelliJ related
 *.iml
 *.ipr
@@ -48,6 +58,9 @@ node_modules/
 .pub-cache/
 .pub/
 /build/
+# Config local de DevTools, autogenerada al correr `flutter analyze`/`flutter
+# test`/abrir DevTools — nunca contiene nada específico del proyecto.
+devtools_options.yaml
 flutter_*.png
 linked_*.ds
 unlinked.ds
@@ -99,7 +112,6 @@ android/local.properties
 **/ios/Runner/GeneratedPluginRegistrant.*
 
 # Web related
-lib/generated_plugin_registrant.dart
 
 # Secrets — nunca versionar credenciales reales
 *.env
@@ -113,6 +125,32 @@ key.properties
 # (ver dev_backend_test_user.dart) — mismo criterio que *.env: el real
 # nunca se versiona, solo dart_define.local.json.example.
 dart_define.local.json
+
+# Firebase Admin / claves de cuenta de servicio (service account) — nunca
+# versionar. El nombre exacto lo elige quien descarga la clave desde
+# Firebase Console, por eso se cubren los patrones habituales, no un
+# nombre único (ver docs/audits/AUDITORIA_FINAL/11_PLAN_SEPARACION_FIREBASE.md,
+# hallazgo 4.2). NO afecta a la config de cliente, que sí se versiona a
+# propósito (no es secreta, ver el mismo documento, sección 7):
+# google-services.json, GoogleService-Info.plist, firebase_options.dart.
+*firebase-adminsdk*.json
+*service-account*.json
+*service_account*.json
+serviceAccountKey.json
+**/serviceAccountKey.json
+**/*firebase-adminsdk*.json
+
+# Certificados y claves privadas (JWT del backend, futuras claves de
+# firma/distribución iOS, etc.) — verificado antes de agregar esta regla
+# que ningún archivo *.pem/*.p12/*.pfx está trackeado hoy en el repo.
+# Cierra un caso real encontrado: backend/secrets/jwt_private.pem y
+# jwt_public.pem existen en disco (con contenido real) sin ninguna regla
+# que los cubriera hasta ahora — protegidos solo porque nadie corrió
+# `git add` sobre esa carpeta, no por este archivo.
+*.pem
+*.p12
+*.pfx
+**/secrets/
 
 # Exceptions to above rules.
 !/packages/flutter_tools/test/data/dart_dependencies_test/**/.packages

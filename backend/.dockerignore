@@ -1,0 +1,39 @@
+# Documento 22 — Fase 2: contenedorización local.
+# El Dockerfile ya copia explícitamente solo lo necesario (package*.json,
+# tsconfig.json, nest-cli.json, src/, y dist/ ya compilado en la etapa
+# final) — esta lista es una segunda capa de seguridad, no la única.
+
+node_modules
+dist
+
+# Secretos — nunca deben terminar dentro de una imagen.
+.env
+.env.*
+secrets
+*.pem
+*.key
+
+# Artefactos de pruebas/cobertura — no se necesitan para construir ni
+# correr la imagen (test/ es solo para `npm run test:e2e` local/CI).
+coverage
+test
+jest.config.js
+
+# Logs y temporales.
+*.log
+npm-debug.log*
+tmp
+*.tmp
+
+# Control de versiones y metadatos del editor.
+.git
+.gitignore
+.vscode
+.idea
+
+# Documentación no necesaria en runtime.
+README.md
+*.md
+
+# Config de linting — no se usa dentro de la imagen.
+.eslintrc.js
