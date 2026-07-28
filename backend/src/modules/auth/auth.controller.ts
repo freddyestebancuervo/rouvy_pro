@@ -1,13 +1,36 @@
-import { Body, Controller, HttpCode, HttpStatus, Post, UseGuards } from '@nestjs/common';
+import { Body, Controller, Headers, HttpCode, HttpStatus, Post, UseGuards } from '@nestjs/common';
 import { Throttle } from '@nestjs/throttler';
+import { AuthUser } from '../../common/auth/auth-user.interface';
+import { CurrentUser } from '../../common/auth/current-user.decorator';
+import { JwtAuthGuard } from '../../common/auth/jwt-auth.guard';
 import { AuthResponse, AuthService, RefreshResponse } from './auth.service';
 import { LoginDto } from './dto/login.dto';
+import { LogoutDto } from './dto/logout.dto';
 import { RefreshDto } from './dto/refresh.dto';
 import { RegisterDto } from './dto/register.dto';
+import { FIREBASE_TOKEN_MISSING } from './firebase-exchange.errors';
 import { RefreshThrottleGuard } from './refresh-throttle.guard';
 
 // 5 req / 15 min / IP — spec sección 1.2, tabla de `POST /auth/register`.
 const AUTH_THROTTLE = { default: { limit: 5, ttl: 15 * 60 * 1000 } };
+
+// Más amplio que login/register (Fase 3 §E, documento de diseño Fase 1):
+// el exchange también cubre el camino de recuperación cuando el refresh
+// normal falla definitivamente, así que se llama más seguido en uso
+// legítimo — no debilita el bucket global (100/60s, `app.module.ts`),
+// que se sigue aplicando encima como defensa en profundidad.
+const FIREBASE_EXCHANGE_THROTTLE = { default: { limit: 20, ttl: 15 * 60 * 1000 } };
+
+function extractBearerToken(authorization?: string): string {
+  if (!authorization?.startsWith('Bearer ')) {
+    throw FIREBASE_TOKEN_MISSING();
+  }
+  const token = authorization.slice('Bearer '.length).trim();
+  if (!token) {
+    throw FIREBASE_TOKEN_MISSING();
+  }
+  return token;
+}
 
 @Controller('auth')
 export class AuthController {
@@ -39,5 +62,30 @@ export class AuthController {
   @UseGuards(RefreshThrottleGuard)
   refresh(@Body() dto: RefreshDto): Promise<RefreshResponse> {
     return this.authService.refresh(dto);
+  }
+
+  /**
+   * `POST /auth/firebase/exchange` (Fase 3) — sin body, sin `JwtAuthGuard`
+   * (ese guard es exclusivo de tokens YA emitidos por este backend; acá
+   * el `Authorization: Bearer` trae un ID token de Firebase, verificado
+   * dentro de `AuthService.exchangeFirebaseToken`, no por un guard
+   * reutilizable — es la única ruta que acepta ese tipo de token).
+   */
+  @Post('firebase/exchange')
+  @HttpCode(HttpStatus.OK)
+  @Throttle(FIREBASE_EXCHANGE_THROTTLE)
+  exchangeFirebase(@Headers('authorization') authorization?: string): Promise<AuthResponse> {
+    const idToken = extractBearerToken(authorization);
+    return this.authService.exchangeFirebaseToken(idToken);
+  }
+
+  /** `POST /auth/logout` (Fase 3 §C) — sí protegido por `JwtAuthGuard`
+   * (necesita saber de quién es la sesión para no revocar el token de
+   * otro usuario, ver `RefreshTokensRepository.revokeOne`). */
+  @Post('logout')
+  @HttpCode(HttpStatus.NO_CONTENT)
+  @UseGuards(JwtAuthGuard)
+  logout(@CurrentUser() user: AuthUser, @Body() dto: LogoutDto): Promise<void> {
+    return this.authService.logout(user.userId, dto.refreshToken);
   }
 }

@@ -9,4 +9,11 @@ module.exports = {
   testRegex: '.spec.ts$',
   transform: { '^.+\\.(t|j)s$': 'ts-jest' },
   testEnvironment: 'node',
+  // `firebase-admin` (Fase 3) trae `jwks-rsa` → `jose`, publicado como
+  // ESM puro (`export`/`import` sin transpilar) — Jest ignora
+  // `node_modules` por defecto, así que sin esta excepción explícita
+  // falla al parsearlo. Solo se excluye `jose` de la ignora, todo lo
+  // demás en `node_modules` sigue sin transformarse (comportamiento
+  // estándar, sin este hallazgo no haría falta tocarlo).
+  transformIgnorePatterns: ['node_modules/(?!(jose)/)'],
 };

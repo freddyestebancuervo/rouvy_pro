@@ -14,6 +14,7 @@ describe('UsersService', () => {
     premium: false,
     emailVerified: true,
     authProvider: 'password',
+    firebaseUid: null,
     createdAt: new Date('2026-01-10T08:00:00Z'),
   };
 

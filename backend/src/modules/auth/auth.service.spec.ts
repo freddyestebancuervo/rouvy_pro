@@ -1,6 +1,15 @@
+import {
+  FirebaseProjectMismatchError,
+  FirebaseTokenExpiredError,
+  FirebaseTokenInvalidError,
+  FirebaseTokenRevokedError,
+} from '../../firebase/errors/firebase-verification.errors';
+import { FirebaseTokenVerifierService } from '../../firebase/firebase-token-verifier.service';
 import { TokenService } from '../../jwt/token.service';
 import { RefreshTokensRepository, RotationOutcome } from '../refresh-tokens/refresh-tokens.repository';
-import { UserRecord, UsersRepository } from '../users/users.repository';
+import { FirebaseEmailConflictError } from '../users/errors/firebase-email-conflict.error';
+import { UpsertByFirebaseUidResult, UserRecord, UsersRepository } from '../users/users.repository';
+import { AuditLogRepository } from './audit-log.repository';
 import { AuthService } from './auth.service';
 
 /**
@@ -32,6 +41,7 @@ describe('AuthService.refresh', () => {
     const refreshTokensRepository = {
       create: jest.fn(),
       rotate: overrides?.rotate ?? jest.fn(),
+      revokeOne: jest.fn(),
     } as unknown as jest.Mocked<RefreshTokensRepository>;
 
     const tokenService = {
@@ -45,8 +55,29 @@ describe('AuthService.refresh', () => {
       accessTokenExpiresIn: 3600,
     } as unknown as jest.Mocked<TokenService>;
 
-    const service = new AuthService(usersRepository, refreshTokensRepository, tokenService);
-    return { service, usersRepository, refreshTokensRepository, tokenService };
+    const firebaseTokenVerifier = {
+      verify: jest.fn(),
+    } as unknown as jest.Mocked<FirebaseTokenVerifierService>;
+
+    const auditLogRepository = {
+      record: jest.fn(),
+    } as unknown as jest.Mocked<AuditLogRepository>;
+
+    const service = new AuthService(
+      usersRepository,
+      refreshTokensRepository,
+      tokenService,
+      firebaseTokenVerifier,
+      auditLogRepository,
+    );
+    return {
+      service,
+      usersRepository,
+      refreshTokensRepository,
+      tokenService,
+      firebaseTokenVerifier,
+      auditLogRepository,
+    };
   }
 
   it('rota exitosamente: revoca el viejo, emite uno nuevo y firma un access token con los roles reales', async () => {
@@ -150,6 +181,7 @@ describe('AuthService.register', () => {
     const refreshTokensRepository = {
       create: jest.fn(),
       rotate: jest.fn(),
+      revokeOne: jest.fn(),
     } as unknown as jest.Mocked<RefreshTokensRepository>;
 
     const tokenService = {
@@ -160,7 +192,21 @@ describe('AuthService.register', () => {
       accessTokenExpiresIn: 3600,
     } as unknown as jest.Mocked<TokenService>;
 
-    return new AuthService(usersRepository, refreshTokensRepository, tokenService);
+    const firebaseTokenVerifier = {
+      verify: jest.fn(),
+    } as unknown as jest.Mocked<FirebaseTokenVerifierService>;
+
+    const auditLogRepository = {
+      record: jest.fn(),
+    } as unknown as jest.Mocked<AuditLogRepository>;
+
+    return new AuthService(
+      usersRepository,
+      refreshTokensRepository,
+      tokenService,
+      firebaseTokenVerifier,
+      auditLogRepository,
+    );
   }
 
   it('traduce un 23505 (unique_violation) de la carrera concurrente a 409 EMAIL_ALREADY_EXISTS', async () => {
@@ -186,5 +232,230 @@ describe('AuthService.register', () => {
     await expect(
       service.register({ email: 'rider@ridepro.com', password: 'Abcdefg1', displayName: 'Rider' }),
     ).rejects.toBe(dbError);
+  });
+});
+
+/**
+ * `AuthService.exchangeFirebaseToken`/`.logout` — Fase 3 del puente
+ * Firebase → NestJS → PostgreSQL. Mockea `FirebaseTokenVerifierService`
+ * por completo (Fase 3 §G: "no dependas de Firebase real para la suite
+ * normal") — la verificación criptográfica en sí ya está cubierta en
+ * `firebase-token-verifier.service.spec.ts`.
+ */
+describe('AuthService.exchangeFirebaseToken / logout', () => {
+  const baseUser: UserRecord = {
+    id: 'postgres-user-1',
+    email: 'rider@ridepro.com',
+    passwordHash: null,
+    displayName: 'Rider Firebase',
+    photoUrl: null,
+    ftp: null,
+    weightKg: null,
+    premium: false,
+    emailVerified: true,
+    authProvider: 'google',
+    firebaseUid: 'firebase-uid-abc',
+    createdAt: new Date('2026-01-10T08:00:00Z'),
+  };
+
+  function buildService(overrides?: {
+    verify?: jest.Mock;
+    upsertByFirebaseUid?: jest.Mock;
+    findRoleNames?: jest.Mock;
+  }) {
+    const usersRepository = {
+      findByEmail: jest.fn(),
+      findById: jest.fn(),
+      createWithPassword: jest.fn(),
+      findRoleNames: overrides?.findRoleNames ?? jest.fn().mockResolvedValue(['user']),
+      upsertByFirebaseUid:
+        overrides?.upsertByFirebaseUid ??
+        jest.fn<Promise<UpsertByFirebaseUidResult>, unknown[]>().mockResolvedValue({
+          user: baseUser,
+          isNew: false,
+        }),
+    } as unknown as jest.Mocked<UsersRepository>;
+
+    const refreshTokensRepository = {
+      create: jest.fn(),
+      rotate: jest.fn(),
+      revokeOne: jest.fn(),
+    } as unknown as jest.Mocked<RefreshTokensRepository>;
+
+    const tokenService = {
+      signAccessToken: jest.fn().mockReturnValue('signed.jwt.token'),
+      issueRefreshToken: jest
+        .fn()
+        .mockReturnValue({ token: 'rt_new', hash: 'hash-new', expiresAt: new Date('2030-01-01') }),
+      hashRefreshToken: jest.fn().mockReturnValue('hash-of-presented-token'),
+      accessTokenExpiresIn: 3600,
+    } as unknown as jest.Mocked<TokenService>;
+
+    const firebaseTokenVerifier = {
+      verify:
+        overrides?.verify ??
+        jest.fn().mockResolvedValue({
+          uid: 'firebase-uid-abc',
+          email: 'rider@ridepro.com',
+          emailVerified: true,
+          displayName: 'Rider Firebase',
+          signInProvider: 'google.com',
+        }),
+    } as unknown as jest.Mocked<FirebaseTokenVerifierService>;
+
+    const auditLogRepository = {
+      record: jest.fn(),
+    } as unknown as jest.Mocked<AuditLogRepository>;
+
+    const service = new AuthService(
+      usersRepository,
+      refreshTokensRepository,
+      tokenService,
+      firebaseTokenVerifier,
+      auditLogRepository,
+    );
+    return {
+      service,
+      usersRepository,
+      refreshTokensRepository,
+      tokenService,
+      firebaseTokenVerifier,
+      auditLogRepository,
+    };
+  }
+
+  it('usuario nuevo: llama upsertByFirebaseUid, asigna rol user (vía DB) y registra auditoría con newUser=true', async () => {
+    const upsertByFirebaseUid = jest
+      .fn<Promise<UpsertByFirebaseUidResult>, unknown[]>()
+      .mockResolvedValue({ user: baseUser, isNew: true });
+    const { service, auditLogRepository } = buildService({ upsertByFirebaseUid });
+
+    await service.exchangeFirebaseToken('firebase-id-token');
+
+    expect(upsertByFirebaseUid).toHaveBeenCalledWith({
+      firebaseUid: 'firebase-uid-abc',
+      email: 'rider@ridepro.com',
+      emailVerified: true,
+      displayName: 'Rider Firebase',
+      provider: 'google',
+    });
+    expect(auditLogRepository.record).toHaveBeenCalledWith('auth.firebase_exchange', baseUser.id, {
+      provider: 'google',
+      newUser: true,
+    });
+  });
+
+  it('usuario existente: isNew=false se refleja tal cual en la auditoría', async () => {
+    const { service, auditLogRepository } = buildService();
+
+    await service.exchangeFirebaseToken('firebase-id-token');
+
+    expect(auditLogRepository.record).toHaveBeenCalledWith(
+      'auth.firebase_exchange',
+      baseUser.id,
+      expect.objectContaining({ newUser: false }),
+    );
+  });
+
+  it.each([
+    ['password', 'password'],
+    ['google.com', 'google'],
+    ['apple.com', 'apple'],
+    ['algo-desconocido', 'password'],
+  ])('normaliza el proveedor de Firebase "%s" a "%s"', async (signInProvider, expectedProvider) => {
+    const verify = jest.fn().mockResolvedValue({
+      uid: 'firebase-uid-abc',
+      email: 'rider@ridepro.com',
+      emailVerified: true,
+      displayName: 'Rider',
+      signInProvider,
+    });
+    const upsertByFirebaseUid = jest
+      .fn<Promise<UpsertByFirebaseUidResult>, unknown[]>()
+      .mockResolvedValue({ user: baseUser, isNew: false });
+    const { service } = buildService({ verify, upsertByFirebaseUid });
+
+    await service.exchangeFirebaseToken('firebase-id-token');
+
+    expect(upsertByFirebaseUid).toHaveBeenCalledWith(
+      expect.objectContaining({ provider: expectedProvider }),
+    );
+  });
+
+  it('el access token emitido lleva sub = id de PostgreSQL y el claim firebaseUid (nunca al revés)', async () => {
+    const { service, tokenService } = buildService();
+
+    await service.exchangeFirebaseToken('firebase-id-token');
+
+    expect(tokenService.signAccessToken).toHaveBeenCalledWith({
+      userId: baseUser.id, // id de Postgres, NO el uid de Firebase
+      roles: ['user'],
+      emailVerified: true,
+      firebaseUid: 'firebase-uid-abc',
+    });
+  });
+
+  it('los roles vienen siempre de PostgreSQL (findRoleNames), nunca de un claim del token', async () => {
+    const findRoleNames = jest.fn().mockResolvedValue(['user', 'coach']);
+    const { service, tokenService } = buildService({ findRoleNames });
+
+    await service.exchangeFirebaseToken('firebase-id-token');
+
+    expect(findRoleNames).toHaveBeenCalledWith(baseUser.id);
+    expect(tokenService.signAccessToken).toHaveBeenCalledWith(
+      expect.objectContaining({ roles: ['user', 'coach'] }),
+    );
+  });
+
+  it('email no verificado: rechaza con FIREBASE_EMAIL_NOT_VERIFIED, sin llegar a tocar la base', async () => {
+    const verify = jest.fn().mockResolvedValue({
+      uid: 'firebase-uid-abc',
+      email: 'rider@ridepro.com',
+      emailVerified: false,
+      displayName: 'Rider',
+      signInProvider: 'password',
+    });
+    const upsertByFirebaseUid = jest.fn();
+    const { service } = buildService({ verify, upsertByFirebaseUid });
+
+    await expect(service.exchangeFirebaseToken('firebase-id-token')).rejects.toMatchObject({
+      code: 'FIREBASE_EMAIL_NOT_VERIFIED',
+    });
+    expect(upsertByFirebaseUid).not.toHaveBeenCalled();
+  });
+
+  it('colisión de email (FirebaseEmailConflictError del repositorio): se traduce a 409 FIREBASE_EMAIL_CONFLICT', async () => {
+    const upsertByFirebaseUid = jest
+      .fn()
+      .mockRejectedValue(new FirebaseEmailConflictError('rider@ridepro.com'));
+    const { service } = buildService({ upsertByFirebaseUid });
+
+    await expect(service.exchangeFirebaseToken('firebase-id-token')).rejects.toMatchObject({
+      code: 'FIREBASE_EMAIL_CONFLICT',
+    });
+  });
+
+  it.each([
+    [new FirebaseTokenExpiredError(), 'FIREBASE_TOKEN_EXPIRED'],
+    [new FirebaseTokenRevokedError(), 'FIREBASE_TOKEN_REVOKED'],
+    [new FirebaseProjectMismatchError(), 'FIREBASE_PROJECT_MISMATCH'],
+    [new FirebaseTokenInvalidError(), 'FIREBASE_TOKEN_INVALID'],
+  ])('traduce %p del verificador al código %s, sin exponer su mensaje interno', async (error, code) => {
+    const verify = jest.fn().mockRejectedValue(error);
+    const { service } = buildService({ verify });
+
+    await expect(service.exchangeFirebaseToken('firebase-id-token')).rejects.toMatchObject({ code });
+  });
+
+  it('logout: hashea el refresh token presentado y revoca únicamente ese, para ese usuario', async () => {
+    const { service, tokenService, refreshTokensRepository } = buildService();
+
+    await service.logout('postgres-user-1', 'rt_presented-token');
+
+    expect(tokenService.hashRefreshToken).toHaveBeenCalledWith('rt_presented-token');
+    expect(refreshTokensRepository.revokeOne).toHaveBeenCalledWith(
+      'postgres-user-1',
+      'hash-of-presented-token',
+    );
   });
 });

@@ -7,6 +7,12 @@ export interface AccessTokenClaims {
   userId: string;
   roles: string[];
   emailVerified: boolean;
+  /** Presente únicamente para usuarios vinculados vía
+   * `/auth/firebase/exchange` (Fase 3) — `undefined` para sesiones
+   * emitidas por `/auth/register`/`/auth/login` (password directo) o por
+   * la cuenta QA. Claim aditivo: no reemplaza `sub` (que sigue siendo
+   * siempre el `id` de Postgres, nunca el uid de Firebase). */
+  firebaseUid?: string;
 }
 
 /**
@@ -51,11 +57,17 @@ export class TokenService implements OnModuleInit {
     this.refreshTokenTtlDays = Number(process.env.JWT_REFRESH_TOKEN_TTL_DAYS ?? 30);
   }
 
-  signAccessToken(params: { userId: string; roles: string[]; emailVerified: boolean }): string {
+  signAccessToken(params: {
+    userId: string;
+    roles: string[];
+    emailVerified: boolean;
+    firebaseUid?: string;
+  }): string {
     return jwt.sign(
       {
         roles: params.roles,
         email_verified: params.emailVerified,
+        ...(params.firebaseUid ? { firebaseUid: params.firebaseUid } : {}),
       },
       this.privateKey,
       {
@@ -85,6 +97,7 @@ export class TokenService implements OnModuleInit {
       userId: payload.sub,
       roles: Array.isArray(payload.roles) ? (payload.roles as string[]) : [],
       emailVerified: Boolean(payload.email_verified),
+      ...(typeof payload.firebaseUid === 'string' ? { firebaseUid: payload.firebaseUid } : {}),
     };
   }
 
