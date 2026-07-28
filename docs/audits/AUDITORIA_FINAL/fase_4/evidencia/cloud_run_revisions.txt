@@ -1,0 +1,21 @@
+Revisiones de ridepro-backend-dev (Development) al cierre de esta fase,
+gcloud run revisions list --service=ridepro-backend-dev --region=southamerica-east1:
+
+REVISION                          ACTIVE   MOTIVO
+ridepro-backend-dev-00006-rrp     yes      Limpieza: remueve PERF_COLDSTART_MARKER (mismo digest de imagen)
+ridepro-backend-dev-00005-k24     -        Forzada para medir cold start real (mismo digest, marker temporal)
+ridepro-backend-dev-00004-5jk     -        FIREBASE_CHECK_REVOKED=true (mismo digest de Fase 4F)
+ridepro-backend-dev-00003-45k     -        Despliegue original Fase 4F (Firebase Exchange, FIREBASE_CHECK_REVOKED=false)
+ridepro-backend-dev-00002-8hv     -        Revisión estable previa a Fase 4 (preservada para rollback)
+ridepro-backend-dev-00001-lff     -        Primer despliegue Development
+
+Todas las revisiones intermedias permanecen disponibles (ninguna fue eliminada) — rollback
+posible a cualquiera de ellas vía:
+  gcloud run services update-traffic ridepro-backend-dev \
+    --to-revisions=<REVISION>=100 --project=ridepro-development --region=southamerica-east1
+
+Imagen (mismo digest inmutable en 00003..00006, ningún rebuild fue necesario para
+FIREBASE_CHECK_REVOKED ni para el marker de cold start — solo cambios de env vars):
+  southamerica-east1-docker.pkg.dev/ridepro-development/ridepro-backend/api@sha256:0f5984a987fde36d56c159ceffcd568c037fcc493b860614e51075f0dd29d6c6
+
+Health check final: GET /v1/health -> 200 {"status":"ok","database":"connected"}

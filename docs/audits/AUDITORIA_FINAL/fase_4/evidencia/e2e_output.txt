@@ -1,0 +1,21 @@
+
+> ridepro-backend@0.1.0 test:e2e
+> jest --config ./test/jest-e2e.json
+
+PASS test/users-firebase-uid.e2e-spec.ts (7.891 s)
+PASS test/app.e2e-spec.ts (10.783 s)
+PASS test/auth-firebase-exchange-rate-limit.e2e-spec.ts (11.58 s)
+PASS test/auth-firebase-exchange.e2e-spec.ts (11.884 s)
+PASS test/auth-email-race.e2e-spec.ts (11.9 s)
+PASS test/auth-refresh.e2e-spec.ts (12.172 s)
+PASS test/auth.e2e-spec.ts (12.354 s)
+PASS test/workouts.e2e-spec.ts (12.386 s)
+PASS test/equipment.e2e-spec.ts (12.508 s)
+PASS test/auth-logout.e2e-spec.ts (12.681 s)
+PASS test/users.e2e-spec.ts (12.982 s)
+
+Test Suites: 11 passed, 11 total
+Tests:       82 passed, 82 total
+Snapshots:   0 total
+Time:        14.47 s, estimated 15 s
+Ran all test suites.

@@ -1,0 +1,34 @@
+=== npm run build ===
+
+> ridepro-backend@0.1.0 build
+> nest build
+
+
+=== npm run lint ===
+
+> ridepro-backend@0.1.0 lint
+> eslint "{src,test}/**/*.ts" --fix
+
+(sin salida = 0 errores, 0 warnings)
+
+=== npm test (unit) ===
+
+> ridepro-backend@0.1.0 test
+> jest
+
+PASS src/config/cors.config.spec.ts (5.413 s)
+PASS src/common/database/pg-error.util.spec.ts (5.4 s)
+PASS src/common/ownership/assert-owned.util.spec.ts (5.93 s)
+PASS src/modules/users/users.service.spec.ts (6.01 s)
+PASS src/common/auth/jwt-auth.guard.spec.ts (6.076 s)
+PASS src/modules/workouts/workouts.service.spec.ts (6.095 s)
+PASS src/modules/equipment/equipment.service.spec.ts (6.201 s)
+PASS src/firebase/firebase-token-verifier.service.spec.ts (6.467 s)
+[33m[Nest] 7500  - [39m27/07/2026, 12:39:16 p. m. [33m   WARN[39m [38;5;3m[AuthService] [39m[33mRefresh token reuse detectado para user_id=user-1 — todos sus refresh tokens activos fueron revocados.[39m
+PASS src/modules/auth/auth.service.spec.ts (7.103 s)
+
+Test Suites: 9 passed, 9 total
+Tests:       96 passed, 96 total
+Snapshots:   0 total
+Time:        8.244 s
+Ran all test suites.
