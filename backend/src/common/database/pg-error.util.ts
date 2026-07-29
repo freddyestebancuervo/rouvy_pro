@@ -30,3 +30,25 @@ export function pgConstraintName(error: unknown): string | null {
 export function isPgUniqueViolation(error: unknown): boolean {
   return pgErrorCode(error) === PG_UNIQUE_VIOLATION;
 }
+
+/** Mensaje exacto que `pg-pool` usa para el timeout de adquisición de una
+ * conexión (`node_modules/pg-pool/index.js`, cuando `connectionTimeoutMillis`
+ * se cumple esperando un slot libre) — hallazgo de Fase 4.1/4.2. */
+const POOL_CONNECTION_TIMEOUT_MESSAGE = 'timeout exceeded when trying to connect';
+
+/**
+ * Distingue el timeout de adquisición del pool (`pg-pool`, generado en el
+ * cliente, ANTES de tocar Postgres) de cualquier error real de Postgres —
+ * estos últimos SIEMPRE traen `.code` (SQLSTATE: `23505`, `42601`, etc.),
+ * este nunca lo trae. Exige coincidencia exacta del mensaje Y ausencia total
+ * de `.code` a propósito: ninguna violación de integridad, error de
+ * programación ni fallo de migración cumple ambas condiciones a la vez, así
+ * que no hay forma de que esos terminen traducidos a `503` por error.
+ */
+export function isPoolConnectionTimeout(error: unknown): boolean {
+  return (
+    error instanceof Error &&
+    !('code' in error) &&
+    error.message === POOL_CONNECTION_TIMEOUT_MESSAGE
+  );
+}

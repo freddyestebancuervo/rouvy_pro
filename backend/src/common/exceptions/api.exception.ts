@@ -14,6 +14,10 @@ export class ApiException extends HttpException {
     public readonly code: string,
     message: string,
     public readonly details: unknown = null,
+    /** Fase 4.2 Parte 2 — opcional, sin afectar a ningún llamador existente.
+     * `ApiExceptionFilter` lo traduce al header `Retry-After` cuando está
+     * presente (saturación de pool, rate limit por identidad). */
+    public readonly retryAfterSeconds?: number,
   ) {
     super({ code, message, details }, status);
   }

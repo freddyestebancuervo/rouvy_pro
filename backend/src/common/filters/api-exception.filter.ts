@@ -8,6 +8,7 @@ import {
 } from '@nestjs/common';
 import { randomUUID } from 'crypto';
 import { Response } from 'express';
+import { isPoolConnectionTimeout } from '../database/pg-error.util';
 import { ApiException } from '../exceptions/api.exception';
 
 /**
@@ -27,6 +28,9 @@ export class ApiExceptionFilter implements ExceptionFilter {
     const requestId = randomUUID();
 
     if (exception instanceof ApiException) {
+      if (exception.retryAfterSeconds != null) {
+        response.set('Retry-After', String(exception.retryAfterSeconds));
+      }
       response.status(exception.getStatus()).json({
         error: {
           code: exception.code,
@@ -43,6 +47,26 @@ export class ApiExceptionFilter implements ExceptionFilter {
       const body = exception.getResponse();
       const { code, message, details } = this.normalizeHttpExceptionBody(status, body);
       response.status(status).json({ error: { code, message, requestId, details } });
+      return;
+    }
+
+    // Fase 4.2 Parte 2 — el pool de Postgres agotado (`connectionTimeoutMillis`
+    // cumplido esperando un slot libre) NO es una falla de programación: es
+    // saturación esperable bajo carga. Se traduce a `503` con un código de
+    // negocio estable, antes del `500` genérico de abajo — a propósito
+    // nunca captura errores de integridad/migración/programación (ver
+    // `isPoolConnectionTimeout`, exige mensaje exacto + ausencia de `.code`).
+    if (isPoolConnectionTimeout(exception)) {
+      this.logger.warn('Pool de PostgreSQL saturado: timeout al adquirir conexión.');
+      response.set('Retry-After', '2');
+      response.status(HttpStatus.SERVICE_UNAVAILABLE).json({
+        error: {
+          code: 'DATABASE_TEMPORARILY_UNAVAILABLE',
+          message: 'El servicio está temporalmente saturado. Probá de nuevo en unos segundos.',
+          requestId,
+          details: null,
+        },
+      });
       return;
     }
 
