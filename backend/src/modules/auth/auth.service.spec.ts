@@ -1,3 +1,4 @@
+import { ThrottlerStorage } from '@nestjs/throttler';
 import {
   FirebaseProjectMismatchError,
   FirebaseTokenExpiredError,
@@ -11,6 +12,36 @@ import { FirebaseEmailConflictError } from '../users/errors/firebase-email-confl
 import { UpsertByFirebaseUidResult, UserRecord, UsersRepository } from '../users/users.repository';
 import { AuditLogRepository } from './audit-log.repository';
 import { AuthService } from './auth.service';
+
+/** Forma del valor resuelto por `ThrottlerStorage.increment` — el paquete
+ * no exporta este tipo desde su entrada pública, solo la interfaz
+ * `ThrottlerStorage`. */
+interface FakeThrottlerRecord {
+  totalHits: number;
+  timeToExpire: number;
+  isBlocked: boolean;
+  timeToBlockExpire: number;
+}
+
+const NOT_BLOCKED_RECORD: FakeThrottlerRecord = {
+  totalHits: 1,
+  timeToExpire: 900,
+  isBlocked: false,
+  timeToBlockExpire: 0,
+};
+
+/**
+ * Mock de `ThrottlerStorage` (Fase 4.2 Parte 2, Capas 2/3 del rate limit
+ * híbrido de `exchangeFirebaseToken`) — por defecto nunca bloquea, para no
+ * afectar ninguna de las pruebas existentes que no ejercitan rate limit.
+ */
+function fakeThrottlerStorage(
+  increment?: jest.Mock<Promise<FakeThrottlerRecord>, unknown[]>,
+): jest.Mocked<ThrottlerStorage> {
+  return {
+    increment: increment ?? jest.fn().mockResolvedValue(NOT_BLOCKED_RECORD),
+  } as unknown as jest.Mocked<ThrottlerStorage>;
+}
 
 /**
  * Unit tests de `AuthService.refresh` — la pieza de C4 con más ramas de
@@ -63,12 +94,15 @@ describe('AuthService.refresh', () => {
       record: jest.fn(),
     } as unknown as jest.Mocked<AuditLogRepository>;
 
+    const throttlerStorage = fakeThrottlerStorage();
+
     const service = new AuthService(
       usersRepository,
       refreshTokensRepository,
       tokenService,
       firebaseTokenVerifier,
       auditLogRepository,
+      throttlerStorage,
     );
     return {
       service,
@@ -77,6 +111,7 @@ describe('AuthService.refresh', () => {
       tokenService,
       firebaseTokenVerifier,
       auditLogRepository,
+      throttlerStorage,
     };
   }
 
@@ -206,6 +241,7 @@ describe('AuthService.register', () => {
       tokenService,
       firebaseTokenVerifier,
       auditLogRepository,
+      fakeThrottlerStorage(),
     );
   }
 
@@ -262,6 +298,7 @@ describe('AuthService.exchangeFirebaseToken / logout', () => {
     verify?: jest.Mock;
     upsertByFirebaseUid?: jest.Mock;
     findRoleNames?: jest.Mock;
+    throttlerStorage?: jest.Mocked<ThrottlerStorage>;
   }) {
     const usersRepository = {
       findByEmail: jest.fn(),
@@ -307,12 +344,15 @@ describe('AuthService.exchangeFirebaseToken / logout', () => {
       record: jest.fn(),
     } as unknown as jest.Mocked<AuditLogRepository>;
 
+    const throttlerStorage = overrides?.throttlerStorage ?? fakeThrottlerStorage();
+
     const service = new AuthService(
       usersRepository,
       refreshTokensRepository,
       tokenService,
       firebaseTokenVerifier,
       auditLogRepository,
+      throttlerStorage,
     );
     return {
       service,
@@ -321,6 +361,7 @@ describe('AuthService.exchangeFirebaseToken / logout', () => {
       tokenService,
       firebaseTokenVerifier,
       auditLogRepository,
+      throttlerStorage,
     };
   }
 
@@ -330,7 +371,7 @@ describe('AuthService.exchangeFirebaseToken / logout', () => {
       .mockResolvedValue({ user: baseUser, isNew: true });
     const { service, auditLogRepository } = buildService({ upsertByFirebaseUid });
 
-    await service.exchangeFirebaseToken('firebase-id-token');
+    await service.exchangeFirebaseToken('firebase-id-token', '203.0.113.1');
 
     expect(upsertByFirebaseUid).toHaveBeenCalledWith({
       firebaseUid: 'firebase-uid-abc',
@@ -348,7 +389,7 @@ describe('AuthService.exchangeFirebaseToken / logout', () => {
   it('usuario existente: isNew=false se refleja tal cual en la auditoría', async () => {
     const { service, auditLogRepository } = buildService();
 
-    await service.exchangeFirebaseToken('firebase-id-token');
+    await service.exchangeFirebaseToken('firebase-id-token', '203.0.113.1');
 
     expect(auditLogRepository.record).toHaveBeenCalledWith(
       'auth.firebase_exchange',
@@ -375,7 +416,7 @@ describe('AuthService.exchangeFirebaseToken / logout', () => {
       .mockResolvedValue({ user: baseUser, isNew: false });
     const { service } = buildService({ verify, upsertByFirebaseUid });
 
-    await service.exchangeFirebaseToken('firebase-id-token');
+    await service.exchangeFirebaseToken('firebase-id-token', '203.0.113.1');
 
     expect(upsertByFirebaseUid).toHaveBeenCalledWith(
       expect.objectContaining({ provider: expectedProvider }),
@@ -385,7 +426,7 @@ describe('AuthService.exchangeFirebaseToken / logout', () => {
   it('el access token emitido lleva sub = id de PostgreSQL y el claim firebaseUid (nunca al revés)', async () => {
     const { service, tokenService } = buildService();
 
-    await service.exchangeFirebaseToken('firebase-id-token');
+    await service.exchangeFirebaseToken('firebase-id-token', '203.0.113.1');
 
     expect(tokenService.signAccessToken).toHaveBeenCalledWith({
       userId: baseUser.id, // id de Postgres, NO el uid de Firebase
@@ -399,7 +440,7 @@ describe('AuthService.exchangeFirebaseToken / logout', () => {
     const findRoleNames = jest.fn().mockResolvedValue(['user', 'coach']);
     const { service, tokenService } = buildService({ findRoleNames });
 
-    await service.exchangeFirebaseToken('firebase-id-token');
+    await service.exchangeFirebaseToken('firebase-id-token', '203.0.113.1');
 
     expect(findRoleNames).toHaveBeenCalledWith(baseUser.id);
     expect(tokenService.signAccessToken).toHaveBeenCalledWith(
@@ -418,7 +459,7 @@ describe('AuthService.exchangeFirebaseToken / logout', () => {
     const upsertByFirebaseUid = jest.fn();
     const { service } = buildService({ verify, upsertByFirebaseUid });
 
-    await expect(service.exchangeFirebaseToken('firebase-id-token')).rejects.toMatchObject({
+    await expect(service.exchangeFirebaseToken('firebase-id-token', '203.0.113.1')).rejects.toMatchObject({
       code: 'FIREBASE_EMAIL_NOT_VERIFIED',
     });
     expect(upsertByFirebaseUid).not.toHaveBeenCalled();
@@ -430,7 +471,7 @@ describe('AuthService.exchangeFirebaseToken / logout', () => {
       .mockRejectedValue(new FirebaseEmailConflictError('rider@ridepro.com'));
     const { service } = buildService({ upsertByFirebaseUid });
 
-    await expect(service.exchangeFirebaseToken('firebase-id-token')).rejects.toMatchObject({
+    await expect(service.exchangeFirebaseToken('firebase-id-token', '203.0.113.1')).rejects.toMatchObject({
       code: 'FIREBASE_EMAIL_CONFLICT',
     });
   });
@@ -444,7 +485,110 @@ describe('AuthService.exchangeFirebaseToken / logout', () => {
     const verify = jest.fn().mockRejectedValue(error);
     const { service } = buildService({ verify });
 
-    await expect(service.exchangeFirebaseToken('firebase-id-token')).rejects.toMatchObject({ code });
+    await expect(service.exchangeFirebaseToken('firebase-id-token', '203.0.113.1')).rejects.toMatchObject({ code });
+  });
+
+  /**
+   * Rate limit híbrido (Fase 4.2 Parte 2) — Capas 2 (Firebase UID hasheado)
+   * y 3 (IP, solo para tráfico ya verificado). La Capa 1 (IP, tokens sin
+   * verificar todavía) vive en el controller/`@Throttle`, fuera del
+   * alcance de `AuthService`.
+   */
+  describe('rate limit híbrido: Capas 2 (UID) y 3 (IP verificada)', () => {
+    it('Capa 2 (UID) bloqueada: rechaza con 429 RATE_LIMITED y retryAfterSeconds exacto, sin llegar a tocar la base', async () => {
+      const increment = jest
+        .fn()
+        .mockResolvedValueOnce({ totalHits: 21, timeToExpire: 900, isBlocked: true, timeToBlockExpire: 42 });
+      const upsertByFirebaseUid = jest.fn();
+      const { service } = buildService({
+        upsertByFirebaseUid,
+        throttlerStorage: fakeThrottlerStorage(increment),
+      });
+
+      await expect(service.exchangeFirebaseToken('firebase-id-token', '203.0.113.1')).rejects.toMatchObject({
+        code: 'RATE_LIMITED',
+        retryAfterSeconds: 42,
+      });
+      expect(upsertByFirebaseUid).not.toHaveBeenCalled();
+    });
+
+    it('Capa 2 (UID): la clave usada nunca contiene el firebase_uid en texto plano (va hasheado)', async () => {
+      const increment = jest.fn().mockResolvedValue(NOT_BLOCKED_RECORD);
+      const { service } = buildService({ throttlerStorage: fakeThrottlerStorage(increment) });
+
+      await service.exchangeFirebaseToken('firebase-id-token', '203.0.113.1');
+
+      const uidCallKey = increment.mock.calls[0][0] as string;
+      expect(uidCallKey.startsWith('firebase-exchange-uid:')).toBe(true);
+      expect(uidCallKey).not.toContain('firebase-uid-abc');
+    });
+
+    it('Capa 3 (IP verificada) bloqueada cuando la Capa 2 (UID) no lo está: también rechaza con 429 RATE_LIMITED, sin tocar la base', async () => {
+      const increment = jest
+        .fn()
+        .mockResolvedValueOnce(NOT_BLOCKED_RECORD) // Capa 2 (UID): pasa
+        .mockResolvedValueOnce({ totalHits: 101, timeToExpire: 900, isBlocked: true, timeToBlockExpire: 15 }); // Capa 3 (IP): bloqueada
+      const upsertByFirebaseUid = jest.fn();
+      const { service } = buildService({
+        upsertByFirebaseUid,
+        throttlerStorage: fakeThrottlerStorage(increment),
+      });
+
+      await expect(service.exchangeFirebaseToken('firebase-id-token', '203.0.113.1')).rejects.toMatchObject({
+        code: 'RATE_LIMITED',
+        retryAfterSeconds: 15,
+      });
+      expect(upsertByFirebaseUid).not.toHaveBeenCalled();
+
+      const ipCallKey = increment.mock.calls[1][0] as string;
+      expect(ipCallKey).toBe('firebase-exchange-ip-verified:203.0.113.1');
+    });
+
+    it('ninguna capa bloqueada: procede con el upsert normalmente (no rompe el camino feliz existente)', async () => {
+      const upsertByFirebaseUid = jest
+        .fn<Promise<UpsertByFirebaseUidResult>, unknown[]>()
+        .mockResolvedValue({ user: baseUser, isNew: false });
+      const { service, auditLogRepository } = buildService({ upsertByFirebaseUid });
+
+      await service.exchangeFirebaseToken('firebase-id-token', '203.0.113.1');
+
+      expect(upsertByFirebaseUid).toHaveBeenCalled();
+      expect(auditLogRepository.record).toHaveBeenCalled();
+    });
+
+    it('distintos usuarios (distinto UID) desde la misma IP usan claves de Capa 2 distintas — uno bloqueado no bloquea al otro', async () => {
+      const increment = jest.fn().mockResolvedValue(NOT_BLOCKED_RECORD);
+      const verifyUserA = jest.fn().mockResolvedValue({
+        uid: 'firebase-uid-user-a',
+        email: 'a@ridepro.com',
+        emailVerified: true,
+        displayName: 'A',
+        signInProvider: 'password',
+      });
+      const verifyUserB = jest.fn().mockResolvedValue({
+        uid: 'firebase-uid-user-b',
+        email: 'b@ridepro.com',
+        emailVerified: true,
+        displayName: 'B',
+        signInProvider: 'password',
+      });
+      const { service: serviceA } = buildService({
+        verify: verifyUserA,
+        throttlerStorage: fakeThrottlerStorage(increment),
+      });
+      const { service: serviceB } = buildService({
+        verify: verifyUserB,
+        throttlerStorage: fakeThrottlerStorage(increment),
+      });
+
+      await serviceA.exchangeFirebaseToken('token-a', '203.0.113.1');
+      await serviceB.exchangeFirebaseToken('token-b', '203.0.113.1');
+
+      const uidKeys = increment.mock.calls
+        .map((call) => call[0] as string)
+        .filter((key) => key.startsWith('firebase-exchange-uid:'));
+      expect(uidKeys[0]).not.toBe(uidKeys[1]); // hash distinto por UID distinto
+    });
   });
 
   it('logout: hashea el refresh token presentado y revoca únicamente ese, para ese usuario', async () => {

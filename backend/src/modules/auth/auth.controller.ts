@@ -1,4 +1,4 @@
-import { Body, Controller, Headers, HttpCode, HttpStatus, Post, UseGuards } from '@nestjs/common';
+import { Body, Controller, Headers, HttpCode, HttpStatus, Ip, Post, UseGuards } from '@nestjs/common';
 import { Throttle } from '@nestjs/throttler';
 import { AuthUser } from '../../common/auth/auth-user.interface';
 import { CurrentUser } from '../../common/auth/current-user.decorator';
@@ -19,7 +19,12 @@ const AUTH_THROTTLE = { default: { limit: 5, ttl: 15 * 60 * 1000 } };
 // normal falla definitivamente, así que se llama más seguido en uso
 // legítimo — no debilita el bucket global (100/60s, `app.module.ts`),
 // que se sigue aplicando encima como defensa en profundidad.
-const FIREBASE_EXCHANGE_THROTTLE = { default: { limit: 20, ttl: 15 * 60 * 1000 } };
+// Fase 4.2 Parte 2: subido de 20 a 60 — esta es solo la Capa 1 (IP, sin
+// distinguir identidad todavía, porque acá el token puede ser inválido).
+// La protección real por identidad ahora vive en `AuthService`
+// (Capas 2 y 3, ver `exchangeFirebaseToken`), así que este bucket puede
+// ser más generoso sin debilitar la defensa contra abuso por identidad.
+const FIREBASE_EXCHANGE_THROTTLE = { default: { limit: 60, ttl: 15 * 60 * 1000 } };
 
 function extractBearerToken(authorization?: string): string {
   if (!authorization?.startsWith('Bearer ')) {
@@ -74,9 +79,12 @@ export class AuthController {
   @Post('firebase/exchange')
   @HttpCode(HttpStatus.OK)
   @Throttle(FIREBASE_EXCHANGE_THROTTLE)
-  exchangeFirebase(@Headers('authorization') authorization?: string): Promise<AuthResponse> {
+  exchangeFirebase(
+    @Headers('authorization') authorization: string | undefined,
+    @Ip() ip: string,
+  ): Promise<AuthResponse> {
     const idToken = extractBearerToken(authorization);
-    return this.authService.exchangeFirebaseToken(idToken);
+    return this.authService.exchangeFirebaseToken(idToken, ip);
   }
 
   /** `POST /auth/logout` (Fase 3 §C) — sí protegido por `JwtAuthGuard`
