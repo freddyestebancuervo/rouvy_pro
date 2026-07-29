@@ -19,6 +19,12 @@ Continúa los dos riesgos documentados al cierre de Fase 4.1
 3. [Análisis del rate limit — arquitectura actual, riesgos, alternativas R1–R3](03_ANALISIS_RATE_LIMIT.md)
 4. [Matriz de capacidad propuesta (pruebas escalonadas 1→50)](04_MATRIZ_DE_CAPACIDAD_PROPUESTA.md)
 5. [Plan de implementación — puertas de calidad, riesgos, recomendación](05_PLAN_DE_IMPLEMENTACION.md)
+6. [Diseño de la optimización del exchange (Parte 2)](06_DISENO_OPTIMIZACION_EXCHANGE.md)
+7. [Diseño del rate limit híbrido (Parte 2)](07_DISENO_RATE_LIMIT_HIBRIDO.md)
+8. [Resultados de pruebas locales (Parte 2)](08_RESULTADOS_PRUEBAS_LOCALES.md)
+9. [Decisión de infraestructura — presentada, no ejecutada (Parte 2)](09_DECISION_INFRAESTRUCTURA.md)
+10. [Fase 4.2.1 — estabilización de las E2E de concurrencia (self-deadlock)](10_FASE_4_2_1_ESTABILIZACION_E2E.md)
+11. [Revisión independiente de los commits 789d925/91c97a1/b02f065 (solo lectura)](revision_independiente/00_REVISION_INDEPENDIENTE_COMMITS.md)
 
 ## Hallazgos clave (resumen ejecutivo)
 
