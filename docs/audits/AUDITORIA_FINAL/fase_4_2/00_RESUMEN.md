@@ -25,6 +25,7 @@ Continúa los dos riesgos documentados al cierre de Fase 4.1
 9. [Decisión de infraestructura — presentada, no ejecutada (Parte 2)](09_DECISION_INFRAESTRUCTURA.md)
 10. [Fase 4.2.1 — estabilización de las E2E de concurrencia (self-deadlock)](10_FASE_4_2_1_ESTABILIZACION_E2E.md)
 11. [Revisión independiente de los commits 789d925/91c97a1/b02f065 (solo lectura)](revision_independiente/00_REVISION_INDEPENDIENTE_COMMITS.md)
+12. [Auditoría de dependencias e integración de feature/d2 — plan de 5 bloques (solo lectura)](revision_independiente/01_AUDITORIA_INTEGRACION_DEPENDENCIAS.md)
 
 ## Hallazgos clave (resumen ejecutivo)
 
