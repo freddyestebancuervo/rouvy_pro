@@ -21,7 +21,7 @@ jobs:
 
       - uses: subosito/flutter-action@v2
         with:
-          flutter-version: '3.24.0'
+          flutter-version: '3.32.0'
           channel: stable
 
       - name: Instalar dependencias
@@ -65,7 +65,7 @@ jobs:
           java-version: '17'
 
       - name: Instalar Firebase CLI
-        run: npm install -g firebase-tools
+        run: npm install -g firebase-tools@14.27.0
 
       - name: Instalar dependencias del proyecto de tests
         run: npm install
