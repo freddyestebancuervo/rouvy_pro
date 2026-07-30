@@ -274,5 +274,63 @@
   "unitsMetricValue": "Métrico (km, kg)",
   "notificationsLabel": "Notificaciones",
   "notificationsEnabledValue": "Activadas",
-  "exploreCatalogHint": "Explora el catálogo completo"
+  "exploreCatalogHint": "Explora el catálogo completo",
+
+  "workoutsTitle": "Entrenamientos",
+  "workoutsHomeHint": "Crea y explora tus entrenamientos",
+  "workoutsMineFilterLabel": "Míos",
+  "workoutsAllFilterLabel": "Todos",
+  "noWorkoutsAvailableMessage": "No hay entrenamientos disponibles todavía.",
+  "newWorkoutAction": "Nuevo entrenamiento",
+  "workoutDetailTitle": "Detalle del entrenamiento",
+  "workoutIntervalsTitle": "Intervalos",
+  "workoutIntervalsCount": "{count} intervalos",
+  "@workoutIntervalsCount": {
+    "placeholders": {
+      "count": {
+        "type": "int"
+      }
+    }
+  },
+  "workoutEstimatedDurationLabel": "Duración estimada",
+  "workoutTargetTypeLabel": "Tipo de objetivo",
+  "workoutTargetTypePower": "Potencia (%FTP)",
+  "workoutTargetTypeHeartRate": "Frecuencia cardíaca",
+  "workoutTargetTypeNone": "Libre",
+  "workoutPublicLabel": "Público",
+  "workoutPrivateLabel": "Privado",
+  "workoutCatalogLabel": "Catálogo",
+  "workoutArchivedLabel": "Archivado",
+  "createWorkoutTitle": "Crear entrenamiento",
+  "editWorkoutTitle": "Editar entrenamiento",
+  "workoutDescriptionLabel": "Descripción (opcional)",
+  "workoutPublicSwitchLabel": "Hacer público",
+  "workoutPublicSwitchHint": "Otros usuarios podrán verlo, pero no editarlo.",
+  "addIntervalAction": "Agregar intervalo",
+  "removeAction": "Quitar",
+  "intervalNumberLabel": "Intervalo {number}",
+  "@intervalNumberLabel": {
+    "placeholders": {
+      "number": {
+        "type": "int"
+      }
+    }
+  },
+  "intervalDurationLabel": "Duración (segundos)",
+  "intervalTargetLowLabel": "Objetivo mínimo",
+  "intervalTargetHighLabel": "Objetivo máximo",
+  "intervalLabelLabel": "Etiqueta (opcional)",
+  "createWorkoutButton": "Crear entrenamiento",
+  "archiveWorkoutAction": "Archivar",
+  "archiveWorkoutConfirmTitle": "¿Archivar este entrenamiento?",
+  "archiveWorkoutConfirmMessage": "Podrás seguir viéndolo, pero ya no podrás editarlo.",
+  "workoutArchivedSuccessMessage": "Entrenamiento archivado.",
+  "workoutCreatedSuccessMessage": "Entrenamiento creado.",
+  "workoutUpdatedSuccessMessage": "Entrenamiento actualizado.",
+  "workoutReadOnlyNotice": "Este entrenamiento no es tuyo — solo puedes verlo.",
+  "workoutArchivedNotice": "Este entrenamiento está archivado y no se puede editar.",
+  "backendSessionUnavailableMessage": "No se pudo conectar con el backend de entrenamientos. Verifica tu conexión e intenta de nuevo.",
+  "validationAtLeastOneInterval": "Agrega al menos un intervalo.",
+  "validationDurationRequired": "Ingresa una duración válida (1 a 36000 segundos).",
+  "validationTargetRangeInvalid": "El objetivo mínimo no puede ser mayor que el máximo."
 }

@@ -21,7 +21,7 @@ jobs:
 
       - uses: subosito/flutter-action@v2
         with:
-          flutter-version: '3.24.0'
+          flutter-version: '3.32.0'
           channel: stable
 
       - name: Instalar dependencias
@@ -65,7 +65,7 @@ jobs:
           java-version: '17'
 
       - name: Instalar Firebase CLI
-        run: npm install -g firebase-tools
+        run: npm install -g firebase-tools@14.27.0
 
       - name: Instalar dependencias del proyecto de tests
         run: npm install
@@ -105,6 +105,13 @@ jobs:
 
     env:
       DATABASE_URL: postgres://ridepro:devpassword@localhost:5432/ridepro_dev
+      # Par de claves efímero, exclusivo de este job — generado en el paso
+      # de abajo, nunca committeado (ver backend/.gitignore: secrets/).
+      # Mismos nombres/paths que backend/.env.example, para que
+      # TokenService.onModuleInit() (que exige ambas variables o falla al
+      # arrancar) no necesite ninguna rama especial para CI.
+      JWT_PRIVATE_KEY_PATH: ./secrets/jwt_private.pem
+      JWT_PUBLIC_KEY_PATH: ./secrets/jwt_public.pem
 
     steps:
       - uses: actions/checkout@v4
@@ -116,8 +123,21 @@ jobs:
       - name: Instalar dependencias
         run: npm install
 
-      - name: Aplicar la migración inicial (0001_init.sql)
-        run: psql "$DATABASE_URL" -f migrations/0001_init.sql
+      - name: Generar par de claves JWT (efímero, solo para este job)
+        run: |
+          mkdir -p secrets
+          openssl genrsa -out secrets/jwt_private.pem 2048
+          openssl rsa -in secrets/jwt_private.pem -pubout -out secrets/jwt_public.pem
+
+      # Hallazgo de auditoría 2026-07-23: este paso solo aplicaba
+      # 0001_init.sql con psql -f directo — desde que 0002-0004 existen
+      # (Bloque C/D), tanto el arranque del servidor como los e2e de
+      # equipment/workouts fallaban por tablas/constraints inexistentes.
+      # `migrate:up` (node-pg-migrate) aplica TODAS las migraciones
+      # pendientes en orden, es el método que los propios archivos de
+      # migración documentan, y es idempotente (seguro reejecutar).
+      - name: Aplicar todas las migraciones pendientes
+        run: npm run migrate:up
 
       - name: Levantar el servidor y verificar /v1/health
         run: |

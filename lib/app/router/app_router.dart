@@ -22,6 +22,9 @@ import '../../features/training/presentation/pages/session_summary_page.dart';
 import '../../features/training/presentation/pages/statistics_page.dart';
 import '../../features/training/presentation/pages/training_hud_page.dart';
 import '../../features/wearables/presentation/pages/wearables_page.dart';
+import '../../features/workouts/presentation/pages/workout_detail_page.dart';
+import '../../features/workouts/presentation/pages/workout_form_page.dart';
+import '../../features/workouts/presentation/pages/workouts_list_page.dart';
 
 /// Rutas nombradas — usar estas constantes en vez de strings sueltos evita
 /// typos al navegar (`context.go(AppRoute.home)` en vez de `context.go('/home')`).
@@ -42,6 +45,7 @@ abstract class AppRoute {
   static const String statistics = '/statistics';
   static const String achievements = '/achievements';
   static const String routesCatalog = '/routes';
+  static const String workouts = '/workouts';
   static const String settings = '/settings';
 }
 
@@ -184,6 +188,33 @@ final routerProvider = Provider<GoRouter>((Ref ref) {
               final String routeId = state.pathParameters['routeId']!;
               return RouteDetailPage(routeId: routeId);
             },
+          ),
+        ],
+      ),
+      GoRoute(
+        path: AppRoute.workouts,
+        builder: (BuildContext context, GoRouterState state) => const WorkoutsListPage(),
+        routes: <RouteBase>[
+          GoRoute(
+            path: 'new',
+            builder: (BuildContext context, GoRouterState state) => const WorkoutFormPage(workoutId: null),
+          ),
+          GoRoute(
+            // Sub-ruta relativa: la URL completa queda `/workouts/:workoutId`.
+            path: ':workoutId',
+            builder: (BuildContext context, GoRouterState state) {
+              final String workoutId = state.pathParameters['workoutId']!;
+              return WorkoutDetailPage(workoutId: workoutId);
+            },
+            routes: <RouteBase>[
+              GoRoute(
+                path: 'edit',
+                builder: (BuildContext context, GoRouterState state) {
+                  final String workoutId = state.pathParameters['workoutId']!;
+                  return WorkoutFormPage(workoutId: workoutId);
+                },
+              ),
+            ],
           ),
         ],
       ),

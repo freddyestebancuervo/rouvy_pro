@@ -89,6 +89,16 @@ void main() {
     await tester.pumpAndSettle();
 
     expect(find.byIcon(Icons.error_outline), findsOneWidget);
-    expect(find.widgetWithText(FilledButton, 'Reintentar'), findsOneWidget);
+    // `FilledButton.icon` ya no expone `FilledButton` como runtimeType exacto
+    // desde Flutter 3.32.0 (delega en el widget interno `_FilledButtonWithIcon`,
+    // que SÍ extiende `FilledButton`) — `find.byType`/`widgetWithText` comparan
+    // por tipo exacto y ya no lo encuentran, por eso se usa `is FilledButton`.
+    expect(
+      find.ancestor(
+        of: find.text('Reintentar'),
+        matching: find.byWidgetPredicate((Widget widget) => widget is FilledButton),
+      ),
+      findsOneWidget,
+    );
   });
 }

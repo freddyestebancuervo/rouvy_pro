@@ -5,6 +5,7 @@ plugins {
     // Aplica el plugin registrado en settings.gradle.kts — es lo que
     // procesa android/app/google-services.json.
     id("com.google.gms.google-services")
+    id("com.google.firebase.crashlytics")
 }
 
 android {

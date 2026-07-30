@@ -648,4 +648,145 @@ class AppLocalizationsEs extends AppLocalizations {
 
   @override
   String get exploreCatalogHint => 'Explora el catálogo completo';
+
+  @override
+  String get workoutsTitle => 'Entrenamientos';
+
+  @override
+  String get workoutsHomeHint => 'Crea y explora tus entrenamientos';
+
+  @override
+  String get workoutsMineFilterLabel => 'Míos';
+
+  @override
+  String get workoutsAllFilterLabel => 'Todos';
+
+  @override
+  String get noWorkoutsAvailableMessage =>
+      'No hay entrenamientos disponibles todavía.';
+
+  @override
+  String get newWorkoutAction => 'Nuevo entrenamiento';
+
+  @override
+  String get workoutDetailTitle => 'Detalle del entrenamiento';
+
+  @override
+  String get workoutIntervalsTitle => 'Intervalos';
+
+  @override
+  String workoutIntervalsCount(int count) {
+    return '$count intervalos';
+  }
+
+  @override
+  String get workoutEstimatedDurationLabel => 'Duración estimada';
+
+  @override
+  String get workoutTargetTypeLabel => 'Tipo de objetivo';
+
+  @override
+  String get workoutTargetTypePower => 'Potencia (%FTP)';
+
+  @override
+  String get workoutTargetTypeHeartRate => 'Frecuencia cardíaca';
+
+  @override
+  String get workoutTargetTypeNone => 'Libre';
+
+  @override
+  String get workoutPublicLabel => 'Público';
+
+  @override
+  String get workoutPrivateLabel => 'Privado';
+
+  @override
+  String get workoutCatalogLabel => 'Catálogo';
+
+  @override
+  String get workoutArchivedLabel => 'Archivado';
+
+  @override
+  String get createWorkoutTitle => 'Crear entrenamiento';
+
+  @override
+  String get editWorkoutTitle => 'Editar entrenamiento';
+
+  @override
+  String get workoutDescriptionLabel => 'Descripción (opcional)';
+
+  @override
+  String get workoutPublicSwitchLabel => 'Hacer público';
+
+  @override
+  String get workoutPublicSwitchHint =>
+      'Otros usuarios podrán verlo, pero no editarlo.';
+
+  @override
+  String get addIntervalAction => 'Agregar intervalo';
+
+  @override
+  String get removeAction => 'Quitar';
+
+  @override
+  String intervalNumberLabel(int number) {
+    return 'Intervalo $number';
+  }
+
+  @override
+  String get intervalDurationLabel => 'Duración (segundos)';
+
+  @override
+  String get intervalTargetLowLabel => 'Objetivo mínimo';
+
+  @override
+  String get intervalTargetHighLabel => 'Objetivo máximo';
+
+  @override
+  String get intervalLabelLabel => 'Etiqueta (opcional)';
+
+  @override
+  String get createWorkoutButton => 'Crear entrenamiento';
+
+  @override
+  String get archiveWorkoutAction => 'Archivar';
+
+  @override
+  String get archiveWorkoutConfirmTitle => '¿Archivar este entrenamiento?';
+
+  @override
+  String get archiveWorkoutConfirmMessage =>
+      'Podrás seguir viéndolo, pero ya no podrás editarlo.';
+
+  @override
+  String get workoutArchivedSuccessMessage => 'Entrenamiento archivado.';
+
+  @override
+  String get workoutCreatedSuccessMessage => 'Entrenamiento creado.';
+
+  @override
+  String get workoutUpdatedSuccessMessage => 'Entrenamiento actualizado.';
+
+  @override
+  String get workoutReadOnlyNotice =>
+      'Este entrenamiento no es tuyo — solo puedes verlo.';
+
+  @override
+  String get workoutArchivedNotice =>
+      'Este entrenamiento está archivado y no se puede editar.';
+
+  @override
+  String get backendSessionUnavailableMessage =>
+      'No se pudo conectar con el backend de entrenamientos. Verifica tu conexión e intenta de nuevo.';
+
+  @override
+  String get validationAtLeastOneInterval => 'Agrega al menos un intervalo.';
+
+  @override
+  String get validationDurationRequired =>
+      'Ingresa una duración válida (1 a 36000 segundos).';
+
+  @override
+  String get validationTargetRangeInvalid =>
+      'El objetivo mínimo no puede ser mayor que el máximo.';
 }

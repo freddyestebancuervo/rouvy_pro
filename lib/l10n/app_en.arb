@@ -274,5 +274,63 @@
   "unitsMetricValue": "Metric (km, kg)",
   "notificationsLabel": "Notifications",
   "notificationsEnabledValue": "Enabled",
-  "exploreCatalogHint": "Explore the full catalog"
+  "exploreCatalogHint": "Explore the full catalog",
+
+  "workoutsTitle": "Workouts",
+  "workoutsHomeHint": "Create and explore your workouts",
+  "workoutsMineFilterLabel": "Mine",
+  "workoutsAllFilterLabel": "All",
+  "noWorkoutsAvailableMessage": "No workouts available yet.",
+  "newWorkoutAction": "New workout",
+  "workoutDetailTitle": "Workout detail",
+  "workoutIntervalsTitle": "Intervals",
+  "workoutIntervalsCount": "{count} intervals",
+  "@workoutIntervalsCount": {
+    "placeholders": {
+      "count": {
+        "type": "int"
+      }
+    }
+  },
+  "workoutEstimatedDurationLabel": "Estimated duration",
+  "workoutTargetTypeLabel": "Target type",
+  "workoutTargetTypePower": "Power (%FTP)",
+  "workoutTargetTypeHeartRate": "Heart rate",
+  "workoutTargetTypeNone": "Free",
+  "workoutPublicLabel": "Public",
+  "workoutPrivateLabel": "Private",
+  "workoutCatalogLabel": "Catalog",
+  "workoutArchivedLabel": "Archived",
+  "createWorkoutTitle": "Create workout",
+  "editWorkoutTitle": "Edit workout",
+  "workoutDescriptionLabel": "Description (optional)",
+  "workoutPublicSwitchLabel": "Make public",
+  "workoutPublicSwitchHint": "Other users will be able to view it, but not edit it.",
+  "addIntervalAction": "Add interval",
+  "removeAction": "Remove",
+  "intervalNumberLabel": "Interval {number}",
+  "@intervalNumberLabel": {
+    "placeholders": {
+      "number": {
+        "type": "int"
+      }
+    }
+  },
+  "intervalDurationLabel": "Duration (seconds)",
+  "intervalTargetLowLabel": "Target minimum",
+  "intervalTargetHighLabel": "Target maximum",
+  "intervalLabelLabel": "Label (optional)",
+  "createWorkoutButton": "Create workout",
+  "archiveWorkoutAction": "Archive",
+  "archiveWorkoutConfirmTitle": "Archive this workout?",
+  "archiveWorkoutConfirmMessage": "You'll still be able to view it, but no longer edit it.",
+  "workoutArchivedSuccessMessage": "Workout archived.",
+  "workoutCreatedSuccessMessage": "Workout created.",
+  "workoutUpdatedSuccessMessage": "Workout updated.",
+  "workoutReadOnlyNotice": "This workout isn't yours — you can only view it.",
+  "workoutArchivedNotice": "This workout is archived and can't be edited.",
+  "backendSessionUnavailableMessage": "Couldn't connect to the workouts backend. Check your connection and try again.",
+  "validationAtLeastOneInterval": "Add at least one interval.",
+  "validationDurationRequired": "Enter a valid duration (1 to 36000 seconds).",
+  "validationTargetRangeInvalid": "The minimum target can't be greater than the maximum."
 }

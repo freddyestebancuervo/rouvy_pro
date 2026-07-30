@@ -86,10 +86,35 @@ class AppErrorHandler {
       case DioExceptionType.connectionError:
         return const NetworkFailure();
       default:
-        return ServerFailure(
-          error.response?.data?['message']?.toString() ??
-              'Error al comunicarse con el servidor.',
-        );
+        return _mapBackendResponse(error);
+    }
+  }
+
+  /// El backend propio (NestJS, `ApiExceptionFilter`) responde siempre con
+  /// el sobre `{ error: { code, message, requestId, details } }` — distinto
+  /// del `{ message }` plano que algunas respuestas de Firebase/Firestore
+  /// podían traer. Se lee `error.message` primero y solo se cae a
+  /// `data['message']` (formato antiguo, por si alguna llamada no-backend
+  /// pasara por acá) o a un texto genérico si no hay nada usable.
+  static Failure _mapBackendResponse(DioException error) {
+    final dynamic data = error.response?.data;
+    final Map<String, dynamic>? envelope =
+        (data is Map && data['error'] is Map) ? (data['error'] as Map).cast<String, dynamic>() : null;
+    final String message = (envelope?['message'] as String?) ??
+        (data is Map ? data['message']?.toString() : null) ??
+        'Error al comunicarse con el servidor.';
+
+    switch (error.response?.statusCode) {
+      case 401:
+        return AuthFailure(message);
+      case 404:
+        return NotFoundFailure(message);
+      case 409:
+        return ConflictFailure(message);
+      case 400:
+        return ValidationFailure(message);
+      default:
+        return ServerFailure(message);
     }
   }
 
