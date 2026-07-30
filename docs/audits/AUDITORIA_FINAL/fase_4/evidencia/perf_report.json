@@ -1,0 +1,73 @@
+{
+  "health_sequential": {
+    "label": "GET /v1/health — secuencial n=30",
+    "n": 30,
+    "ok": 30,
+    "errors": 0,
+    "avgMs": 541.6,
+    "p95Ms": 482.9,
+    "minMs": 187.6,
+    "maxMs": 8275.3
+  },
+  "health_concurrent": {
+    "label": "GET /v1/health — concurrente n=20",
+    "n": 20,
+    "ok": 20,
+    "errors": 0,
+    "avgMs": 429.6,
+    "p95Ms": 526,
+    "minMs": 218.4,
+    "maxMs": 548.7
+  },
+  "exchange_concurrent": {
+    "label": "POST /v1/auth/firebase/exchange — concurrente n=10 (mismo usuario, idempotente)",
+    "n": 10,
+    "ok": 7,
+    "errors": 3,
+    "avgMs": 1079.7,
+    "p95Ms": 1123.3,
+    "minMs": 1069.5,
+    "maxMs": 1123.3
+  },
+  "users_me_sequential": {
+    "label": "GET /v1/users/me — secuencial n=30",
+    "n": 30,
+    "ok": 30,
+    "errors": 0,
+    "avgMs": 272.8,
+    "p95Ms": 308.2,
+    "minMs": 203.7,
+    "maxMs": 316.2
+  },
+  "users_me_concurrent": {
+    "label": "GET /v1/users/me — concurrente n=20",
+    "n": 20,
+    "ok": 20,
+    "errors": 0,
+    "avgMs": 446.6,
+    "p95Ms": 602.3,
+    "minMs": 228.5,
+    "maxMs": 603.3
+  },
+  "refresh_sequential_chain": {
+    "label": "POST /v1/auth/refresh — cadena secuencial n=15 (single-use, rotacion)",
+    "n": 15,
+    "ok": 15,
+    "errors": 0,
+    "avgMs": 293.5,
+    "p95Ms": 335.8,
+    "minMs": 228.5,
+    "maxMs": 335.8
+  },
+  "refresh_concurrent_same_token": {
+    "n": 5,
+    "successes": 1,
+    "statuses": [
+      200,
+      401,
+      401,
+      401,
+      401
+    ]
+  }
+}

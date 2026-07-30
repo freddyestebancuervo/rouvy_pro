@@ -112,6 +112,13 @@ jobs:
       # arrancar) no necesite ninguna rama especial para CI.
       JWT_PRIVATE_KEY_PATH: ./secrets/jwt_private.pem
       JWT_PUBLIC_KEY_PATH: ./secrets/jwt_public.pem
+      # FirebaseAdminModule exige esta variable para arrancar (Bloque 4,
+      # feat/d2-firebase-auth-bridge) — proyecto ficticio, no real: los
+      # tests de este job mockean FirebaseTokenVerifierService, nunca
+      # llaman a la API de Firebase de verdad, así que no hace falta un
+      # proyecto ni credenciales reales, solo que la variable exista.
+      FIREBASE_PROJECT_ID: ridepro-ci
+      FIREBASE_CHECK_REVOKED: "false"
 
     steps:
       - uses: actions/checkout@v4

@@ -44,6 +44,24 @@ export class RefreshTokensRepository {
   }
 
   /**
+   * `POST /auth/logout` (Fase 3) — revoca ÚNICAMENTE el refresh token
+   * indicado, no todas las sesiones del usuario (a diferencia de
+   * `revokeAllForUser`, reservado para borrado de cuenta/detección de
+   * reuso). Acotado por `user_id` además de `token_hash`: un access token
+   * válido de un usuario nunca debe poder revocar un token de otro,
+   * aunque conociera su hash. Idempotente a propósito — si el token ya
+   * estaba revocado o no existe, la sentencia simplemente afecta 0 filas,
+   * sin lanzar ningún error (mismo criterio que un logout "ya cerrado" no
+   * debería ser un fallo del cliente).
+   */
+  async revokeOne(userId: string, tokenHash: string): Promise<void> {
+    await this.pool.query(
+      'UPDATE refresh_tokens SET revoked_at = now() WHERE user_id = $1 AND token_hash = $2 AND revoked_at IS NULL',
+      [userId, tokenHash],
+    );
+  }
+
+  /**
    * Implementa la rotación obligatoria + detección de reuso de la spec
    * sección 5.2, en una única transacción con `SELECT ... FOR UPDATE`
    * (bloquea la fila del token entrante) para que dos requests concurrentes

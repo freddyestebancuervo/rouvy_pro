@@ -15,6 +15,16 @@ import { resolveCorsOptions } from './config/cors.config';
 async function bootstrap(): Promise<void> {
   const app = await NestFactory.create<NestExpressApplication>(AppModule);
 
+  // Hallazgo real (auditoría Docker, Documento 22 Fase 2): sin esto, Nest
+  // NUNCA dispara los hooks `OnApplicationShutdown` (p. ej.
+  // `DatabasePoolShutdown` en `database/database.module.ts`, cuyo propio
+  // docblock ya afirmaba —incorrectamente, hasta esta línea— que cerraba
+  // el pool "en SIGTERM en producción"). Sin `enableShutdownHooks()`, un
+  // `docker stop`/SIGTERM real no cierra la app a tiempo y el orquestador
+  // termina forzando SIGKILL (confirmado: exit code 137, ~10s de espera,
+  // el timeout por defecto de Docker) en vez de una terminación limpia.
+  app.enableShutdownHooks();
+
   // Headers HTTP estándar de seguridad (X-Content-Type-Options,
   // X-Frame-Options, oculta X-Powered-By, etc.) — hallazgo de la revisión
   // de seguridad de cierre de fase (Bloque C): no había ninguna

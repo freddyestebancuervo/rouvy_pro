@@ -1,38 +1,111 @@
-# RidePro Backend (objetivo) — NestJS + PostgreSQL
+# RidePro Backend — NestJS + PostgreSQL
 
-Scaffold de la tarea **C2** (`ROADMAP_M0_M1.md`). Ver
-`docs/TECHNICAL_SPECIFICATION_M0_M1.md` sección 0 para por qué existe
-este backend en paralelo a Firebase (capa actual del cliente Flutter) —
-resumen: Firestore/Firebase Auth siguen siendo la fuente de verdad HOY;
-este backend es la ruta de escalado para lo que Firestore no modela bien
-(multijugador, analítica agregada, panel de admin con queries complejas).
+Backend propio de RidePro, en paralelo a Firebase (capa actual de autenticación/Firestore
+del cliente Flutter para Auth/Wearables/Training). Ver
+`docs/TECHNICAL_SPECIFICATION_M0_M1.md` sección 0 para por qué existe este backend:
+Firestore/Firebase Auth siguen siendo la fuente de verdad para lo que ya cubren; este
+backend es la ruta de escalado para lo que Firestore no modela bien (Equipment, Workouts,
+y a futuro multijugador/analítica agregada/panel de admin con queries complejas).
+
+**Auditado con evidencia real el 2026-07-26** (Documento 22,
+`docs/audits/AUDITORIA_FINAL/`) — este README reemplaza una versión anterior que
+describía un estado de scaffold temprano ya superado.
 
 ## Estado actual
 
-✅ Levanta, se conecta a Postgres, expone `GET /v1/health`.
-❌ **Sin lógica de negocio todavía** — `AuthModule`/`UsersModule` están
-vacíos a propósito (ver sus docblocks). Los endpoints reales
-(`POST /auth/register`, `POST /auth/login`) son la tarea **C3**.
+✅ Compila sin errores (`npm run build`).
+✅ **73/73 pruebas unitarias en verde** (8 suites — ver sección Pruebas).
+✅ 4 módulos de negocio completamente implementados (no vacíos): `AuthModule`,
+`UsersModule`, `EquipmentModule`, `WorkoutsModule`.
+✅ CI (`.github/workflows/ci.yml`, job `backend-tests`) aplica las migraciones y corre
+la suite e2e completa contra un Postgres 16 real en cada push/PR.
 
-⚠️ **No se ha podido instalar ni ejecutar en el entorno donde se
-escribió** (sin acceso a red para `npm install`, sin instancia de
-Postgres disponible) — mismo patrón de limitación que
-`firebase/rules-tests/`, ver `docs/SECURITY_AUDIT.md`. El código está
-escrito para ser correcto por inspección (sigue la API estándar de
-NestJS 10.x), pero no ha corrido ni una vez.
+## Módulos
 
-## Setup (en un entorno con red)
+### `AuthModule` (`src/modules/auth/`)
+- `POST /v1/auth/register`, `POST /v1/auth/login`, `POST /v1/auth/refresh`.
+- Contraseñas con `bcryptjs`; nunca en texto plano.
+- Detección de reutilización de refresh token: si un refresh token ya usado se
+  presenta de nuevo, se revocan **todos** los refresh tokens activos de ese usuario
+  (mitigación de robo de token) — verificado en la suite de pruebas.
+- Condición de carrera de email duplicado ya cerrada a nivel de base de datos
+  (índice único case-insensitive, migración `0002`), no solo a nivel de aplicación.
+
+### `UsersModule` (`src/modules/users/`)
+- Perfil de usuario (`GET`/`PATCH /v1/users/me`), eliminación de cuenta.
+
+### `EquipmentModule` (`src/modules/equipment/`)
+- Modelo polimórfico único para todo el equipamiento (bicicletas, rodillos, sensores
+  BLE) — agregar una categoría nueva es un `INSERT` en `equipment_categories`, nunca
+  una migración estructural.
+
+### `WorkoutsModule` (`src/modules/workouts/`)
+- Entrenamientos estructurados (calentamiento + series con objetivo de
+  potencia/frecuencia cardíaca). Filtro `?mine=true/false`. Sin búsqueda ni favoritos
+  todavía (ver Limitaciones).
+
+## PostgreSQL
+
+- `pg.Pool` directo, sin ORM — decisión deliberada del scaffold original, revisitable
+  cuando haya más lógica de negocio que lo justifique.
+- Pool cerrado correctamente en `OnApplicationShutdown` (sin fugas de conexión).
+- SSL ya soportado (`DATABASE_SSL=true`) para Postgres administrado (RDS, Cloud SQL, etc.).
+- **Migraciones** (`node-pg-migrate`, `migrations/*.sql`, 4 archivos aplicados en orden):
+  1. `0001_init.sql` — usuarios, roles, refresh tokens, sesiones de entrenamiento, audit log.
+  2. `0002_users_email_case_insensitive_unique.sql` — cierre de condición de carrera de email.
+  3. `0003_equipment.sql` — modelo polimórfico de equipamiento.
+  4. `0004_workouts.sql` — entrenamientos estructurados + intervalos.
+
+## Seguridad
+
+- **JWT RS256** (`src/jwt/token.service.ts`) — par de claves asimétricas, nunca un
+  secreto simétrico compartido. Claims `iss`/`aud`/`sub` verificados en cada request
+  (`JwtAuthGuard`). Refresh tokens hasheados con SHA-256 antes de persistirse — el
+  token en texto plano nunca se guarda.
+- **Rate limiting**: `ThrottlerGuard` global (100 req/60s por IP, defensa de respaldo)
+  + `RefreshThrottleGuard` específico para `/auth/refresh`.
+- **CORS** fail-closed (`src/config/cors.config.ts`): allowlist explícita vía
+  `CORS_ALLOWED_ORIGINS`; sin definir y `NODE_ENV=production` → cierre total.
+- **Validación**: `ValidationPipe` global (`whitelist`, `forbidNonWhitelisted`,
+  `transform`) — cualquier campo no declarado en el DTO se rechaza.
+- **Manejo de errores**: `ApiExceptionFilter` global — sobre único
+  `{ error: { code, message, requestId, details } }`; nunca expone stack traces al
+  cliente.
+- **Secretos**: `.env` y `secrets/*.pem` nunca se commitean (ver `.gitignore`),
+  confirmado con `git check-ignore`.
+
+## Health check
+
+`GET /v1/health` verifica conexión **real** a Postgres (`SELECT 1`), no solo que el
+proceso esté vivo:
+```json
+{"status":"ok","database":"connected"}
+```
+Responde `503` si la base no responde.
+
+## Pruebas disponibles
+
+```bash
+npm test        # Unitarias (Jest, sin Postgres) — 8 suites, 73 tests
+npm run test:e2e  # E2E (requiere DATABASE_URL real y accesible, no usa mocks)
+```
+
+## Setup local
 
 ```bash
 cd backend
 npm install
 cp .env.example .env
-# Editar .env con una DATABASE_URL real apuntando a un Postgres local o de desarrollo.
+# Editar .env con una DATABASE_URL real y generar las claves JWT:
+#   openssl genrsa -out secrets/jwt_private.pem 2048
+#   openssl rsa -in secrets/jwt_private.pem -pubout -out secrets/jwt_public.pem
 
-# Crear las tablas (ver migrations/0001_init.sql):
-psql "$DATABASE_URL" -f migrations/0001_init.sql
+npm run migrate:up   # Aplica las 4 migraciones en orden
 
-npm run start:dev
+npm run build         # Compila TypeScript → dist/
+npm run start:dev     # Arranca con reinicio automático (desarrollo)
+# o, ya compilado:
+npm run start:prod    # node dist/main
 ```
 
 Confirmar que levantó correctamente:
@@ -41,46 +114,56 @@ curl http://localhost:3000/v1/health
 # Esperado: {"status":"ok","database":"connected"}
 ```
 
-## Ejecutar el test e2e
-
-```bash
-npm run test:e2e
-```
-
-Requiere una `DATABASE_URL` real y accesible (no usa mocks — el propósito
-del único test que existe hoy es confirmar una conexión REAL a Postgres).
-
 ## Estructura
 
 ```
 backend/
 ├── src/
-│   ├── main.ts                 # bootstrap, prefijo /v1, validación global
-│   ├── app.module.ts            # módulo raíz
-│   ├── app.controller.ts        # GET /v1/health
-│   ├── config/
-│   │   └── database.config.ts   # pool de conexión a Postgres (pg, sin ORM todavía)
+│   ├── main.ts                      # bootstrap: helmet, CORS, prefijo /v1, ValidationPipe
+│   ├── app.module.ts                 # módulo raíz
+│   ├── app.controller.ts             # GET /v1/health
+│   ├── config/                       # database.config.ts, cors.config.ts
+│   ├── database/database.module.ts   # pool global de pg.Pool
+│   ├── jwt/                          # TokenService (RS256), JwtModule
+│   ├── common/                       # guards, filtros, decoradores, utils compartidos
 │   └── modules/
-│       ├── auth/auth.module.ts  # vacío — tarea C3
-│       └── users/users.module.ts# vacío — tarea C3/D1
-├── migrations/
-│   └── 0001_init.sql            # DDL completo, igual a la spec sección 2.2
-├── test/
-│   └── app.e2e-spec.ts          # test e2e del endpoint de salud
+│       ├── auth/                     # registro, login, refresh
+│       ├── users/                    # perfil, eliminación de cuenta
+│       ├── equipment/                # Bloque D1
+│       └── workouts/                 # Bloque D2
+├── migrations/                       # 4 archivos SQL, aplicados con node-pg-migrate
+├── test/                             # specs e2e (requieren Postgres real)
+├── scripts/seed_qa_workouts.js        # datos de prueba, solo QA local
 └── .env.example
 ```
 
+## Limitaciones actuales (honestas, no ocultarlas)
+
+- ❌ **Sin backend desplegado en ningún entorno cloud real** — solo corre local y en
+  CI (ver Documento 22 para el plan de despliegue de Development, no ejecutado
+  todavía).
+- ❌ **Sin puente Firebase↔NestJS** (`T-F1.5`, Documento 15) — este backend usa su
+  propio sistema de autenticación JWT, completamente independiente de Firebase Auth.
+  Un usuario autenticado con Firebase no tiene, hoy, ninguna forma automática de
+  autenticarse contra este backend.
+- ❌ **Sin rollback automático completo de migraciones** — las 4 migraciones son SQL
+  de "solo ida" (`node-pg-migrate up`), sin contraparte `.down.sql`. Revertir un
+  esquema hoy requiere SQL manual.
+- ❌ **Sin CI/CD de despliegue** — el workflow de CI solo compila/prueba, no publica
+  ninguna imagen ni despliega a ningún lado.
+- ❌ Sin logging estructurado ni observabilidad externa (métricas, tracing, alertas) —
+  solo el `Logger` nativo de Nest a stdout.
+
 ## Por qué `pg.Pool` directo y no un ORM
 
-Decisión deliberada de este scaffold, no una omisión: elegir entre
-TypeORM/Prisma/Drizzle es una decisión que vale la pena tomar cuando ya
-hay lógica de negocio real que escribir (tarea C3), no antes — un ORM mal
-elegido en este punto sería más caro de deshacer que no tener ninguno
-todavía.
+Decisión deliberada, no una omisión: elegir un ORM (TypeORM/Prisma/Drizzle) es una
+decisión que vale la pena tomar con más lógica de negocio de la que hay hoy — un ORM
+mal elegido en este punto sería más caro de deshacer que no tener ninguno todavía.
 
-## Siguiente paso
+## Próximos pasos sugeridos
 
-Tarea **C3** del roadmap: implementar `POST /auth/register` y
-`POST /auth/login` siguiendo el contrato exacto de
-`docs/TECHNICAL_SPECIFICATION_M0_M1.md` sección 1.2 (incluyendo el sobre
-de error estándar `{ "error": { "code", "message", "requestId" } }`).
+1. Desplegar Development a un entorno cloud real (Documento 22 — auditoría y plan,
+   fases de contenedorización/Cloud Run/Cloud SQL pendientes de autorización).
+2. Diseñar el puente Firebase↔NestJS (`T-F1.5`) cuando se priorice.
+3. Agregar migraciones `.down.sql` antes de tener datos reales en cualquier entorno
+   desplegado.

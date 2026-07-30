@@ -11,10 +11,24 @@ import { ApiExceptionFilter } from '../../src/common/filters/api-exception.filte
  * duplicado, cierre de fase Bloque C). Un cambio futuro en el bootstrap
  * real solo necesita reflejarse acá, no en cada archivo de test.
  */
-export async function createTestApp(): Promise<INestApplication> {
-  const moduleFixture: TestingModule = await Test.createTestingModule({
+/**
+ * `overrideProviders` (Fase 3, `/auth/firebase/exchange`): permite
+ * reemplazar un provider real por un mock ANTES de compilar el módulo —
+ * único mecanismo para no depender de Firebase real en la suite e2e
+ * (mockear `FirebaseTokenVerifierService`) manteniendo todo lo demás
+ * (Postgres, `TokenService`, rate limiting) real. Vacío por defecto: no
+ * cambia el comportamiento de ningún test existente.
+ */
+export async function createTestApp(
+  overrideProviders: Array<{ provide: unknown; useValue: unknown }> = [],
+): Promise<INestApplication> {
+  let moduleBuilder = Test.createTestingModule({
     imports: [AppModule],
-  }).compile();
+  });
+  for (const { provide, useValue } of overrideProviders) {
+    moduleBuilder = moduleBuilder.overrideProvider(provide).useValue(useValue);
+  }
+  const moduleFixture: TestingModule = await moduleBuilder.compile();
 
   const app = moduleFixture.createNestApplication();
   app.setGlobalPrefix('v1');
