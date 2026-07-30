@@ -37,5 +37,14 @@ export async function createTestApp(
   );
   app.useGlobalFilters(new ApiExceptionFilter());
   await app.init();
+  // Deja el servidor HTTP realmente escuchando (puerto efímero) en vez de
+  // confiar en que `supertest` abra/cierre un listener implícito por cada
+  // request contra un `http.Server` que nunca llamó a `listen()` — bajo
+  // ráfagas concurrentes inmediatamente después de un request serial
+  // previo (`auth-firebase-exchange-concurrency-existing-user.e2e-spec.ts`),
+  // ese ciclo implícito de listen/close competía consigo mismo y producía
+  // `read ECONNRESET` de forma determinística (confirmado: 10/10 fallos sin
+  // este `listen`, 0/15 fallos con él, en corridas repetidas idénticas).
+  await app.listen(0);
   return app;
 }

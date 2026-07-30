@@ -1,5 +1,7 @@
 import { HttpStatus, Injectable, Logger } from '@nestjs/common';
+import { InjectThrottlerStorage, ThrottlerStorage } from '@nestjs/throttler';
 import * as bcrypt from 'bcryptjs';
+import { createHash } from 'crypto';
 import { isPgUniqueViolation } from '../../common/database/pg-error.util';
 import { ApiException } from '../../common/exceptions/api.exception';
 import { FirebaseTokenVerifierService } from '../../firebase/firebase-token-verifier.service';
@@ -20,11 +22,33 @@ import { RegisterDto } from './dto/register.dto';
 import {
   FIREBASE_EMAIL_CONFLICT,
   FIREBASE_EMAIL_NOT_VERIFIED,
+  FIREBASE_EXCHANGE_RATE_LIMITED,
   FIREBASE_PROJECT_MISMATCH,
   FIREBASE_TOKEN_EXPIRED,
   FIREBASE_TOKEN_INVALID,
   FIREBASE_TOKEN_REVOKED,
 } from './firebase-exchange.errors';
+
+const RATE_LIMIT_WINDOW_MS = 15 * 60 * 1000;
+
+// Capa 2 (Fase 4.2 Parte 2) — por identidad real (Firebase UID), la
+// protección "de verdad": ni compartir IP ni rotar de red la elude.
+// Clave hasheada (SHA-256) a propósito — nunca se guarda ni loguea el
+// `firebase_uid` completo (mismo criterio que `AuditLogRepository`).
+const FIREBASE_EXCHANGE_UID_THROTTLER_NAME = 'firebase-exchange-uid';
+const FIREBASE_EXCHANGE_UID_LIMIT = 20;
+
+// Capa 3 (Fase 4.2 Parte 2) — respaldo por IP para tráfico YA verificado
+// (distinto del bucket de Capa 1 en el controller, que cubre tokens
+// inválidos/no verificados): mucho más generoso porque una IP compartida
+// (universidad, gimnasio, CGNAT) puede legítimamente traer decenas de
+// identidades distintas.
+const FIREBASE_EXCHANGE_IP_VERIFIED_THROTTLER_NAME = 'firebase-exchange-ip-verified';
+const FIREBASE_EXCHANGE_IP_VERIFIED_LIMIT = 100;
+
+function hashForRateLimitKey(value: string): string {
+  return createHash('sha256').update(value).digest('hex');
+}
 
 const BCRYPT_ROUNDS = 12;
 
@@ -91,6 +115,7 @@ export class AuthService {
     private readonly tokenService: TokenService,
     private readonly firebaseTokenVerifier: FirebaseTokenVerifierService,
     private readonly auditLogRepository: AuditLogRepository,
+    @InjectThrottlerStorage() private readonly throttlerStorage: ThrottlerStorage,
   ) {}
 
   async register(dto: RegisterDto): Promise<AuthResponse> {
@@ -200,7 +225,7 @@ export class AuthService {
    * `provider`) sale de acá si no vino DENTRO del token firmado — nunca
    * de un body, que esta ruta ni siquiera acepta (ver `AuthController`).
    */
-  async exchangeFirebaseToken(idToken: string): Promise<AuthResponse> {
+  async exchangeFirebaseToken(idToken: string, ip: string): Promise<AuthResponse> {
     const checkRevoked = process.env.FIREBASE_CHECK_REVOKED === 'true';
 
     let verified;
@@ -226,6 +251,36 @@ export class AuthService {
       // produce un ID token sin email, pero `email` es opcional en el
       // tipo del SDK.
       throw FIREBASE_TOKEN_INVALID();
+    }
+
+    // Capas 2 y 3 del rate limit híbrido (Fase 4.2 Parte 2) — recién acá,
+    // porque ambas necesitan una identidad YA verificada (Capa 1, en el
+    // controller/guard por IP, ya filtró tokens inválidos antes de llegar
+    // hasta acá). Capa 2 primero: es la protección real por identidad, más
+    // estricta; Capa 3 después, como respaldo para "muchas identidades
+    // desde una sola IP" sin penalizar redes compartidas legítimas.
+    const uidKey = `${FIREBASE_EXCHANGE_UID_THROTTLER_NAME}:${hashForRateLimitKey(verified.uid)}`;
+    const uidRecord = await this.throttlerStorage.increment(
+      uidKey,
+      RATE_LIMIT_WINDOW_MS,
+      FIREBASE_EXCHANGE_UID_LIMIT,
+      RATE_LIMIT_WINDOW_MS,
+      FIREBASE_EXCHANGE_UID_THROTTLER_NAME,
+    );
+    if (uidRecord.isBlocked) {
+      throw FIREBASE_EXCHANGE_RATE_LIMITED(Math.ceil(uidRecord.timeToBlockExpire));
+    }
+
+    const ipVerifiedKey = `${FIREBASE_EXCHANGE_IP_VERIFIED_THROTTLER_NAME}:${ip}`;
+    const ipVerifiedRecord = await this.throttlerStorage.increment(
+      ipVerifiedKey,
+      RATE_LIMIT_WINDOW_MS,
+      FIREBASE_EXCHANGE_IP_VERIFIED_LIMIT,
+      RATE_LIMIT_WINDOW_MS,
+      FIREBASE_EXCHANGE_IP_VERIFIED_THROTTLER_NAME,
+    );
+    if (ipVerifiedRecord.isBlocked) {
+      throw FIREBASE_EXCHANGE_RATE_LIMITED(Math.ceil(ipVerifiedRecord.timeToBlockExpire));
     }
 
     const provider = normalizeFirebaseProvider(verified.signInProvider);

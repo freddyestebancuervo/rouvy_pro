@@ -245,11 +245,54 @@ export class UsersRepository {
    * re-consulta por `firebase_uid` de abajo — si ya existe, ganó una
    * carrera legítima; si no, es un conflicto real de email.
    */
+  /**
+   * Fase 4.2 Parte 2 — reemplaza los dos `SELECT` secuenciales
+   * (`findByFirebaseUid` + `findByEmail`) que usaba `upsertByFirebaseUid`
+   * antes de esta fase por uno solo, parametrizado (sin concatenación
+   * dinámica). Como ambas condiciones se evalúan en el MISMO snapshot/
+   * round-trip, la fila que matchea por `firebase_uid` (si existe) y la que
+   * matchea por email (si existe) nunca pueden "verse" en momentos
+   * distintos — a diferencia de dos consultas secuenciales, acá no hay
+   * ventana en el medio donde otra transacción concurrente pueda cambiar
+   * la respuesta entre una y otra.
+   *
+   * Puede devolver hasta 2 filas DISTINTAS (una cuenta ya tiene ese
+   * `firebase_uid`, y una cuenta *diferente* ya tiene ese email — p. ej. el
+   * usuario cambió su email en Firebase a uno ya tomado por otra cuenta).
+   * La clasificación en JS de cuál fila matchea cuál condición decide el
+   * resultado en `upsertByFirebaseUid`, nunca se asume por el contenido de
+   * la fila.
+   */
+  private async findIdentityCandidates(
+    firebaseUid: string,
+    email: string,
+  ): Promise<{ byUid: UserRecord | null; byEmail: UserRecord | null }> {
+    const result = await this.pool.query(
+      `SELECT * FROM users
+       WHERE deleted_at IS NULL
+         AND (firebase_uid = $1 OR LOWER(email) = LOWER($2))`,
+      [firebaseUid, email],
+    );
+    const rows = result.rows.map(mapRow);
+    const byUid = rows.find((row) => row.firebaseUid === firebaseUid) ?? null;
+    const byEmail = rows.find((row) => row.email.toLowerCase() === email.toLowerCase()) ?? null;
+    return { byUid, byEmail };
+  }
+
   async upsertByFirebaseUid(
     params: UpsertByFirebaseUidParams,
   ): Promise<UpsertByFirebaseUidResult> {
-    const existingByUid = await this.findByFirebaseUid(params.firebaseUid);
-    if (existingByUid) {
+    const { byUid, byEmail } = await this.findIdentityCandidates(params.firebaseUid, params.email);
+
+    if (byUid) {
+      // El email también coincide con OTRA fila (cambió a uno ya tomado por
+      // una cuenta distinta) — conflicto real, nunca se fusiona por email,
+      // ni siquiera cuando la identidad estable (`firebase_uid`) ya es
+      // conocida. Sin este chequeo, el `UPDATE` de abajo reventaría con un
+      // `23505` crudo de `users_email_lower_unique` sin traducir.
+      if (byEmail && byEmail.id !== byUid.id) {
+        throw new FirebaseEmailConflictError(params.email);
+      }
       const result = await this.pool.query(
         `UPDATE users
          SET email = $2, email_verified = $3, display_name = $4, auth_provider = $5, updated_at = now()
@@ -266,21 +309,14 @@ export class UsersRepository {
       return { user: mapRow(result.rows[0]), isNew: false };
     }
 
-    const existingByEmail = await this.findByEmail(params.email);
-    if (existingByEmail) {
-      // Misma ventana de carrera que el `catch` de abajo, pero ANTES de
-      // llegar a la transacción: entre el `findByFirebaseUid` de arriba
-      // (todavía no existía) y este `findByEmail`, otra solicitud
-      // concurrente para el MISMO `firebaseUid` pudo haber terminado de
-      // insertar y confirmar — acá se ve como "ya existe alguien con este
-      // email", pero si ese alguien es exactamente este `firebaseUid`, no
-      // es un conflicto real, es la misma carrera legítima que el resto
-      // del método ya maneja. Un email de otra cuenta (`firebaseUid`
-      // distinto, o `null` en una cuenta legacy de password) sigue siendo
-      // el conflicto real de siempre.
-      if (existingByEmail.firebaseUid === params.firebaseUid) {
-        return { user: existingByEmail, isNew: false };
-      }
+    if (byEmail) {
+      // `byUid` fue `null` arriba — en el MISMO snapshot de una sola
+      // consulta, eso es imposible de reconciliar con
+      // `byEmail.firebaseUid === params.firebaseUid` (si lo fuera, esa
+      // misma fila ya habría aparecido como `byUid`). A diferencia de la
+      // versión de Fase 4.1 (dos consultas secuenciales), acá no hace falta
+      // volver a comparar: esta rama SIEMPRE es un conflicto real, ya sea
+      // `firebase_uid` de otra cuenta o `NULL` (cuenta legacy de password).
       throw new FirebaseEmailConflictError(params.email);
     }
 
@@ -322,7 +358,22 @@ export class UsersRepository {
         // aparece, la colisión fue por email contra una cuenta distinta —
         // conflicto real, mismo error que ya lanza el chequeo rápido de
         // arriba para el caso no concurrente.
-        const winner = await this.findByFirebaseUid(params.firebaseUid);
+        //
+        // Fase 4.2.1 — reusa el `client` YA retenido (en vez de
+        // `this.findByFirebaseUid`, que pide una conexión NUEVA del mismo
+        // `pool` mientras este `client` sigue sin liberarse hasta el
+        // `finally`): con suficientes colisiones concurrentes agotando el
+        // pool, cada "perdedor" quedaba reteniendo su conexión mientras
+        // esperaba una segunda del mismo pool ya agotado — deadlock por
+        // auto-referencia, resuelto recién por el timeout de adquisición
+        // (evidencia real: `pg_stat_activity` mostraba las conexiones
+        // `idle`/`ClientRead` tras el `ROLLBACK`, esperando al cliente, no
+        // bloqueadas por Postgres).
+        const winnerResult = await client.query(
+          'SELECT * FROM users WHERE firebase_uid = $1 AND deleted_at IS NULL',
+          [params.firebaseUid],
+        );
+        const winner = winnerResult.rows[0] ? mapRow(winnerResult.rows[0]) : null;
         if (winner) {
           return { user: winner, isNew: false };
         }
