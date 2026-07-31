@@ -192,10 +192,16 @@ jobs:
           # Patrones de fallo inequivoco (punto 15 de la tarea). Se
           # incluye ademas la variante textual real observada del SDK de
           # FirebaseCore para el caso de plist ausente/no empaquetado.
+          # Restringido a lineas que son realmente del proceso Runner
+          # (prefijo "Runner[PID:TID]"): "process terminated" y "fatal
+          # error" son frases genericas que tambien emiten otros procesos
+          # del simulador (extensiones de Health/Calendar, accountsd) y
+          # el propio `simctl log stream` al recibir SIGTERM durante la
+          # limpieza — ninguno de esos casos es un fallo de esta app.
           FATAL_REGEX="No Firebase App .?\[DEFAULT\]|Firebase has not been correctly initialized|[Cc]ould not (locate|find)[^\"]*GoogleService-Info\.plist|uncaught exception|fatal error|process terminated"
 
           FATAL_HIT=""
-          if grep -Eiq "$FATAL_REGEX" "$FIREBASE_LOG" sim_console.log 2>/dev/null; then
+          if grep -E "Runner\[[0-9]+:" "$FIREBASE_LOG" sim_console.log 2>/dev/null | grep -Eiq "$FATAL_REGEX"; then
             FATAL_HIT="yes"
           fi
           if grep -Eiq "CRASH_STATUS=(process_exited|crash_report_found|launch_failed)" crash_status.txt 2>/dev/null; then
@@ -204,10 +210,12 @@ jobs:
 
           # Senales positivas reales: solo se emiten por FirebaseAnalytics
           # o FirebaseMessaging cuando existe una FIRApp '[DEFAULT]'
-          # configurada; no se puede fabricar su aparicion solo por
-          # ausencia de errores.
+          # configurada, o corresponden a una conexion de red real hacia
+          # el backend de Firebase Installations con el GOOGLE_APP_ID
+          # correcto — ninguna se puede fabricar solo por ausencia de
+          # errores.
           POSITIVE_HIT=""
-          if grep -Eiq "Analytics.*started|Analytics collection enabled|FIRMessaging Remote Notifications proxy enabled" "$FIREBASE_LOG" 2>/dev/null; then
+          if grep -Eiq "Analytics.*started|Analytics collection enabled|FIRMessaging Remote Notifications proxy enabled|firebaseinstallations\.googleapis\.com" "$FIREBASE_LOG" 2>/dev/null; then
             POSITIVE_HIT="yes"
           fi
 
