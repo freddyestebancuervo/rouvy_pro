@@ -46,9 +46,7 @@
 	<string>RidePro necesita acceso a Bluetooth para conectarse a tu rodillo, pulsómetro y sensores de cadencia/velocidad durante el entrenamiento.</string>
 
 	<!-- ===================== Google Sign-In =====================
-	     ⚠️ PLACEHOLDER — reemplazar "com.googleusercontent.apps.YOUR_REVERSED_CLIENT_ID"
-	     por el valor REVERSED_CLIENT_ID real, tal cual aparece en tu
-	     GoogleService-Info.plist (clave REVERSED_CLIENT_ID).
+	     Ya configurado — ver GoogleService-Info.plist (clave REVERSED_CLIENT_ID).
 	     Ver SETUP_SOCIAL_LOGIN.md, sección 3 y 9. -->
 	<key>CFBundleURLTypes</key>
 	<array>
@@ -57,7 +55,7 @@
 			<string>Editor</string>
 			<key>CFBundleURLSchemes</key>
 			<array>
-				<string>com.googleusercontent.apps.YOUR_REVERSED_CLIENT_ID</string>
+				<string>com.googleusercontent.apps.731660820861-2f4o4t78j5u30d3gtb54v2a4117fie36</string>
 			</array>
 		</dict>
 	</array>

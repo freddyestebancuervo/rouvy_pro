@@ -23,10 +23,7 @@ class DefaultFirebaseOptions {
       case TargetPlatform.android:
         return android;
       case TargetPlatform.iOS:
-        throw UnsupportedError(
-          'DefaultFirebaseOptions have not been configured for ios - '
-          'you can reconfigure this by running the FlutterFire CLI again.',
-        );
+        return ios;
       case TargetPlatform.macOS:
         throw UnsupportedError(
           'DefaultFirebaseOptions have not been configured for macos - '
@@ -72,5 +69,15 @@ class DefaultFirebaseOptions {
     authDomain: 'ridepro-dbafe.firebaseapp.com',
     storageBucket: 'ridepro-dbafe.firebasestorage.app',
     measurementId: 'G-VNJ8RLNLQY',
+  );
+
+  static const FirebaseOptions ios = FirebaseOptions(
+    apiKey: 'AIzaSyCOlFzTpQgmdq4xObfZcPvr4y0JwhBK1z4',
+    appId: '1:731660820861:ios:66ffd802759ec547c16c14',
+    messagingSenderId: '731660820861',
+    projectId: 'ridepro-dbafe',
+    storageBucket: 'ridepro-dbafe.firebasestorage.app',
+    iosClientId: '731660820861-2f4o4t78j5u30d3gtb54v2a4117fie36.apps.googleusercontent.com',
+    iosBundleId: 'com.ridepro.app',
   );
 }
