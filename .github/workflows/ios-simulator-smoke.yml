@@ -3,10 +3,13 @@ name: iOS — simulator smoke test
 # Job EXPERIMENTAL y aislado — valida que RidePro compile, se instale y
 # arranque en un simulador de iOS hospedado por GitHub, sin firma de
 # código ni Apple ID. No ejecuta pruebas funcionales, UI automation,
-# login, Firebase, HealthKit, Apple Sign-In ni permisos — solo confirma
-# que el proceso de la app sigue vivo unos segundos después de lanzarla
-# y que no se generó ningún reporte de crash. No se declara check
-# obligatorio en esta primera versión.
+# login, HealthKit, Apple Sign-In ni permisos — solo confirma que el
+# proceso de la app sigue vivo unos segundos después de lanzarla, que no
+# se generó ningún reporte de crash, y (de forma puramente pasiva, vía
+# logs del sistema) si Firebase se inicializó sin errores fatales
+# conocidos. No ejecuta Google Sign-In, no valida Auth/Firestore/
+# Analytics funcional, no usa secretos. No se declara check obligatorio
+# en esta primera versión.
 on:
   workflow_dispatch: {}
   pull_request:
@@ -102,6 +105,18 @@ jobs:
           xcrun simctl spawn "$SIM_UDID" log stream --level debug --style compact > sim_console.log 2>&1 &
           LOG_PID=$!
 
+          # Captura filtrada, solo para el analisis de inicializacion de
+          # Firebase: predicado equivalente a process == "Runner" mas
+          # subsistemas/categorias relacionados con Firebase. Reduce el
+          # ruido de ~43MB del log general a un archivo pequeno y
+          # deterministico para el paso de analisis posterior. Puramente
+          # pasivo — no interactua con la app, no dispara ninguna
+          # funcionalidad.
+          xcrun simctl spawn "$SIM_UDID" log stream --level debug --style compact \
+            --predicate 'process == "Runner" AND (subsystem CONTAINS[c] "firebase" OR category CONTAINS[c] "Firebase" OR eventMessage CONTAINS[c] "Firebase" OR eventMessage CONTAINS[c] "FIRApp")' \
+            > firebase_runtime.log 2>&1 &
+          FIREBASE_LOG_PID=$!
+
           # Marca de tiempo justo antes de lanzar, para filtrar solo
           # reportes de crash generados DESPUÉS de este punto.
           touch /tmp/pre_launch_marker
@@ -142,6 +157,7 @@ jobs:
           fi
 
           kill "$LOG_PID" 2>/dev/null || true
+          kill "$FIREBASE_LOG_PID" 2>/dev/null || true
           sleep 1
 
           echo ""
@@ -158,6 +174,66 @@ jobs:
           echo "=== resumen final ==="
           cat crash_status.txt || echo "sin archivo de estado"
 
+      # Analisis PASIVO, posterior al lanzamiento — no interactua con la
+      # app ni con el simulador, solo lee los logs ya capturados.
+      # Clasifica la inicializacion de Firebase en runtime usando
+      # unicamente patrones de texto inequivocos. La ausencia de error no
+      # basta para declarar "initialized": si no hay una senal positiva
+      # verificable, el resultado es "indeterminate", nunca "initialized".
+      - name: Analyze Firebase runtime initialization
+        if: always()
+        run: |
+          FIREBASE_LOG="firebase_runtime.log"
+          touch "$FIREBASE_LOG" crash_status.txt
+
+          echo "=== firebase_runtime.log (filtrado, proceso Runner + subsistemas Firebase) ==="
+          cat "$FIREBASE_LOG" || echo "(vacio)"
+
+          # Patrones de fallo inequivoco (punto 15 de la tarea). Se
+          # incluye ademas la variante textual real observada del SDK de
+          # FirebaseCore para el caso de plist ausente/no empaquetado.
+          FATAL_REGEX="No Firebase App .?\[DEFAULT\]|Firebase has not been correctly initialized|[Cc]ould not (locate|find)[^\"]*GoogleService-Info\.plist|uncaught exception|fatal error|process terminated"
+
+          FATAL_HIT=""
+          if grep -Eiq "$FATAL_REGEX" "$FIREBASE_LOG" sim_console.log 2>/dev/null; then
+            FATAL_HIT="yes"
+          fi
+          if grep -Eiq "CRASH_STATUS=(process_exited|crash_report_found|launch_failed)" crash_status.txt 2>/dev/null; then
+            FATAL_HIT="yes"
+          fi
+
+          # Senales positivas reales: solo se emiten por FirebaseAnalytics
+          # o FirebaseMessaging cuando existe una FIRApp '[DEFAULT]'
+          # configurada; no se puede fabricar su aparicion solo por
+          # ausencia de errores.
+          POSITIVE_HIT=""
+          if grep -Eiq "Analytics.*started|Analytics collection enabled|FIRMessaging Remote Notifications proxy enabled" "$FIREBASE_LOG" 2>/dev/null; then
+            POSITIVE_HIT="yes"
+          fi
+
+          echo ""
+          echo "=== clasificacion ==="
+          echo "FATAL_HIT=${FATAL_HIT:-no}"
+          echo "POSITIVE_HIT=${POSITIVE_HIT:-no}"
+
+          if [ -n "$FATAL_HIT" ] && [ -z "$POSITIVE_HIT" ]; then
+            STATUS="failed"
+          elif [ -n "$POSITIVE_HIT" ] && [ -z "$FATAL_HIT" ]; then
+            STATUS="initialized"
+          else
+            # Mezcla de señales (error + positivo) o ausencia total de
+            # señal -> nunca se declara exito solo por falta de error.
+            STATUS="indeterminate"
+          fi
+
+          echo "FIREBASE_RUNTIME_STATUS=$STATUS" | tee -a firebase_status.txt
+          echo "Estado final: FIREBASE_RUNTIME_STATUS=$STATUS"
+
+          if [ "$STATUS" = "failed" ]; then
+            echo "Patron de fallo inequivoco detectado sin senal positiva de respaldo — el job falla."
+            exit 1
+          fi
+
       - name: Upload simulator logs
         if: always()
         uses: actions/upload-artifact@v4
@@ -166,6 +242,8 @@ jobs:
           path: |
             artifacts/ridepro-launch.png
             sim_console.log
+            firebase_runtime.log
+            firebase_status.txt
             crash_status.txt
             *.ips
             *.crash
