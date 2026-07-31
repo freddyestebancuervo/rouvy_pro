@@ -126,6 +126,19 @@ jobs:
               echo "STILL_RUNNING=false"
               echo "CRASH_STATUS=process_exited" >> crash_status.txt
             fi
+
+            # Evidencia visual adicional — solo se captura si el proceso
+            # sigue vivo tras la ventana de observación. No es una prueba
+            # funcional, no se abre ni se interpreta la imagen aquí.
+            mkdir -p artifacts
+            xcrun simctl io "$SIM_UDID" screenshot artifacts/ridepro-launch.png
+            if test -s artifacts/ridepro-launch.png; then
+              echo "Screenshot capturada correctamente."
+              file artifacts/ridepro-launch.png
+              ls -lh artifacts/ridepro-launch.png
+            else
+              echo "Screenshot no generada o vacia."
+            fi
           fi
 
           kill "$LOG_PID" 2>/dev/null || true
@@ -149,8 +162,9 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: ios-simulator-smoke-logs
+          name: ios-simulator-smoke-evidence
           path: |
+            artifacts/ridepro-launch.png
             sim_console.log
             crash_status.txt
             *.ips
