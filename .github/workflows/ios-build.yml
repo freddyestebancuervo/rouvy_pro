@@ -1,0 +1,95 @@
+name: iOS — build validation
+
+# Valida que la app iOS compile sin firma en un runner macOS hospedado por
+# GitHub (el propietario todavía no dispone de una Mac física). No
+# configura firma de código, no usa certificados ni provisioning
+# profiles, no publica ningún artefacto y no valida comportamiento en
+# runtime (Firebase, Google Sign-In, HealthKit, APNs, Keychain). No se
+# declara check obligatorio en esta primera versión estable — solo debe
+# promoverse a required check tras varias ejecuciones estables.
+on:
+  workflow_dispatch: {}
+  pull_request:
+    paths:
+      - 'ios/**'
+      - 'lib/**'
+      - 'pubspec.yaml'
+      - 'pubspec.lock'
+      - '.github/workflows/ios-build.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  ios-build:
+    name: iOS — build (no code signing)
+    runs-on: macos-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Environment diagnostics
+        run: |
+          echo "=== sw_vers ==="
+          sw_vers
+          echo "=== uname -a ==="
+          uname -a
+          echo "=== uname -m ==="
+          uname -m
+          echo "=== xcodebuild -version ==="
+          xcodebuild -version
+          echo "=== xcode-select -p ==="
+          xcode-select -p
+          echo "=== ruby --version ==="
+          ruby --version
+          echo "=== pod --version ==="
+          pod --version || echo "CocoaPods no preinstalado en este runner"
+
+      - name: Set up Flutter 3.32.0
+        uses: subosito/flutter-action@v2
+        with:
+          flutter-version: '3.32.0'
+          channel: stable
+
+      - name: Flutter doctor
+        run: |
+          flutter --version
+          dart --version
+          flutter doctor -v
+
+      - name: Get dependencies
+        run: flutter pub get
+
+      - name: Inspect iOS project
+        run: |
+          echo "=== find ios -maxdepth 3 -type f ==="
+          find ios -maxdepth 3 -type f | sort
+          echo ""
+          echo "=== presencia de archivos esenciales ==="
+          test -f ios/Runner.xcodeproj/project.pbxproj && echo "OK: ios/Runner.xcodeproj/project.pbxproj"
+          test -f ios/Runner.xcworkspace/contents.xcworkspacedata && echo "OK: ios/Runner.xcworkspace/contents.xcworkspacedata"
+          test -f ios/Runner/AppDelegate.swift && echo "OK: ios/Runner/AppDelegate.swift"
+          test -f ios/Runner/Info.plist && echo "OK: ios/Runner/Info.plist"
+          test -f ios/Runner/GoogleService-Info.plist && echo "OK: ios/Runner/GoogleService-Info.plist"
+          echo ""
+          echo "=== deployment target actual ==="
+          grep -n "IPHONEOS_DEPLOYMENT_TARGET" ios/Runner.xcodeproj/project.pbxproj
+
+      - name: Build iOS without code signing
+        run: flutter build ios --debug --no-codesign -v
+
+      - name: Inspect generated artifacts
+        if: always()
+        run: |
+          echo "=== git status --short (archivos generados durante el build) ==="
+          git status --short
+          echo ""
+          echo "=== búsqueda de artefactos de CocoaPods ==="
+          find ios -maxdepth 2 \( -iname "Podfile*" -o -iname "Pods" -o -iname ".symlinks" \) 2>/dev/null
+          echo ""
+          echo "=== salida de build/ios, si existe ==="
+          find build/ios -maxdepth 5 2>/dev/null || echo "no existe build/ios"
+          echo ""
+          echo "=== Runner.app, si se genero ==="
+          find build/ios -iname "Runner.app" -maxdepth 6 2>/dev/null || echo "Runner.app no encontrado"
