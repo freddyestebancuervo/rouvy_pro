@@ -64,6 +64,40 @@ jobs:
       - name: Get dependencies
         run: flutter pub get
 
+      # Diagnóstico temporal — investiga el bloqueador confirmado en el run
+      # 30598409150 (CocoaPods no pudo resolver "health" por deployment
+      # target insuficiente). Puramente informativo, no modifica el repo.
+      - name: Inspect health iOS requirements
+        run: |
+          echo "=== version resuelta de health (pubspec.lock) ==="
+          grep -A6 '^  health:' pubspec.lock
+
+          echo ""
+          echo "=== ruta del paquete health (package_config.json) ==="
+          HEALTH_LINE=$(grep -A3 '"name": "health"' .dart_tool/package_config.json | grep rootUri)
+          echo "$HEALTH_LINE"
+          HEALTH_PATH=$(echo "$HEALTH_LINE" | sed -E 's/.*"rootUri": "file:\/\/(.*)".*/\1/')
+          echo "Ruta resuelta: $HEALTH_PATH"
+
+          echo ""
+          echo "=== contenido del podspec de health ==="
+          find "$HEALTH_PATH" -iname "*.podspec" -exec echo "--- {} ---" \; -exec cat {} \;
+
+          echo ""
+          echo "=== deployment targets ios de todos los pods resueltos (barrido del pub-cache) ==="
+          for spec in $(find "$HOME/.pub-cache/hosted/pub.dev" -maxdepth 3 -iname "*.podspec" 2>/dev/null); do
+            match=$(grep -H "ios\.deployment_target\|s\.platform.*:ios" "$spec" 2>/dev/null || true)
+            if [ -n "$match" ]; then echo "$match"; fi
+          done
+
+          echo ""
+          echo "=== Podfile generado, si ya existe a esta altura ==="
+          cat ios/Podfile 2>/dev/null || echo "ios/Podfile no existe todavia (se genera durante el build)"
+
+          echo ""
+          echo "=== deployment targets actuales en project.pbxproj ==="
+          grep -n "IPHONEOS_DEPLOYMENT_TARGET" ios/Runner.xcodeproj/project.pbxproj
+
       - name: Inspect iOS project
         run: |
           echo "=== find ios -maxdepth 3 -type f ==="
@@ -79,14 +113,50 @@ jobs:
       - name: Build iOS without code signing
         run: flutter build ios --debug --no-codesign -v
 
+      # Prueba EFÍMERA — aplica el mínimo hallado (14.0, exigido por el
+      # podspec de "health") ÚNICAMENTE dentro del checkout temporal de
+      # este runner. No se hace commit ni push de este cambio; el
+      # checkout completo se destruye al terminar el job. Corre siempre
+      # (if: always()) para probar la hipótesis incluso si el intento
+      # anterior con 13.0 ya falló.
+      - name: Ephemeral test - bump deployment target to 14.0 (not committed)
+        if: always()
+        run: |
+          echo "=== aplicando 14.0 SOLO en este checkout efimero, sin commit ==="
+          sed -i '' 's/IPHONEOS_DEPLOYMENT_TARGET = 13.0;/IPHONEOS_DEPLOYMENT_TARGET = 14.0;/g' ios/Runner.xcodeproj/project.pbxproj
+          grep -n "IPHONEOS_DEPLOYMENT_TARGET" ios/Runner.xcodeproj/project.pbxproj
+
+          echo ""
+          echo "=== limpiando artefactos parciales del intento anterior ==="
+          rm -rf ios/Pods ios/.symlinks ios/Podfile ios/Podfile.lock
+
+          echo ""
+          echo "=== reintentando build con 14.0 ==="
+          flutter build ios --debug --no-codesign -v
+
       - name: Inspect generated artifacts (Podfile/CocoaPods/build output)
         if: always()
         run: |
           echo "=== git status --short (archivos generados durante el build) ==="
           git status --short
           echo ""
+          echo "=== git diff -- ios/Runner/Info.plist ==="
+          git diff -- ios/Runner/Info.plist
+          echo ""
+          echo "=== git diff -- ios/Flutter/Debug.xcconfig ==="
+          git diff -- ios/Flutter/Debug.xcconfig
+          echo ""
+          echo "=== git diff -- ios/Flutter/Release.xcconfig ==="
+          git diff -- ios/Flutter/Release.xcconfig
+          echo ""
+          echo "=== git diff -- pubspec.lock ==="
+          git diff -- pubspec.lock
+          echo ""
           echo "=== búsqueda de artefactos de CocoaPods ==="
           find ios -maxdepth 2 \( -iname "Podfile*" -o -iname "Pods" -o -iname ".symlinks" \) 2>/dev/null
           echo ""
           echo "=== salida de build/ios, si existe ==="
-          find build/ios -maxdepth 4 2>/dev/null || echo "no existe build/ios"
+          find build/ios -maxdepth 5 2>/dev/null || echo "no existe build/ios"
+          echo ""
+          echo "=== Runner.app, si se genero ==="
+          find build/ios -iname "Runner.app" -maxdepth 6 2>/dev/null || echo "Runner.app no encontrado"
