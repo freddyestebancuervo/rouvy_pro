@@ -3,6 +3,7 @@ import 'dart:io';
 import 'package:health/health.dart';
 import 'package:permission_handler/permission_handler.dart' as ph;
 
+import '../platform/platform_capabilities.dart';
 import 'health_availability.dart';
 import 'health_permission_status.dart';
 import 'health_platform_gateway.dart';
@@ -19,9 +20,19 @@ import 'health_platform_gateway.dart';
 /// `HealthDataType`/`HealthDataAccess` siguen teniendo esta forma — ver
 /// `HEALTH_SETUP.md`, sección "Mantenimiento del plugin".
 class HealthPlatformGatewayImpl implements HealthPlatformGateway {
-  HealthPlatformGatewayImpl() : _health = Health();
+  HealthPlatformGatewayImpl({bool Function()? isWeb})
+      : _health = Health(),
+        _isWeb = isWeb ?? (() => PlatformCapabilities.isWeb);
 
   final Health _health;
+
+  // Inyectable por tests — `kIsWeb`/`PlatformCapabilities.isWeb` es una
+  // constante de compilación, no mockeable en una corrida normal de
+  // `flutter test` (VM). Mismo patrón ya usado en
+  // `HealthPackageAdapter._isIOS` (`isIOS` inyectable) para poder probar
+  // la rama Web sin necesitar `flutter test --platform chrome`, que no
+  // está configurado en `ci.yml`.
+  final bool Function() _isWeb;
 
   /// Mismo conjunto de tipos que ya usaba `HealthPackageAdapter` — se
   /// centraliza aquí para que la solicitud de permisos y la lectura de
@@ -39,6 +50,16 @@ class HealthPlatformGatewayImpl implements HealthPlatformGateway {
 
   @override
   Future<HealthAvailability> checkAvailability() async {
+    if (_isWeb()) {
+      // `dart:io`'s `Platform.isIOS`/`Platform.isAndroid` lanzan
+      // `UnsupportedError` en tiempo de ejecución en Flutter Web — ninguna
+      // plataforma de salud aplica ahí de todas formas (ver el mismo
+      // veredicto ya existente más abajo para desktop), así que se
+      // devuelve `unavailable` ANTES de tocar `Platform`, sin esperar a
+      // que la comprobación de iOS/Android truene primero.
+      return HealthAvailability.unavailable;
+    }
+
     if (Platform.isIOS) {
       // HealthKit está presente en todo iOS desde la versión 8 — el único
       // caso real de "no disponible" es un iPad (algunas versiones de
@@ -74,7 +95,8 @@ class HealthPlatformGatewayImpl implements HealthPlatformGateway {
       }
     }
 
-    // Web/desktop: ninguna plataforma de salud aplicable.
+    // Desktop (Windows/Linux/macOS, no Web — Web ya se resolvió arriba):
+    // ninguna plataforma de salud aplicable.
     return HealthAvailability.unavailable;
   }
 
