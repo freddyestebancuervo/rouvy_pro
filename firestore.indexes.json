@@ -1,10 +1,4 @@
 {
-  "indexes": [
-    {
-      "collectionGroup": "ride_sessions",
-      "queryScope": "COLLECTION",
-      "fields": [{ "fieldPath": "startTime", "order": "DESCENDING" }]
-    }
-  ],
+  "indexes": [],
   "fieldOverrides": []
 }
