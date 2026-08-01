@@ -1,12 +1,46 @@
-# RidePro — Módulo de Autenticación completo (Clean Architecture)
+# Korixa
+
+> **Nombre del producto y del repositorio:** el producto se llama
+> **Korixa**. Este repositorio (`freddyestebancuervo/rouvy_pro`) y varios
+> identificadores técnicos conservan el nombre anterior del producto,
+> **RidePro**, y no han sido renombrados: nombre del repositorio
+> (`rouvy_pro`), Bundle ID de iOS (`com.ridepro.app`), nombres de archivo
+> como `RIDEPRO_DEVELOPMENT_PROTOCOL.md`, y referencias internas en
+> código/configuración. Este documento usa "Korixa" para el producto y
+> conserva los identificadores técnicos reales sin alterarlos — no se ha
+> ejecutado ninguna migración masiva de nombre. Ver
+> `PROJECT_STATUS.md` y `docs/product/PRODUCT_IDEAS_REGISTRY.md` para más
+> detalle.
+
+Korixa es una plataforma de ciclismo indoor construida en **Flutter**
+(cliente Android/iOS/Web, Windows como plataforma objetivo declarada
+— ver "Plataformas objetivo" abajo) + **Firebase** (Auth, Firestore,
+Analytics, Crashlytics, Messaging) + **NestJS/PostgreSQL** (backend
+propio para Equipment/Workouts, en paralelo a Firebase — ver
+`backend/README.md` y `docs/TECHNICAL_SPECIFICATION_M0_M1.md` sección 0
+para el porqué de dos fuentes de datos).
 
 > **Especificación técnica de producción:** antes de seguir extendiendo
 > M0/M1, revisar `docs/TECHNICAL_SPECIFICATION_M0_M1.md` (contratos de
 > API, esquema de datos, seguridad, tiempo real, offline-first,
 > arquitectura completa y cuellos de botella) y `ROADMAP_M0_M1.md` (el
-> siguiente paso exacto de implementación).
+> siguiente paso exacto de implementación). Para el núcleo funcional
+> futuro (equipamiento, entrenamientos, rutas, métricas), ver
+> `docs/TECHNICAL_SPECIFICATION_BLOQUE_D.md` — diseño propuesto, **sin
+> implementar**.
 
-Este proyecto incluye el **módulo de autenticación completo**: bienvenida,
+## Plataformas objetivo
+
+| Plataforma | Estado |
+|---|---|
+| Android | Implementado — proyecto nativo generado y en uso. |
+| iOS | Implementado y validado en CI: compila (dispositivo sin firma y simulador), se instala, arranca, renderiza y Firebase se inicializa en runtime (ver `PROJECT_STATUS.md` §1.1/§3). No validado: Auth/Firestore/Analytics funcional real, HealthKit, APNs, firma de código real. |
+| Web | Implementado — incluye el guard de plataforma para Wearables (`T-F0.1`, integrado a `main`). |
+| Windows | **Objetivo declarado, no implementado todavía.** El directorio nativo `windows/` no existe en `main`; generarlo y validar plugins de riesgo (Google/Apple Sign-In, Firebase con config de Web como placeholder) es la tarea abierta `T-F2.7` del backlog. |
+
+## Módulo de Autenticación (Clean Architecture)
+
+El módulo de autenticación está **completo e implementado**: bienvenida,
 registro, login (correo, Google, Apple), recuperación de contraseña,
 verificación de correo, perfil editable, logout y protección de rutas.
 Sirve de plantilla arquitectónica para el resto de features (rutas,
@@ -67,7 +101,7 @@ navegación — ninguna pantalla individual comprueba sesión manualmente:
 ```
 lib/
 ├── main.dart                          # Entry point: Firebase, errores globales, DI, runApp
-├── firebase_options.dart              # Placeholder — reemplazar con `flutterfire configure`
+├── firebase_options.dart              # Configuración real de Firebase (`ridepro-dbafe`), generada por FlutterFire CLI
 │
 ├── app/
 │   ├── app.dart                       # MaterialApp.router: conecta tema + router + l10n
@@ -190,19 +224,23 @@ Antes de compilar en un dispositivo real, revisar **`SETUP_SOCIAL_LOGIN.md`**
 de integraciones con wearables, y **`HEALTH_SETUP.md`** para la
 configuración específica de HealthKit/Health Connect.
 
-## ⚠️ Seguridad — acción pendiente antes de desplegar
+## Seguridad — reglas de Firestore y backend, validados en CI
 
 Se encontró y corrigió una vulnerabilidad crítica de escalada de
 privilegios en las reglas de Firestore (ver `docs/SECURITY_AUDIT.md`).
-La corrección está implementada (`firestore.rules` +
-`firebase/rules-tests/`), pero **los tests de seguridad no se han podido
-ejecutar en este entorno** (Node/Java sí están disponibles; el bloqueo es
-la falta de acceso a red para instalar Firebase CLI y las dependencias
-npm). Lo mismo aplica al scaffold del backend (`backend/`, tarea C2).
+La corrección (`firestore.rules` + `firebase/rules-tests/`) **está
+implementada y validada**: el job `Firestore — reglas de seguridad
+(A3/A5)` de CI corre 28 pruebas contra el emulador en cada PR, todas en
+verde (evidencia directa, run de CI de 2026-07-31 — ver
+`PROJECT_STATUS.md` §3 "Tests"). El backend (`backend/`, NestJS +
+PostgreSQL) tampoco es ya un scaffold sin ejecutar: existe, se prueba en
+CI contra un Postgres 16 real (86/86 pruebas e2e en verde) y tiene una
+imagen Docker de producción validada — ver `backend/README.md` y
+`PROJECT_STATUS.md`. **Pendiente:** despliegue real a un hosting en vivo
+(`T-F1.1`) y separación de proyectos Firebase por entorno (`T-F0.2`).
 
-**Ver `VERIFICATION_GUIDE.md`** para los comandos exactos, el resultado
-esperado de cada uno, y qué enviar de vuelta para validar ambos antes de
-continuar con C3. **Sin terminal disponible (p. ej. desde el celular)?**
+**Ver `VERIFICATION_GUIDE.md`** para los comandos exactos y el resultado
+esperado de cada uno. **Sin terminal disponible (p. ej. desde el celular)?**
 Ver `CI_CD_GUIDE.md` — mismo resultado, corriendo en GitHub Actions.
 
 ## Offline-First (`core/sync`)
@@ -289,9 +327,16 @@ app.
 ## Módulo de conexión BLE (`features/device_connection`)
 
 Escaneo, emparejamiento, reconexión automática y lectura en tiempo real de
-rodillos inteligentes (Wahoo, Tacx, Elite, Zwift Hub, JetBlack, ThinkRider —
-todos vía el estándar FTMS, sin SDK propietario por fabricante), medidores
-de potencia, sensores de cadencia/velocidad y pulsómetros.
+rodillos inteligentes, medidores de potencia, sensores de cadencia/velocidad
+y pulsómetros, implementado contra los **estándares BLE** (FTMS Indoor Bike
+Data, Cycling Power Measurement, CSC Measurement, Heart Rate Measurement),
+sin SDK propietario por fabricante. Esto da **compatibilidad prevista** con
+cualquier dispositivo que implemente correctamente estos estándares —
+incluyendo marcas habituales del mercado como Wahoo, Tacx, Elite, Zwift Hub,
+JetBlack o ThinkRider — pero el código y los tests actuales verifican los
+**protocolos y parsers** (con datos simulados/mockeados), no la validación
+física de cada marca/modelo real. **Validación con hardware real: pendiente**
+antes de afirmar compatibilidad confirmada dispositivo por dispositivo.
 
 - `core/ble/` — UUIDs GATT estándar del Bluetooth SIG y el wrapper de
   permisos (Android 12+ vs ≤11 vs iOS difieren bastante, ver `BLE_PERMISSIONS.md`).
