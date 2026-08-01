@@ -1,12 +1,15 @@
 rules_version = '2';
 
 // ============================================================================
-// REGLAS DE SEGURIDAD DE FIREBASE STORAGE — RidePro
+// REGLAS DE SEGURIDAD DE FIREBASE STORAGE — Korixa
 //
-// Estado: servicio COMPLETAMENTE DESHABILITADO a propósito. Firebase Storage
-// está declarado como dependencia del cliente (pubspec.yaml,
-// firebase_storage) pero SIN ningún consumidor de negocio activo hoy — el
-// único punto de código que lo menciona es un botón deshabilitado en
+// Estado: acceso de la aplicación COMPLETAMENTE DENEGADO por estas reglas.
+// Esto no afirma si el servicio Storage o un bucket están habilitados en la
+// infraestructura — solo describe el efecto de estas reglas sobre cualquier
+// acceso desde la app. Firebase Storage está declarado como dependencia del
+// cliente (pubspec.yaml, firebase_storage) pero SIN ningún consumidor de
+// negocio activo hoy — el único punto de código que lo menciona es un botón
+// todavía sin implementación funcional (su callback está vacío) en
 // profile_page.dart ("subir foto", ver Documento 2 §1.13 de la auditoría).
 //
 // Por eso estas reglas niegan TODO por defecto — mismo principio
