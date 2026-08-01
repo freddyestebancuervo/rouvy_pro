@@ -6,7 +6,7 @@
 
 - **Fecha de última actualización:** 2026-07-31
 - **Actualizado por:** Ejecutor técnico documental (sincronización de estado post-PR #16/#17)
-- **Commit actual de `main` (`origin/main`):** `cb6f65a4d3f51dc5e1037235fa9bf2216fe81391`
+- **Commit base de `main` auditado al iniciar este bloque:** `cb6f65a4d3f51dc5e1037235fa9bf2216fe81391`
 - **Rama de referencia:** `main` — `feature/d2` continúa como rama de desarrollo activo protegida (no se toca fuera de su propio flujo de integración por bloques)
 
 ---
@@ -113,7 +113,7 @@ Con `T-F0.1`, la cobertura de tests de Auth, y la validación de plataforma iOS 
 2. **`T-F0.2` — separación de entornos Firebase**: crear al menos 2 proyectos Firebase reales (no-producción/producción), migrar configuración de cliente y backend, formalizar matriz de entornos. Requiere decisión/autorización explícita del propietario antes de ejecutarse (ver `BACKLOG_MAESTRO.md`).
 3. **Continuar `T-F0.3`, `T-F0.4` y `T-F0.5`**: `docker-compose.yml` de desarrollo local, migración del rate limiter a Redis, paginación real en `equipment`/`workouts` — paralelizables entre sí, sin dependencias técnicas bloqueantes.
 
-**`main` (`cb6f65a`) es la línea base estable sobre la que se apoyan estos bloques** — cada uno debe partir de `origin/main` en una rama propia, siguiendo el mismo patrón de bloques aislados ya usado en toda la integración hasta ahora.
+**`cb6f65a` fue la base de `main` auditada al iniciar este PR** — no se presenta como el HEAD vigente de forma permanente: todo trabajo futuro debe partir del **HEAD vigente de `origin/main` después del merge** de este PR (y de cualquier PR posterior), en una rama propia, siguiendo el mismo patrón de bloques aislados ya usado en toda la integración hasta ahora.
 
 ## 5. Historial de cambios
 
