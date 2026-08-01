@@ -1,0 +1,30 @@
+rules_version = '2';
+
+// ============================================================================
+// REGLAS DE SEGURIDAD DE FIREBASE STORAGE — RidePro
+//
+// Estado: servicio COMPLETAMENTE DESHABILITADO a propósito. Firebase Storage
+// está declarado como dependencia del cliente (pubspec.yaml,
+// firebase_storage) pero SIN ningún consumidor de negocio activo hoy — el
+// único punto de código que lo menciona es un botón deshabilitado en
+// profile_page.dart ("subir foto", ver Documento 2 §1.13 de la auditoría).
+//
+// Por eso estas reglas niegan TODO por defecto — mismo principio
+// deny-by-default ya aplicado en firestore.rules — hasta que exista:
+//   1. Un diseño aprobado de la funcionalidad real (p. ej. fotos de perfil).
+//   2. Reglas específicas por ruta (p. ej. users/{uid}/profile/...),
+//      validando propietario, tamaño máximo y content-type — NO se
+//      implementan todavía, es deliberado (ver
+//      docs/audits/AUDITORIA_FINAL/11_PLAN_SEPARACION_FIREBASE.md, sección 6).
+//
+// Ver docs/audits/AUDITORIA_FINAL/12_PRERREQUISITOS_FIREBASE_RESULTADO.md
+// para el registro completo de esta tarea.
+// ============================================================================
+
+service firebase.storage {
+  match /b/{bucket}/o {
+    match /{allPaths=**} {
+      allow read, write: if false;
+    }
+  }
+}
