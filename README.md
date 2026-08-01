@@ -327,9 +327,16 @@ app.
 ## Módulo de conexión BLE (`features/device_connection`)
 
 Escaneo, emparejamiento, reconexión automática y lectura en tiempo real de
-rodillos inteligentes (Wahoo, Tacx, Elite, Zwift Hub, JetBlack, ThinkRider —
-todos vía el estándar FTMS, sin SDK propietario por fabricante), medidores
-de potencia, sensores de cadencia/velocidad y pulsómetros.
+rodillos inteligentes, medidores de potencia, sensores de cadencia/velocidad
+y pulsómetros, implementado contra los **estándares BLE** (FTMS Indoor Bike
+Data, Cycling Power Measurement, CSC Measurement, Heart Rate Measurement),
+sin SDK propietario por fabricante. Esto da **compatibilidad prevista** con
+cualquier dispositivo que implemente correctamente estos estándares —
+incluyendo marcas habituales del mercado como Wahoo, Tacx, Elite, Zwift Hub,
+JetBlack o ThinkRider — pero el código y los tests actuales verifican los
+**protocolos y parsers** (con datos simulados/mockeados), no la validación
+física de cada marca/modelo real. **Validación con hardware real: pendiente**
+antes de afirmar compatibilidad confirmada dispositivo por dispositivo.
 
 - `core/ble/` — UUIDs GATT estándar del Bluetooth SIG y el wrapper de
   permisos (Android 12+ vs ≤11 vs iOS difieren bastante, ver `BLE_PERMISSIONS.md`).
