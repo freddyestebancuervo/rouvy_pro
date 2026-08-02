@@ -163,7 +163,7 @@ Revalidación de solo lectura de la infraestructura de `ridepro-development`, ej
 
 ### Authentication
 
-- Los proveedores de sign-in **no son verificables** mediante la sesión CLI actual: las consultas administrativas a Identity Toolkit (`config`, `defaultSupportedIdpConfigs`) devolvieron `403 Forbidden` por alcance/permiso insuficiente del token.
+- Los proveedores de sign-in **no son verificables** mediante la sesión CLI actual: las consultas administrativas a Identity Toolkit (`config`, `defaultSupportedIdpConfigs`) devolvieron `403 Forbidden` con la sesión actual; esta evidencia no permite aislar si la causa fue un rol IAM, alcance OAuth, configuración o estado de la API, u otra restricción. No se modificó IAM en ningún momento de esta revalidación.
 - No se afirma que Email/Password, Google, Apple, Teléfono, Anónimo u otro proveedor estén habilitados ni deshabilitados — el estado permanece indeterminado por esta vía.
 - Para Apple en particular: incluso si apareciera habilitado en Firebase, eso **no confirma** que la configuración en Apple Developer (Services ID, Key, Team ID, dominios asociados) esté completa — son sistemas independientes.
 
