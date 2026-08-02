@@ -4,9 +4,9 @@
 
 > Documento vivo. Se actualiza en la Etapa 10 (Cierre) de toda tarea, el mismo día en que se cierra, según `RIDEPRO_DEVELOPMENT_PROTOCOL.md` §6. Nunca se reescribe el historial de cambios — solo se agregan entradas nuevas al final. Fuente de los datos iniciales: `docs/audits/AUDITORIA_FINAL/MASTER_EXECUTION_PLAN.md` y `BACKLOG_MAESTRO.md` — cero hallazgos nuevos generados al crear este documento.
 
-- **Fecha de última actualización:** 2026-07-31
-- **Actualizado por:** Ejecutor técnico documental (sincronización de estado post-PR #16/#17)
-- **Commit base de `main` auditado al iniciar este bloque:** `cb6f65a4d3f51dc5e1037235fa9bf2216fe81391`
+- **Fecha de última actualización:** 2026-08-02
+- **Actualizado por:** Ejecutor técnico documental (revalidación de solo lectura post-PR #19, T-F0.2/C1)
+- **Commit base de `main` auditado al iniciar este bloque:** `253f2ce57461c70b6bdadb48b7ed517512c890be`
 - **Rama de referencia:** `main` — `feature/d2` continúa como rama de desarrollo activo protegida (no se toca fuera de su propio flujo de integración por bloques)
 
 ---
@@ -46,6 +46,11 @@ Tras v0.5.0, se ejecutó una segunda serie de bloques aislados, cada uno partien
 
 **Estado de iOS al cierre de este bloque:** la app compila para dispositivo (sin firma) y para simulador, se instala, arranca, renderiza su pantalla de bienvenida sin crash inmediato, y Firebase se inicializa correctamente en runtime en un simulador real de GitHub Actions (conexión de red confirmada a `firebaseinstallations.googleapis.com` y `firebase-settings.crashlytics.com`, señales de arranque de `FirebaseAnalytics`/`FirebaseMessaging` presentes, sin el patrón de error "no se pudo localizar `GoogleService-Info.plist`"). Esto **no constituye** validación de Auth/Firestore/Analytics funcional real, ni de HealthKit, ni de APNs — sigue pendiente.
 
+### 1.2 PRs #18 y #19 — sincronización documental y de configuración Firebase (post-PR #17)
+
+- **PR #18** (`docs/sync-korixa-project-state`) — reescritura de este documento y de `README.md` reflejando el estado real de `main` en `cb6f65a` (ver la entrada correspondiente del 2026-07-31 en la Sección 5); no introdujo cambios de infraestructura.
+- **PR #19** (`fix/tf02-sync-firestore-storage-config`) — integrado a `main` en el commit `253f2ce57461c70b6bdadb48b7ed517512c890be`: corrigió `firestore.indexes.json` a cero índices, agregó `storage.rules` con denegación por defecto (`allow read, write: if false` para todos los paths) y enlazó ese archivo desde `firebase.json`. **Estas reglas quedaron en el repositorio, no desplegadas contra ningún proyecto Firebase real** — ver `docs/audits/AUDITORIA_FINAL/17_CIERRE_FIRESTORE_RIDEPRO_DEVELOPMENT.md` sección 11 para la revalidación completa de solo lectura ejecutada después de este PR.
+
 ## 2. Porcentaje de avance
 
 El backlog original de 34 unidades (Fase 0-3) + 6 epics de Fase 4 + 8 transversales **no se recalculó exhaustivamente** en este cierre — la integración de v0.5.0 no ejecutó esas tareas bajo el protocolo de 10 etapas de `RIDEPRO_DEVELOPMENT_PROTOCOL.md`, solo consolidó en `main` código ya evaluado en la auditoría oficial. Único cambio verificado con evidencia directa:
@@ -70,7 +75,17 @@ CI estabilizado en Flutter 3.32.0 / Dart 3.8.0 (Bloque 0/2). Feature Workouts co
 Imagen de producción del backend validada (Bloque 3): build multi-stage, usuario no-root, `HEALTHCHECK` contra `/v1/health`, sin código fuente TypeScript ni `devDependencies` en el runtime.
 
 ### Firebase
-`ridepro-dbafe` sigue siendo el único proyecto de producción real (Auth, Android, Web, Windows-placeholder). La configuración de cliente iOS (Bundle ID `com.ridepro.app`, App ID, `firebase_options.dart`, `GoogleService-Info.plist`) ya está integrada en `main` (PRs #12/#17) y **el plist ya se empaqueta dentro de `Runner.app`**, con inicialización de Firebase confirmada en runtime en simulador (PR #16 — ver sección 1.1). La separación completa de entornos (`T-F0.2`/`C1`: proyectos Firebase separados dev/staging/prod) **sigue sin iniciarse en `main`** — solo existe como WIP parcial en `feature/d2` (prerrequisitos + sub-fase Firestore de `ridepro-development`, decisiones D1-D8 aprobadas por el propietario, sin trasladar a `main` todavía).
+`ridepro-dbafe` sigue siendo el único proyecto de producción real (Auth, Android, Web, Windows-placeholder). La configuración de cliente iOS (Bundle ID `com.ridepro.app`, App ID, `firebase_options.dart`, `GoogleService-Info.plist`) ya está integrada en `main` (PRs #12/#17) y **el plist ya se empaqueta dentro de `Runner.app`**, con inicialización de Firebase confirmada en runtime en simulador (PR #16 — ver sección 1.1).
+
+**`ridepro-development` — estado verificado por revalidación de solo lectura post-PR #19 (2026-08-02, detalle completo en `docs/audits/AUDITORIA_FINAL/17_CIERRE_FIRESTORE_RIDEPRO_DEVELOPMENT.md` sección 11):**
+- El proyecto **existe**; Firestore está creado en la región `southamerica-east1`.
+- PR #19 sincronizó a `main` (commit `253f2ce`): `firestore.indexes.json` con cero índices y `storage.rules` con denegación por defecto, enlazado desde `firebase.json` — **presentes en el repositorio, no desplegados** contra el proyecto real.
+- **No existe bucket físico de Cloud Storage** en el proyecto (confirmado vía `gcloud storage buckets list`).
+- Facturación **vinculada y con cuenta de Cloud Billing abierta** (`billingEnabled: true`) — esto confirma técnicamente el plan **Blaze**, según la documentación oficial de Firebase (vincular Cloud Billing actualiza automáticamente el plan); la etiqueta visual en Console no fue inspeccionada.
+- Presupuestos y alertas de facturación: **no verificables** — la API de Cloud Billing Budget está deshabilitada en el proyecto y no fue habilitada en esta revalidación.
+- Authentication: proveedores **no verificables** con la sesión CLI actual (respuestas `403 Forbidden` de la API administrativa de Identity Toolkit).
+- Existe **una app Web registrada**, con nombre visible heredado `RidePro Web (Development)` — registro autorizado por el propietario con posterioridad al plan inicial de esta sub-fase, no una anomalía.
+- La separación completa de entornos (`T-F0.2`/`C1`: proyectos Firebase separados dev/staging/prod, con Storage desplegado y Authentication configurado) **sigue sin completarse** — ver sección 4 para el detalle de lo pendiente. Trabajo adicional relacionado permanece como WIP en `feature/d2` sin integrar a `main`.
 
 **Cloud Firestore en `ridepro-dbafe` (producción) — estado verificado, no una suposición:** `docs/audits/AUDITORIA_FINAL/17_CIERRE_FIRESTORE_RIDEPRO_DEVELOPMENT.md` (cronología, ítem 4) documenta un intento real de determinar la región de Firestore de producción para replicarla en `ridepro-development`, y ese intento **reveló que Cloud Firestore nunca fue habilitado en `ridepro-dbafe`** — hallazgo verificado con evidencia técnica directa (no una API de permisos fallando, sino ausencia de base de datos), documentado el 2026-07-25, sin ID de backlog todavía y sin decisión del propietario sobre cómo proceder. Este hallazgo no ha sido re-verificado desde entonces (podría haber cambiado si alguien lo habilitó manualmente después de esa fecha, fuera de este repositorio) — se cita aquí como el último estado confirmado con evidencia, no como un hecho re-comprobado en esta tarea.
 
@@ -93,7 +108,7 @@ Evidencia directa verificada en el run de CI del PR #16 (`30670032910`/`30670032
 ### Estado de Fase 0 (`T-F0.1`-`T-F0.5`)
 
 - **`T-F0.1`/`A2`/`PLAT-1` (crash de Wearables en Flutter Web) — implementación integrada a `main` (PR #9), con evidencia automatizada aprobada** (`flutter analyze` 0 issues, test de regresión en verde). El protocolo (`RIDEPRO_DEVELOPMENT_PROTOCOL.md` §1, Etapa 5/Puerta 3) contempla además una validación manual en navegador real — esa comprobación adicional **sigue sin ejecutarse** por la misma limitación de infraestructura ya documentada (sin navegador real disponible en este entorno). Esto no significa que el código no esté integrado: el código y su test automatizado sí están en `main`; lo pendiente es exclusivamente esa verificación manual complementaria.
-- **`T-F0.2`/`C1`** — separación completa de entornos Firebase (Development/Staging/Production): **abierta**. No iniciada de forma integrada a `main`; prerrequisitos y sub-fase Firestore de `ridepro-development` avanzados solo como WIP en `feature/d2` (decisiones D1-D8 ya aprobadas por el propietario, sin ejecutar sobre `main`).
+- **`T-F0.2`/`C1`** — separación completa de entornos Firebase (Development/Staging/Production): **abierta — avance parcial**. `ridepro-development` existe, con Firestore creado en `southamerica-east1`, `firestore.indexes.json` (0 índices) y `storage.rules` (deny-by-default) ya integrados a `main` vía PR #19 (reglas presentes en el repositorio, no desplegadas contra el proyecto). Facturación vinculada, técnicamente Blaze. Pendiente: bucket de Storage físico, despliegue real de `storage.rules`, verificación de Authentication (bloqueada por permisos de la sesión CLI actual), presupuestos/alertas de facturación, matriz completa de entornos (Staging/Production) y trabajo adicional aún no integrado desde `feature/d2` (decisiones D1-D8 ya aprobadas por el propietario). Detalle completo en `docs/audits/AUDITORIA_FINAL/17_CIERRE_FIRESTORE_RIDEPRO_DEVELOPMENT.md` sección 11.
 - **`T-F0.3`** — `docker-compose.yml` para desarrollo local: **abierta**, sin iniciar.
 - **`T-F0.4`** — rate limiter en memoria → Redis: **abierta**, sin iniciar.
 - **`T-F0.5`** — paginación real en `equipment`/`workouts`: **abierta**, sin iniciar.
@@ -107,13 +122,12 @@ Evidencia directa verificada en el run de CI del PR #16 (`30670032910`/`30670032
 
 ## Próximos bloques
 
-Con `T-F0.1`, la cobertura de tests de Auth, y la validación de plataforma iOS (scaffold + Firebase + bundling del plist + inicialización en runtime) ya integrados a `main` (PRs #9-#17), el orden priorizado para el trabajo posterior es:
+Con `T-F0.1`, la cobertura de tests de Auth, la validación de plataforma iOS (scaffold + Firebase + bundling del plist + inicialización en runtime) ya integrados a `main` (PRs #9-#17), y el avance parcial de `T-F0.2`/`C1` (PR #19: índices Firestore + `storage.rules` deny-by-default en el repositorio, revalidado el 2026-08-02), el orden priorizado para el trabajo posterior es:
 
-1. **Cierre documental**: sincronizar `PROJECT_STATUS.md`/`README.md` con el estado real post-PR #16/#17 y registrar el ecosistema de ideas de producto (este bloque).
-2. **`T-F0.2` — separación de entornos Firebase**: crear al menos 2 proyectos Firebase reales (no-producción/producción), migrar configuración de cliente y backend, formalizar matriz de entornos. Requiere decisión/autorización explícita del propietario antes de ejecutarse (ver `BACKLOG_MAESTRO.md`).
-3. **Continuar `T-F0.3`, `T-F0.4` y `T-F0.5`**: `docker-compose.yml` de desarrollo local, migración del rate limiter a Redis, paginación real en `equipment`/`workouts` — paralelizables entre sí, sin dependencias técnicas bloqueantes.
+1. **`T-F0.2`/`C1` — decisiones pendientes de `ridepro-development`**: definir con el propietario, sin ejecutar todavía, si/cuándo desplegar `storage.rules` contra el proyecto real, si/cuándo habilitar y verificar Authentication con permisos ampliados, y si/cuándo crear presupuestos de facturación — ninguna de estas tres acciones tiene autorización para ejecutarse en este momento. En paralelo, formalizar la matriz completa de entornos (Staging/Production), que sigue sin iniciarse.
+2. **Continuar `T-F0.3`, `T-F0.4` y `T-F0.5`**: `docker-compose.yml` de desarrollo local, migración del rate limiter a Redis, paginación real en `equipment`/`workouts` — paralelizables entre sí, sin dependencias técnicas bloqueantes.
 
-**`cb6f65a` fue la base de `main` auditada al iniciar este PR** — no se presenta como el HEAD vigente de forma permanente: todo trabajo futuro debe partir del **HEAD vigente de `origin/main` después del merge** de este PR (y de cualquier PR posterior), en una rama propia, siguiendo el mismo patrón de bloques aislados ya usado en toda la integración hasta ahora.
+**`253f2ce` fue la base de `main` auditada al cerrar este bloque** — no se presenta como el HEAD vigente de forma permanente: todo trabajo futuro debe partir del **HEAD vigente de `origin/main`** después de cualquier PR posterior, en una rama propia, siguiendo el mismo patrón de bloques aislados ya usado en toda la integración hasta ahora.
 
 ## 5. Historial de cambios
 
@@ -144,6 +158,8 @@ Con `T-F0.1`, la cobertura de tests de Auth, y la validación de plataforma iOS 
 | 2026-07-31 | Workflow de smoke test extendido con captura y clasificación de logs de inicialización de Firebase en runtime (PR #16), actualizado con el fix de PR #17 y fusionado después de este. Run de CI propio del PR confirmó `FIREBASE_RUNTIME_STATUS=initialized`. |
 | 2026-07-31 | Producto renombrado a **Korixa** a nivel de marca/documentación — sin migración de identificadores técnicos heredados (repositorio, Bundle ID, nombres de archivo). Este documento y `README.md` sincronizados con el estado real de `main` (`cb6f65a`); creado `docs/product/PRODUCT_IDEAS_REGISTRY.md` como registro vivo y permanente de ideas de producto, separado de `BACKLOG_MAESTRO.md` (que permanece congelado, sin modificar). |
 | 2026-07-31 | Corrección del PR #18 (mismo commit de sincronización, sin abrir PR nuevo): (1) precisado que se fusionaron a `main` los PRs #8-#12 y #14-#17 — `PR #13` se cerró **sin fusionar** (workflow experimental de diagnóstico) y fue reemplazado por el PR estable `#14`; (2) corregida la contradicción sobre Cloud Firestore en `ridepro-dbafe`: el hallazgo de que nunca fue habilitado en producción está evidenciado en `docs/audits/AUDITORIA_FINAL/17_CIERRE_FIRESTORE_RIDEPRO_DEVELOPMENT.md` (intento real de determinar su región, 2026-07-25) — no re-verificado en esta tarea, citado como último estado confirmado; (3) `README.md` corregido para no afirmar hardware de marcas específicas (Wahoo/Tacx/Elite/etc.) como validado físicamente — se aclara "compatibilidad por estándar prevista, validación con hardware real pendiente"; (4) `docs/product/PRODUCT_IDEAS_REGISTRY.md` corregido: Korixa Receiver pasó de "Propuesta" a "Aprobada" con alcance detallado, se separó el offline de Firestore/Flutter del offline futuro de la estación, se diferenció la competencia local de gimnasio del multijugador masivo por Internet, y se agregaron 5 ideas omitidas (motor local de carrera, módulo visual Unity, salida a TV, rutas GPX, y la fila de offline de la estación) — total actualizado a 34 ideas, ninguna eliminada. |
+| 2026-08-01 | **PR #19** (`fix/tf02-sync-firestore-storage-config`) integrado a `main` (merge commit `253f2ce57461c70b6bdadb48b7ed517512c890be`): `firestore.indexes.json` corregido a cero índices, `storage.rules` nuevo con denegación por defecto, enlazado desde `firebase.json`. Reglas presentes en el repositorio, no desplegadas contra ningún proyecto Firebase real en ese PR. |
+| 2026-08-02 | Revalidación de solo lectura de `ridepro-development` posterior al PR #19 (`T-F0.2`/`C1`), sin ninguna mutación de infraestructura: confirmado `billingEnabled: true` con cuenta de Cloud Billing vinculada y abierta (técnicamente Blaze, sin inspección visual de la etiqueta en Console); presupuestos/alertas no verificables (API deshabilitada, no habilitada); cero buckets físicos de Storage; proveedores de Authentication no verificables con la sesión CLI actual (`403 Forbidden`); una app Web registrada (`RidePro Web (Development)`, excepción cronológica autorizada, pendiente renombrar a `Korixa Web (Development)`, no ejecutado). Detalle completo en `docs/audits/AUDITORIA_FINAL/17_CIERRE_FIRESTORE_RIDEPRO_DEVELOPMENT.md` sección 11. `T-F0.2`/`C1` permanece abierta con avance parcial, no declarada completada. |
 
 ---
 
