@@ -1,10 +1,9 @@
 import 'package:dio/dio.dart';
 
-import 'api_config.dart';
 import 'backend_auth_service.dart';
 
-BaseOptions _baseOptions() => BaseOptions(
-      baseUrl: ApiConfig.backendBaseUrl,
+BaseOptions _baseOptions(String backendBaseUrl) => BaseOptions(
+      baseUrl: backendBaseUrl,
       connectTimeout: const Duration(seconds: 10),
       receiveTimeout: const Duration(seconds: 15),
     );
@@ -12,37 +11,56 @@ BaseOptions _baseOptions() => BaseOptions(
 /// Cliente Dio SIN el interceptor de auth — lo usa [BackendAuthService] para
 /// sus propias llamadas de login/registro/refresh (evita el ciclo de que el
 /// interceptor de auth dispare, a su vez, otra ronda de auth).
-Dio createAuthlessBackendDio() => Dio(_baseOptions());
+///
+/// [backendBaseUrl] llega ya resuelto por entorno — ver
+/// `core/config/backend_config_resolver.dart` y `core/di/injection.dart`,
+/// el único lugar que debería llamar a esta función.
+Dio createAuthlessBackendDio(String backendBaseUrl) =>
+    Dio(_baseOptions(backendBaseUrl));
 
 /// Cliente Dio CON el interceptor de auth — lo usan los datasources de
 /// features (Workouts, y en el futuro Equipment) para llamar al backend ya
 /// autenticado, sin que cada uno tenga que saber nada de tokens.
-Dio createAuthenticatedBackendDio(BackendAuthService authService) {
-  final Dio dio = Dio(_baseOptions());
-  dio.interceptors.add(_BackendAuthInterceptor(authService));
+Dio createAuthenticatedBackendDio(
+  BackendAuthService authService,
+  String backendBaseUrl,
+) {
+  final Dio dio = Dio(_baseOptions(backendBaseUrl));
+  dio.interceptors.add(_BackendAuthInterceptor(authService, backendBaseUrl));
   return dio;
 }
 
 class _BackendAuthInterceptor extends Interceptor {
-  _BackendAuthInterceptor(this._authService);
+  _BackendAuthInterceptor(this._authService, this._backendBaseUrl);
 
   final BackendAuthService _authService;
+  final String _backendBaseUrl;
 
   @override
-  Future<void> onRequest(RequestOptions options, RequestInterceptorHandler handler) async {
+  Future<void> onRequest(
+    RequestOptions options,
+    RequestInterceptorHandler handler,
+  ) async {
     try {
       final String token = await _authService.ensureAccessToken();
       options.headers['Authorization'] = 'Bearer $token';
       handler.next(options);
     } catch (error, stackTrace) {
       handler.reject(
-        DioException(requestOptions: options, error: error, stackTrace: stackTrace),
+        DioException(
+          requestOptions: options,
+          error: error,
+          stackTrace: stackTrace,
+        ),
       );
     }
   }
 
   @override
-  Future<void> onError(DioException err, ErrorInterceptorHandler handler) async {
+  Future<void> onError(
+    DioException err,
+    ErrorInterceptorHandler handler,
+  ) async {
     // Reintento único: un 401 acá significa que el token que SE ADJUNTÓ
     // (distinto del caso "no hay sesión", ya cubierto en onRequest) fue
     // rechazado por el backend — pudo expirar justo entre que se leyó y se
@@ -56,7 +74,9 @@ class _BackendAuthInterceptor extends Interceptor {
         final RequestOptions retryOptions = err.requestOptions
           ..headers['Authorization'] = 'Bearer $token'
           ..extra['retried'] = true;
-        final Response<dynamic> response = await Dio(_baseOptions()).fetch<dynamic>(retryOptions);
+        final Response<dynamic> response = await Dio(
+          _baseOptions(_backendBaseUrl),
+        ).fetch<dynamic>(retryOptions);
         handler.resolve(response);
         return;
       } catch (_) {

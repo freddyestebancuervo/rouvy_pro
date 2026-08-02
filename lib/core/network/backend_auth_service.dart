@@ -14,12 +14,29 @@ import 'backend_session.dart';
 /// propias llamadas de login/registro/refresh — evita el ciclo de que el
 /// interceptor que lo invoca dispare, a su vez, otra ronda de auth.
 class BackendAuthService {
-  BackendAuthService({required Dio authlessDio, required BackendSessionStore store})
-      : _dio = authlessDio,
-        _store = store;
+  BackendAuthService({
+    required Dio authlessDio,
+    required BackendSessionStore store,
+    required bool allowsDevBackendTestUser,
+    bool isDebugMode = kDebugMode,
+  })  : _dio = authlessDio,
+        _store = store,
+        _allowsDevBackendTestUser = allowsDevBackendTestUser,
+        _isDebugMode = isDebugMode;
 
   final Dio _dio;
   final BackendSessionStore _store;
+
+  /// `AppEnvironment.allowsDevBackendTestUser` — ver ese campo para el
+  /// porqué (incidente "Error al comunicarse con el servidor").
+  final bool _allowsDevBackendTestUser;
+
+  /// Parámetro (no una lectura directa de `kDebugMode`) para que esta
+  /// clase sea unit-testeable sin depender del modo de compilación real
+  /// del test runner — mismo patrón que `resolveGoogleSignInClientId`
+  /// (`core/di/injection.dart`) y `resolveBackendBaseUrl`
+  /// (`core/config/backend_config_resolver.dart`).
+  final bool _isDebugMode;
 
   Future<String>? _inFlight;
 
@@ -29,7 +46,8 @@ class BackendAuthService {
   /// requests simultáneas sin sesión dispararían dos registros/logins en
   /// paralelo contra el backend.
   Future<String> ensureAccessToken() {
-    return _inFlight ??= _ensureAccessToken().whenComplete(() => _inFlight = null);
+    return _inFlight ??=
+        _ensureAccessToken().whenComplete(() => _inFlight = null);
   }
 
   /// Fuerza a descartar la sesión guardada — la usa el interceptor cuando
@@ -51,10 +69,12 @@ class BackendAuthService {
       await _store.clear();
     }
 
-    if (!kDebugMode) {
+    if (!_isDebugMode && !_allowsDevBackendTestUser) {
       throw StateError(
         'No hay sesión de backend disponible y no se puede iniciar sesión '
-        'automáticamente fuera de modo debug. Ver DevBackendTestUser.',
+        'automáticamente fuera de modo debug en este entorno '
+        '(AppEnvironment.allowsDevBackendTestUser == false). Ver '
+        'DevBackendTestUser.',
       );
     }
 
@@ -116,7 +136,8 @@ class BackendAuthService {
     return BackendSession(
       accessToken: data['accessToken'] as String,
       refreshToken: data['refreshToken'] as String,
-      expiresAt: DateTime.now().add(Duration(seconds: data['expiresIn'] as int)),
+      expiresAt:
+          DateTime.now().add(Duration(seconds: data['expiresIn'] as int)),
     );
   }
 }
