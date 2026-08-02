@@ -128,3 +128,61 @@ Dos caminos razonables, sin que uno sea objetivamente superior sin tu criterio d
 ---
 
 **Detenido aquí. A la espera de tu autorización para el siguiente paso.**
+
+---
+
+## 11. Revalidación posterior al PR #19 — 2026-08-02
+
+Revalidación de solo lectura de la infraestructura de `ridepro-development`, ejecutada después de que **PR #19** (`fix/tf02-sync-firestore-storage-config`) se integró a `main` (commit `253f2ce57461c70b6bdadb48b7ed517512c890be`). Este bloque no ejecutó ningún comando de escritura contra la infraestructura ni contra `feature/d2` — reutiliza evidencia ya obtenida en rondas de revalidación previas de la misma sesión de trabajo.
+
+### PR #19 — contenido integrado a `main`
+
+- `firestore.indexes.json` con **cero índices** (`{ "indexes": [], "fieldOverrides": [] }`), consistente con la corrección ya documentada en la sección 4 de este mismo documento.
+- `storage.rules` nuevo, **deny-by-default** (`allow read, write: if false` para todos los paths) — mismo principio ya aplicado en `firestore.rules`.
+- `firebase.json` actualizado para enlazar `storage.rules` (`"storage": { "rules": "storage.rules" }`).
+- **Estas reglas están presentes en el repositorio (`main`) pero no fueron desplegadas contra ningún proyecto Firebase real** en este bloque — su existencia en el árbol de trabajo no equivale a un `firebase deploy` ejecutado.
+
+### Facturación
+
+- `billingEnabled: true` confirmado vía `gcloud billing projects describe ridepro-development`.
+- Existe una cuenta de Cloud Billing vinculada y **abierta/activa** (confirmado vía `gcloud billing accounts describe`, sin exponer su identificador).
+- Esto **confirma técnicamente el plan Blaze**, porque la documentación oficial de Firebase establece que vincular una cuenta de Cloud Billing actualiza automáticamente el proyecto al plan Blaze (pago por uso) — referencia: `https://firebase.google.com/docs/projects/billing/firebase-pricing-plans`.
+- La etiqueta visual del plan en Firebase Console **no fue inspeccionada** en este bloque (sin acceso a navegador en este entorno); la confirmación anterior es técnica/API, no una lectura directa de la interfaz.
+
+### Presupuestos y alertas
+
+- **Estado desconocido / no verificable.** La API `Cloud Billing Budget` está deshabilitada en el proyecto (`SERVICE_DISABLED` al intentar `gcloud billing budgets list`).
+- No se afirma que existan cero presupuestos — solo que no pudieron listarse por esta vía sin habilitar la API, y la API **no fue habilitada**.
+- Aunque existieran presupuestos y alertas configurados, se aclara explícitamente que **las alertas de presupuesto no constituyen un límite automático de gasto** — son notificaciones, no un corte de facturación.
+
+### Storage
+
+- **Cero buckets físicos** encontrados en el proyecto (`gcloud storage buckets list --project=ridepro-development` → lista vacía).
+- No se infiere de este resultado el texto ni el estado visual que mostraría la pantalla de Firebase Console → Storage (no inspeccionada por falta de acceso a navegador).
+- No se afirma que el servicio Storage esté deshabilitado — solo que no existe físicamente un bucket verificable por esta vía en este momento.
+
+### Authentication
+
+- Los proveedores de sign-in **no son verificables** mediante la sesión CLI actual: las consultas administrativas a Identity Toolkit (`config`, `defaultSupportedIdpConfigs`) devolvieron `403 Forbidden` con la sesión actual; esta evidencia no permite aislar si la causa fue un rol IAM, alcance OAuth, configuración o estado de la API, u otra restricción. No se modificó IAM en ningún momento de esta revalidación.
+- No se afirma que Email/Password, Google, Apple, Teléfono, Anónimo u otro proveedor estén habilitados ni deshabilitados — el estado permanece indeterminado por esta vía.
+- Para Apple en particular: incluso si apareciera habilitado en Firebase, eso **no confirma** que la configuración en Apple Developer (Services ID, Key, Team ID, dominios asociados) esté completa — son sistemas independientes.
+
+### App Web
+
+- Existe una app registrada, plataforma **WEB**, nombre visible `RidePro Web (Development)` (confirmado vía `firebase apps:list --project ridepro-development`).
+- Esta app constituye una **excepción cronológica autorizada** por el propietario, posterior al plan inicial documentado en este mismo Documento 17 — no es una anomalía ni una decisión pendiente de tomar.
+- Queda pendiente, como trabajo futuro, **renombrar únicamente su nombre visible** a `Korixa Web (Development)` — este renombrado **no se ejecutó** en este bloque ni en ninguno de los bloques de revalidación de esta sesión.
+
+### Nota sobre la Sección 5 de este documento
+
+La afirmación original de la Sección 5 ("No apps found" — verificado en 4 ocasiones) fue **evidencia histórica válida al 2026-07-25**, fecha de cierre de esta sub-fase. La app Web descrita arriba apareció en una fecha posterior, fuera del alcance temporal de esa verificación original. Ambas afirmaciones son correctas para su respectivo momento — no hay contradicción, solo una evolución del estado del proyecto entre el 2026-07-25 y el 2026-08-02.
+
+### Veredicto de esta revalidación
+
+- La **sub-fase Firestore** de `ridepro-development` (Secciones 1-9 de este documento) **continúa aprobada** — nada en esta revalidación la contradice o la reabre.
+- La **revalidación post-PR #19** queda documentada en esta sección, con evidencia de solo lectura para facturación, Storage, Authentication y apps registradas.
+- **La Fase 1 completa y `T-F0.2`/`C1` siguen abiertas de forma parcial.** Los pendientes concretos, sin cambios respecto a la Sección 7, son: Storage (reglas presentes en `main` pero no desplegadas, sin bucket físico), Authentication (proveedores no verificables vía CLI actual), la matriz completa de entornos (Development/Staging/Production) y trabajo aún no integrado a `main` desde `feature/d2`. No se declara cerrada la Fase 1 ni `T-F0.2`/`C1` en su totalidad.
+
+---
+
+**Detenido aquí. Revalidación documental cerrada, sin ninguna acción sobre infraestructura.**
