@@ -5,5 +5,8 @@
   "QA_BACKEND_PASSWORD": "elegir-una-contraseña-solo-local",
   "QA_BACKEND_DISPLAY_NAME": "QA Workouts",
 
-  "USE_FIREBASE_EMULATORS": false
+  "USE_FIREBASE_EMULATORS": false,
+
+  "_comment_backend_override": "BACKEND_BASE_URL_OVERRIDE (Documento 21, Fase 0.3): opcional. Si se deja vacía o se omite, se usa la backendBaseUrl del AppEnvironment activo (environment_development.dart / environment_production.dart) sin ningún cambio. Solo sirve para apuntar tu build local a un backend NestJS distinto del definido por el entorno (p. ej. otra máquina en tu red, o un túnel) — nunca selecciona ni afecta el proyecto Firebase ni el Google Web Client ID, que siguen fijos por el entry point (main.dart / main_development.dart). Debe ser una URL http/https completa con host, p. ej. \"http://192.168.1.50:3000/v1\" — no se corrige ni se completa automáticamente si está mal formada.",
+  "BACKEND_BASE_URL_OVERRIDE": ""
 }

@@ -2,14 +2,15 @@ import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:connectivity_plus/connectivity_plus.dart';
 import 'package:dio/dio.dart';
 import 'package:firebase_auth/firebase_auth.dart';
-import 'package:flutter/foundation.dart' show kIsWeb;
+import 'package:flutter/foundation.dart' show kIsWeb, visibleForTesting;
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:get_it/get_it.dart';
 import 'package:google_sign_in/google_sign_in.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import '../ble/ble_permission_handler.dart';
-import '../config/social_login_config.dart';
+import '../config/app_environment.dart';
+import '../config/backend_config_resolver.dart';
 import '../health/health_platform_gateway.dart';
 import '../health/health_platform_gateway_impl.dart';
 import '../network/backend_auth_service.dart';
@@ -76,7 +77,45 @@ import '../../features/routes_catalog/domain/repositories/routes_repository.dart
 /// a registro por anotaciones cuando el número de features crezca.
 final GetIt sl = GetIt.instance; // sl = "service locator"
 
-Future<void> initDependencyInjection() async {
+/// Resuelve el `clientId` real que se pasa a `GoogleSignIn`, separado de
+/// `initDependencyInjection` para que sea unit-testeable sin necesitar
+/// compilar a Web real (el llamador le pasa el valor real de `kIsWeb`).
+///
+/// En Android/iOS (`isWeb: false`) siempre devuelve `null` — el valor se
+/// ignora en esas plataformas, se resuelve de forma nativa vía
+/// `google-services.json` / `GoogleService-Info.plist`.
+///
+/// En Web (`isWeb: true`) exige `googleWebClientId` no nulo ni vacío y lo
+/// devuelve tal cual — sin valor por defecto y sin fallback a ningún otro
+/// entorno. Cada entry point (`main.dart`, `main_development.dart`) debe
+/// pasar el Client ID oficial de su propio proyecto Firebase.
+@visibleForTesting
+String? resolveGoogleSignInClientId({
+  required bool isWeb,
+  required String? googleWebClientId,
+}) {
+  if (!isWeb) return null;
+  if (googleWebClientId == null || googleWebClientId.isEmpty) {
+    throw StateError(
+      'googleWebClientId es obligatorio para builds Web. El entry point '
+      '(main.dart / main_development.dart) debe pasarlo explícitamente a '
+      'initDependencyInjection() — no existe un valor por defecto ni un '
+      'fallback silencioso a otro entorno.',
+    );
+  }
+  return googleWebClientId;
+}
+
+Future<void> initDependencyInjection(AppEnvironment environment) async {
+  final String? resolvedGoogleSignInClientId = resolveGoogleSignInClientId(
+    isWeb: kIsWeb,
+    googleWebClientId: environment.googleSignInWebClientId,
+  );
+  // Resuelto ANTES de registrar los clientes Dio del backend (Documento 21,
+  // Fase 0.3) — nunca se lee `BACKEND_BASE_URL_OVERRIDE` ni
+  // `environment.backendBaseUrl` por separado en otro lugar.
+  final String resolvedBackendBaseUrl = resolveBackendBaseUrl(environment);
+
   // ---------------------------------------------------------------------
   // Externos (SDKs de terceros) — siempre singletons, una sola instancia
   // ---------------------------------------------------------------------
@@ -86,17 +125,15 @@ Future<void> initDependencyInjection() async {
   sl.registerLazySingleton<GoogleSignIn>(
     () => GoogleSignIn(
       scopes: <String>['email', 'profile'],
-      // En Android/iOS este parámetro se ignora (se resuelve de forma
-      // nativa vía google-services.json / GoogleService-Info.plist); en
-      // Web es OBLIGATORIO — sin él, `signIn()` falla en silencio.
-      clientId: kIsWeb ? SocialLoginConfig.googleWebClientId : null,
+      clientId: resolvedGoogleSignInClientId,
     ),
   );
 
   // `SharedPreferences.getInstance()` es async — se resuelve UNA vez aquí
   // y se registra la instancia ya lista (no la `Future`), para que el
   // resto del código la use de forma síncrona vía `sl<SharedPreferences>()`.
-  final SharedPreferences sharedPreferences = await SharedPreferences.getInstance();
+  final SharedPreferences sharedPreferences =
+      await SharedPreferences.getInstance();
   sl.registerLazySingleton<SharedPreferences>(() => sharedPreferences);
 
   // ---------------------------------------------------------------------
@@ -108,20 +145,25 @@ Future<void> initDependencyInjection() async {
   // disparar un ciclo de auth-dentro-de-auth); la "backendDio" es la que
   // consumen los datasources de features, ya con el token adjunto solo.
   // ---------------------------------------------------------------------
-  sl.registerLazySingleton<FlutterSecureStorage>(() => const FlutterSecureStorage());
-  sl.registerLazySingleton<BackendSessionStore>(() => BackendSessionStore(sl()));
+  sl.registerLazySingleton<FlutterSecureStorage>(
+    () => const FlutterSecureStorage(),
+  );
+  sl.registerLazySingleton<BackendSessionStore>(
+    () => BackendSessionStore(sl()),
+  );
   sl.registerLazySingleton<Dio>(
-    createAuthlessBackendDio,
+    () => createAuthlessBackendDio(resolvedBackendBaseUrl),
     instanceName: 'backendAuthlessDio',
   );
   sl.registerLazySingleton<BackendAuthService>(
     () => BackendAuthService(
       authlessDio: sl<Dio>(instanceName: 'backendAuthlessDio'),
       store: sl(),
+      allowsDevBackendTestUser: environment.allowsDevBackendTestUser,
     ),
   );
   sl.registerLazySingleton<Dio>(
-    () => createAuthenticatedBackendDio(sl()),
+    () => createAuthenticatedBackendDio(sl(), resolvedBackendBaseUrl),
     instanceName: 'backendDio',
   );
 
@@ -130,7 +172,9 @@ Future<void> initDependencyInjection() async {
   // ---------------------------------------------------------------------
   sl.registerLazySingleton<NetworkInfo>(() => NetworkInfoImpl(sl()));
   sl.registerLazySingleton<BlePermissionHandler>(BlePermissionHandler.new);
-  sl.registerLazySingleton<HealthPlatformGateway>(HealthPlatformGatewayImpl.new);
+  sl.registerLazySingleton<HealthPlatformGateway>(
+    HealthPlatformGatewayImpl.new,
+  );
   sl.registerLazySingleton<FirestoreSyncService>(
     () => FirestoreSyncService(networkInfo: sl(), firestore: sl()),
   );
@@ -139,7 +183,11 @@ Future<void> initDependencyInjection() async {
   // Feature: Auth
   // ---------------------------------------------------------------------
   sl.registerLazySingleton<AuthRemoteDataSource>(
-    () => AuthRemoteDataSourceImpl(firebaseAuth: sl(), firestore: sl(), googleSignIn: sl()),
+    () => AuthRemoteDataSourceImpl(
+      firebaseAuth: sl(),
+      firestore: sl(),
+      googleSignIn: sl(),
+    ),
   );
 
   sl.registerLazySingleton<AuthRepository>(
@@ -168,7 +216,10 @@ Future<void> initDependencyInjection() async {
   // sesiones de conexión activas, sus streams de telemetría — que debe
   // persistir durante toda la vida de la app, no recrearse en cada acceso.
   sl.registerLazySingleton<BleDataSource>(
-    () => BleDataSourceImpl(knownDevicesLocalDataSource: sl(), permissionHandler: sl()),
+    () => BleDataSourceImpl(
+      knownDevicesLocalDataSource: sl(),
+      permissionHandler: sl(),
+    ),
   );
 
   sl.registerLazySingleton<DeviceRepository>(
@@ -193,10 +244,14 @@ Future<void> initDependencyInjection() async {
   // `GarminAdapterImpl(...)` en este mapa — ver WEARABLES_SETUP.md.
   sl.registerLazySingleton<Map<WearableProviderType, WearableAdapter>>(
     () => <WearableProviderType, WearableAdapter>{
-      WearableProviderType.appleHealth:
-          HealthPackageAdapter(providerType: WearableProviderType.appleHealth, gateway: sl()),
-      WearableProviderType.googleFit:
-          HealthPackageAdapter(providerType: WearableProviderType.googleFit, gateway: sl()),
+      WearableProviderType.appleHealth: HealthPackageAdapter(
+        providerType: WearableProviderType.appleHealth,
+        gateway: sl(),
+      ),
+      WearableProviderType.googleFit: HealthPackageAdapter(
+        providerType: WearableProviderType.googleFit,
+        gateway: sl(),
+      ),
       WearableProviderType.garmin: GarminAdapter(),
       WearableProviderType.polar: PolarAdapter(),
       WearableProviderType.coros: CorosAdapter(),
