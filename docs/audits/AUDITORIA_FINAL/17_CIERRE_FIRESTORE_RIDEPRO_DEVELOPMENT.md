@@ -186,3 +186,73 @@ La afirmación original de la Sección 5 ("No apps found" — verificado en 4 oc
 ---
 
 **Detenido aquí. Revalidación documental cerrada, sin ninguna acción sobre infraestructura.**
+
+---
+
+## 12. Estado posterior a la creación manual del bucket y despliegue de Storage Rules — 2026-08-02
+
+### Cronología correcta
+
+La documentación de la Sección 11 (y su reflejo en `PROJECT_STATUS.md`) fue **correcta en el momento en que se fusionó** — no una afirmación errónea ni retirada:
+
+- **PR #20 fusionado:** `2026-08-02T17:50:48Z`. En ese momento, las verificaciones de solo lectura registraban **cero buckets físicos** en `ridepro-development` — evidencia confirmada dos veces de forma independiente antes de esa fusión.
+- **Posteriormente**, el propietario creó de forma **manual y autorizada** el bucket desde Firebase Console — una acción explícita fuera de la terminal de Claude Code, no una modificación desconocida ni una anomalía.
+- **Creación del bucket:** `2026-08-02T19:01:57Z`, aproximadamente 71 minutos después de la fusión del PR #20.
+
+Ambas afirmaciones (cero buckets al fusionar el PR #20; un bucket existente después) son correctas para su respectivo momento — la misma lógica de trazabilidad cronológica ya aplicada en la Sección 11 para la app Web.
+
+### Estado actual de Storage
+
+- **Bucket:** `ridepro-development.firebasestorage.app`
+- **URI:** `gs://ridepro-development.firebasestorage.app`
+- **Ubicación:** `SOUTHAMERICA-EAST1`
+- **Clase:** mostrada como **Standard** en Firebase Console; `gcloud`/la API de Cloud Storage devuelven `REGIONAL` — una **denominación heredada equivalente a Standard** para almacenamiento ubicado en una única región, no una clase distinta ni una discrepancia (referencia: `https://cloud.google.com/storage/docs/storage-classes#additional-classes`).
+- **Objetos:** `0`.
+- **Creado inicialmente en modo de producción** (Uniform Bucket-Level Access no forzado por defecto en ese modo, consistente con lo observado).
+- **Reglas activas:** `allow read, write: if false;` (deny-by-default, sin excepciones).
+- **Compilación local mediante emulador:** exitosa, contra un proyecto ficticio `demo-*`, sin conexión remota.
+- **Despliegue controlado ejecutado:** `firebase deploy --only storage --project ridepro-development --non-interactive`.
+- **Firebase CLI:** `14.27.0`.
+- **Resultado del despliegue:** reglas compiladas y publicadas correctamente contra `ridepro-development`; ningún otro servicio (Firestore, Authentication, Functions, Hosting, índices) fue desplegado ni tocado por ese comando.
+- **Prueba anónima real** sobre `prueba-denegada.txt` (sin token, `curl` solo capturando el código HTTP): **`403`** — confirma en producción que el deny-by-default está efectivamente aplicado.
+- **No se subieron archivos ni se realizaron escrituras de prueba** en ningún momento de esta verificación.
+
+### Presupuesto y facturación
+
+Verificación visual realizada por el propietario directamente en Google Cloud Console (reportada para este registro — esta sesión de Claude Code no tiene acceso a navegador y no pudo confirmarlo de forma independiente):
+
+- Facturación habilitada y cuenta de Cloud Billing vinculada.
+- Existe un presupuesto llamado **"presupuesto mensual korixa"**.
+- **Alcance:** proyecto `ridepro-development`, todos los servicios.
+- **Importe:** `50.000` en la moneda mostrada por la cuenta de facturación — la moneda exacta no quedó demostrada en esta verificación y no se asume ni se inventa aquí.
+- **Alertas configuradas** por gasto real en **50%, 90% y 100%** del presupuesto.
+- **Notificaciones** dirigidas a administradores/usuarios de facturación y a los propietarios del proyecto.
+- Es un **presupuesto de alertas** — no representa un límite automático de gasto ni detiene la facturación por sí solo.
+- No se incluye aquí ID de cuenta de facturación, correos electrónicos ni otros identificadores personales.
+- La etiqueta comercial exacta **"Blaze" permanece no confirmada**: la verificación visual reportada no incluyó evidencia explícita de esa palabra en Console: se mantiene la misma postura de la Sección 11 (confirmación técnica por vinculación de Cloud Billing, sin lectura directa de la etiqueta), sin deducirla únicamente de `billingEnabled: true`.
+
+### Authentication
+
+Verificación visual realizada por el propietario en Firebase Console → Authentication → Sign-in method (reportada para este registro, no confirmada de forma independiente por esta sesión):
+
+| Proveedor | Estado reportado |
+|---|---|
+| Email/Password | Habilitado |
+| Google | Habilitado |
+| Apple | Habilitado en Firebase |
+| Teléfono | No figuraba habilitado |
+| Anónimo | No figuraba habilitado |
+| MFA por SMS | No figuraba habilitado |
+
+- **"Apple habilitado en Firebase" no demuestra que Apple Developer esté configurado completamente** — son sistemas independientes, misma aclaración ya hecha en la Sección 11.
+- **No se modificó IAM** en ningún momento de este subbloque ni de los anteriores.
+- **No se modificó ningún proveedor de Authentication** durante este subbloque — es un registro de lo observado, no una acción ejecutada.
+- No se incluyen aquí correos, App IDs completos ni otros identificadores personales.
+
+### Veredicto de esta sección
+
+La infraestructura base de `ridepro-development` (Firestore, bucket regional vacío con reglas deny-by-default desplegadas, facturación vinculada con presupuesto de alertas, Authentication configurada visualmente) avanzó sustancialmente desde la Sección 11. **No se declara aquí el cierre total de `T-F0.2`/`C1` ni de la Fase 1** — quedan como salvedades separadas, sin resolver en este subbloque: la configuración integral de Apple Developer (fuera del alcance de Firebase Console), la matriz completa de entornos (Staging/Production), y cualquier otro criterio de cierre formal que no pueda demostrarse todavía con la evidencia disponible. El estado se refleja en `PROJECT_STATUS.md` como "abierta — infraestructura base completada; cierre formal pendiente de revisión de criterios".
+
+---
+
+**Detenido aquí. Registro documental cerrado, sin ninguna acción adicional sobre infraestructura.**
