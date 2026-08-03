@@ -8,7 +8,8 @@
 // ridepro-development` en cuanto se registren más plataformas.
 // ignore_for_file: type=lint
 import 'package:firebase_core/firebase_core.dart' show FirebaseOptions;
-import 'package:flutter/foundation.dart' show defaultTargetPlatform, kIsWeb;
+import 'package:flutter/foundation.dart'
+    show defaultTargetPlatform, kIsWeb, TargetPlatform;
 
 /// Espejo de `DefaultFirebaseOptions` (Production) para Development — ver
 /// `lib/core/config/environments/environment_development.dart`, que es el
@@ -16,13 +17,18 @@ import 'package:flutter/foundation.dart' show defaultTargetPlatform, kIsWeb;
 class DefaultFirebaseOptionsDevelopment {
   static FirebaseOptions get currentPlatform {
     if (kIsWeb) return web;
-    throw UnsupportedError(
-      'El proyecto Firebase de Development (`ridepro-development`) solo '
-      'tiene registrada una app Web hoy — no hay configuración para '
-      '$defaultTargetPlatform en este entorno. Registrá la app que falte '
-      'en Firebase (`firebase apps:create`) y agregala acá antes de correr '
-      'main_development.dart fuera de Web.',
-    );
+    switch (defaultTargetPlatform) {
+      case TargetPlatform.android:
+        return android;
+      default:
+        throw UnsupportedError(
+          'El proyecto Firebase de Development (`ridepro-development`) no '
+          'tiene configuración para $defaultTargetPlatform todavía (solo Web '
+          'y Android, T-F0.2 Bloque 5A) — iOS queda explícitamente pendiente. '
+          'Registrá la app que falte en Firebase (`firebase apps:create`) y '
+          'agregala acá antes de correr main_development.dart en esa plataforma.',
+        );
+    }
   }
 
   static const FirebaseOptions web = FirebaseOptions(
@@ -31,6 +37,17 @@ class DefaultFirebaseOptionsDevelopment {
     messagingSenderId: '1020003121433',
     projectId: 'ridepro-development',
     authDomain: 'ridepro-development.firebaseapp.com',
+    storageBucket: 'ridepro-development.firebasestorage.app',
+  );
+
+  /// Registrada en T-F0.2 Bloque 5A (Android Development Foundation).
+  /// Google Sign-In Android en Development queda pendiente de SHA-1/SHA-256
+  /// — ver docs/audits/AUDITORIA_FINAL/24_ANDROID_DEVELOPMENT_FOUNDATION.md.
+  static const FirebaseOptions android = FirebaseOptions(
+    apiKey: 'AIzaSyC51G-OHGDmZbFHgyRGhUFB-Cis-txJxW8',
+    appId: '1:1020003121433:android:cb71425e96b4fe430f6d88',
+    messagingSenderId: '1020003121433',
+    projectId: 'ridepro-development',
     storageBucket: 'ridepro-development.firebasestorage.app',
   );
 }

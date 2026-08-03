@@ -23,7 +23,9 @@ android {
         // al "Package name" configurado en Firebase Console. Debe coincidir
         // EXACTAMENTE, o google-services.json no encontrará la
         // configuración correcta en tiempo de ejecución (ver
-        // SETUP_SOCIAL_LOGIN.md, sección 2).
+        // SETUP_SOCIAL_LOGIN.md, sección 2). Sin cambios en este bloque
+        // (T-F0.2 Bloque 5A) — Production no se toca; ver flavor
+        // "production" abajo, que hereda este mismo valor sin alterarlo.
         applicationId = "com.ridepro.app.YOUR_APPLICATION_ID"
 
         // flutter_blue_plus (BLE) requiere minSdk 21 como mínimo; se fija
@@ -34,6 +36,27 @@ android {
         targetSdk = flutter.targetSdkVersion
         versionCode = flutter.versionCode
         versionName = flutter.versionName
+    }
+
+    // T-F0.2 Bloque 5A — flavor por entorno. "production" hereda el
+    // applicationId de defaultConfig sin modificarlo (Production no se
+    // toca en este bloque); "development" usa un applicationId absoluto
+    // propio, no un applicationIdSuffix, porque defaultConfig.applicationId
+    // todavía es un placeholder sin resolver (ver
+    // docs/audits/AUDITORIA_FINAL/24_ANDROID_DEVELOPMENT_FOUNDATION.md) —
+    // un sufijo heredaría ese placeholder roto.
+    // Ejecutar SIEMPRE junto con el entry point Dart correspondiente:
+    // `flutter build apk --flavor development -t lib/main_development.dart`
+    // (nunca development + main.dart, ni production + main_development.dart).
+    flavorDimensions += "environment"
+    productFlavors {
+        create("production") {
+            dimension = "environment"
+        }
+        create("development") {
+            dimension = "environment"
+            applicationId = "com.ridepro.app.dev"
+        }
     }
 
     buildTypes {

@@ -1,0 +1,39 @@
+{
+  "project_info": {
+    "project_number": "1020003121433",
+    "project_id": "ridepro-development",
+    "storage_bucket": "ridepro-development.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:1020003121433:android:cb71425e96b4fe430f6d88",
+        "android_client_info": {
+          "package_name": "com.ridepro.app.dev"
+        }
+      },
+      "oauth_client": [
+        {
+          "client_id": "1020003121433-oi44p0m9fbjh4j83gagorgroijhrp5lf.apps.googleusercontent.com",
+          "client_type": 3
+        }
+      ],
+      "api_key": [
+        {
+          "current_key": "AIzaSyC51G-OHGDmZbFHgyRGhUFB-Cis-txJxW8"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": [
+            {
+              "client_id": "1020003121433-oi44p0m9fbjh4j83gagorgroijhrp5lf.apps.googleusercontent.com",
+              "client_type": 3
+            }
+          ]
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}
