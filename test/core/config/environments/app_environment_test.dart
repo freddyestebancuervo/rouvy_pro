@@ -1,9 +1,22 @@
+import 'package:firebase_core/firebase_core.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:rouvy_pro/core/config/app_environment.dart';
 import 'package:rouvy_pro/core/config/backend_config_resolver.dart';
+import 'package:rouvy_pro/core/config/environments/environment_development.dart';
 import 'package:rouvy_pro/core/config/environments/environment_production.dart';
 import 'package:rouvy_pro/core/config/social_login_config.dart';
 import 'package:rouvy_pro/core/config/social_login_config_development.dart';
 import 'package:rouvy_pro/firebase_options_development.dart';
+
+/// Sintético — solo para construir un [AppEnvironment] evaluable en VM en
+/// la prueba de override de Development (ver nota de diseño más abajo);
+/// sin relación con ningún proyecto Firebase real.
+const FirebaseOptions _vmSafeFirebaseOptions = FirebaseOptions(
+  apiKey: 'test-api-key',
+  appId: 'test-app-id',
+  messagingSenderId: 'test-sender-id',
+  projectId: 'test-project',
+);
 
 /// Nota de diseño de estas pruebas: `developmentEnvironment` (el getter
 /// completo) construye un único `AppEnvironment(...)` cuyos argumentos
@@ -39,6 +52,44 @@ void main() {
         startsWith('1020003121433-'),
       );
     });
+
+    test(
+      'developmentBackendUrl usa exactamente la URL autorizada del backend real '
+      '(T-F0.2 Bloque 2) — Cloud Run + Cloud SQL ya desplegados y validados',
+      () {
+        expect(
+          developmentBackendUrl,
+          'https://ridepro-backend-dev-hmsnc2l3pq-rj.a.run.app/v1',
+        );
+      },
+    );
+
+    test('developmentAllowsBackendOverride es true (Documento 21, Fase 0.3.1)',
+        () {
+      expect(developmentAllowsBackendOverride, isTrue);
+    });
+
+    test(
+      'Development permite override: resolveBackendBaseUrl acepta un override '
+      'explícito en vez del backend real por defecto',
+      () {
+        const AppEnvironment developmentLike = AppEnvironment(
+          name: 'development',
+          firebaseOptions: _vmSafeFirebaseOptions,
+          googleSignInWebClientId: null,
+          backendBaseUrl: developmentBackendUrl,
+          allowsBackendOverride: developmentAllowsBackendOverride,
+          allowsDevBackendTestUser: true,
+        );
+
+        final String result = resolveBackendBaseUrl(
+          developmentLike,
+          override: 'http://192.168.1.50:3000/v1',
+        );
+
+        expect(result, 'http://192.168.1.50:3000/v1');
+      },
+    );
   });
 
   group(
