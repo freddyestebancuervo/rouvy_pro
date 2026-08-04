@@ -1,10 +1,9 @@
 import 'package:dio/dio.dart';
 
-import 'api_config.dart';
 import 'backend_auth_service.dart';
 
-BaseOptions _baseOptions() => BaseOptions(
-      baseUrl: ApiConfig.backendBaseUrl,
+BaseOptions _baseOptions(String baseUrl) => BaseOptions(
+      baseUrl: baseUrl,
       connectTimeout: const Duration(seconds: 10),
       receiveTimeout: const Duration(seconds: 15),
     );
@@ -12,21 +11,26 @@ BaseOptions _baseOptions() => BaseOptions(
 /// Cliente Dio SIN el interceptor de auth — lo usa [BackendAuthService] para
 /// sus propias llamadas de login/registro/refresh (evita el ciclo de que el
 /// interceptor de auth dispare, a su vez, otra ronda de auth).
-Dio createAuthlessBackendDio() => Dio(_baseOptions());
+///
+/// [baseUrl] llega explícitamente desde `initDependencyInjection`
+/// (`AppEnvironment.backendBaseUrl`, Documento 21 Fase 0.2) — este archivo
+/// no lee ninguna constante global de configuración.
+Dio createAuthlessBackendDio(String baseUrl) => Dio(_baseOptions(baseUrl));
 
 /// Cliente Dio CON el interceptor de auth — lo usan los datasources de
 /// features (Workouts, y en el futuro Equipment) para llamar al backend ya
 /// autenticado, sin que cada uno tenga que saber nada de tokens.
-Dio createAuthenticatedBackendDio(BackendAuthService authService) {
-  final Dio dio = Dio(_baseOptions());
-  dio.interceptors.add(_BackendAuthInterceptor(authService));
+Dio createAuthenticatedBackendDio(BackendAuthService authService, String baseUrl) {
+  final Dio dio = Dio(_baseOptions(baseUrl));
+  dio.interceptors.add(_BackendAuthInterceptor(authService, baseUrl));
   return dio;
 }
 
 class _BackendAuthInterceptor extends Interceptor {
-  _BackendAuthInterceptor(this._authService);
+  _BackendAuthInterceptor(this._authService, this._baseUrl);
 
   final BackendAuthService _authService;
+  final String _baseUrl;
 
   @override
   Future<void> onRequest(RequestOptions options, RequestInterceptorHandler handler) async {
@@ -56,7 +60,8 @@ class _BackendAuthInterceptor extends Interceptor {
         final RequestOptions retryOptions = err.requestOptions
           ..headers['Authorization'] = 'Bearer $token'
           ..extra['retried'] = true;
-        final Response<dynamic> response = await Dio(_baseOptions()).fetch<dynamic>(retryOptions);
+        final Response<dynamic> response =
+            await Dio(_baseOptions(_baseUrl)).fetch<dynamic>(retryOptions);
         handler.resolve(response);
         return;
       } catch (_) {
