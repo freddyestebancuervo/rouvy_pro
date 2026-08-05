@@ -1,0 +1,155 @@
+# T-F0.3 — entorno local reproducible (docs/audits/AUDITORIA_FINAL/BACKLOG_MAESTRO.md).
+#
+# `docker compose up --build` deja el backend respondiendo en
+# http://localhost:3000/v1/health sin ningún paso manual adicional:
+# Postgres se levanta con healthcheck, un servicio efímero genera un
+# par de claves JWT de desarrollo (nunca reales, nunca commiteadas —
+# ver backend/.gitignore: `secrets/`) y otro aplica todas las
+# migraciones pendientes (`npm run migrate:up`, mismo comando que usa
+# `.github/workflows/ci.yml`) antes de que el backend arranque.
+#
+# Sin Redis (T-F0.4, no iniciada) y sin emulador de Firebase: el propio
+# CI (`ci.yml`, job "Backend — migración + e2e") ya arranca y prueba
+# el backend completo con FIREBASE_PROJECT_ID ficticio y sin ningún
+# emulador — FirebaseTokenVerifierService se mockea en los tests que lo
+# necesitan, ninguna llamada real a Firebase ocurre al arrancar.
+#
+# Para correr la suite e2e contra este stack desde `backend/` (Postgres
+# expuesto en localhost:5432, claves ya generadas en `./secrets/`):
+#   DATABASE_URL=postgres://ridepro:devpassword@localhost:5432/ridepro_dev \
+#   JWT_PRIVATE_KEY_PATH=./secrets/jwt_private.pem \
+#   JWT_PUBLIC_KEY_PATH=./secrets/jwt_public.pem \
+#   FIREBASE_PROJECT_ID=ridepro-local FIREBASE_CHECK_REVOKED=false \
+#   npm run test:e2e
+
+services:
+  postgres:
+    image: postgres:16
+    environment:
+      POSTGRES_USER: ridepro
+      POSTGRES_PASSWORD: devpassword
+      POSTGRES_DB: ridepro_dev
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ridepro -d ridepro_dev"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+      start_period: 5s
+
+  # Genera un par de claves RS256 de desarrollo si todavía no existen —
+  # nunca las regenera si ya están (idempotente entre corridas). Viven en
+  # ./backend/secrets/ en el host, ya cubierto por backend/.gitignore.
+  jwt-keys:
+    image: node:20-alpine
+    volumes:
+      - ./backend/secrets:/keys
+    command: >
+      node -e "
+      const fs = require('fs');
+      const { generateKeyPairSync } = require('crypto');
+      if (fs.existsSync('/keys/jwt_private.pem')) { process.exit(0); }
+      const { privateKey, publicKey } = generateKeyPairSync('rsa', {
+        modulusLength: 2048,
+        privateKeyEncoding: { type: 'pkcs1', format: 'pem' },
+        publicKeyEncoding: { type: 'spki', format: 'pem' },
+      });
+      fs.writeFileSync('/keys/jwt_private.pem', privateKey);
+      fs.writeFileSync('/keys/jwt_public.pem', publicKey);
+      "
+
+  # Aplica todas las migraciones pendientes (node-pg-migrate) antes de que
+  # el backend arranque. Usa la etapa intermedia "build" del Dockerfile ya
+  # existente (tiene devDependencies, incluida node-pg-migrate, ausente en
+  # la imagen final de runtime) — migrations/ se monta porque esa etapa no
+  # la copia (solo compila src/).
+  migrate:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+      target: build
+    volumes:
+      - ./backend/migrations:/app/migrations:ro
+    environment:
+      DATABASE_URL: postgres://ridepro:devpassword@postgres:5432/ridepro_dev
+    command: npm run migrate:up
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    ports:
+      - "3000:3000"
+    environment:
+      PORT: 3000
+      NODE_ENV: development
+      DATABASE_URL: postgres://ridepro:devpassword@postgres:5432/ridepro_dev
+      JWT_PRIVATE_KEY_PATH: /app/secrets/jwt_private.pem
+      JWT_PUBLIC_KEY_PATH: /app/secrets/jwt_public.pem
+      # Ficticio a propósito — igual que FIREBASE_PROJECT_ID=ridepro-ci en
+      # ci.yml: el backend exige que la variable exista, pero ninguna
+      # llamada real a Firebase ocurre para levantar el servidor.
+      FIREBASE_PROJECT_ID: ridepro-local
+      FIREBASE_CHECK_REVOKED: "false"
+    volumes:
+      - ./backend/secrets:/app/secrets:ro
+    depends_on:
+      postgres:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+      jwt-keys:
+        condition: service_completed_successfully
+    # Sin healthcheck propio acá: el Dockerfile ya define uno
+    # (HEALTHCHECK contra /v1/health), `docker compose ps` lo hereda.
+
+  # Perfil "test": excluido de `docker compose up` normal — solo se
+  # levanta con `docker compose --profile test run --rm backend-e2e`.
+  # Sin puertos, sin volúmenes del host: el par de claves RS256 se genera
+  # al iniciar el contenedor, directamente en `command`, y vive solo en
+  # `/run/test-secrets` (tmpfs, en memoria, descartado al salir) — nunca
+  # se imprime ni se escribe fuera del propio contenedor.
+  backend-e2e:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+      target: test
+    profiles: ["test"]
+    tmpfs:
+      - /run/test-secrets
+    environment:
+      DATABASE_URL: postgres://ridepro:devpassword@postgres:5432/ridepro_dev
+      JWT_PRIVATE_KEY_PATH: /run/test-secrets/jwt_private.pem
+      JWT_PUBLIC_KEY_PATH: /run/test-secrets/jwt_public.pem
+      FIREBASE_PROJECT_ID: ridepro-local
+      FIREBASE_CHECK_REVOKED: "false"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+    command:
+      - sh
+      - -c
+      - |
+        node -e "
+        const { generateKeyPairSync } = require('crypto');
+        const { writeFileSync } = require('fs');
+        const { privateKey, publicKey } = generateKeyPairSync('rsa', {
+          modulusLength: 2048,
+          privateKeyEncoding: { type: 'pkcs1', format: 'pem' },
+          publicKeyEncoding: { type: 'spki', format: 'pem' }
+        });
+        writeFileSync('/run/test-secrets/jwt_private.pem', privateKey, { mode: 0o600 });
+        writeFileSync('/run/test-secrets/jwt_public.pem', publicKey, { mode: 0o644 });
+        " &&
+        exec npm run test:e2e
+
+volumes:
+  postgres_data:
