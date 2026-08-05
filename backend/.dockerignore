@@ -13,10 +13,22 @@ secrets
 *.pem
 *.key
 
-# Artefactos de pruebas/cobertura — no se necesitan para construir ni
-# correr la imagen (test/ es solo para `npm run test:e2e` local/CI).
+# Artefactos de cobertura — no se necesitan para construir ni correr
+# ninguna imagen, ni siquiera la etapa "test" (esa corre `test:e2e`, que
+# no genera cobertura).
 coverage
-test
+
+# test/ SÍ se necesita — pero solo en la etapa "test" del Dockerfile
+# (servicio "backend-e2e"), que lo copia explícitamente con
+# `COPY test ./test`. Sin esta excepción, el contexto de build nunca
+# llegaría a incluirlo y ese COPY fallaría. La etapa "runtime" no lo
+# copia en ningún caso, exclusión o no — así que esto no la afecta.
+!test/
+!test/**
+
+# jest.config.js: no reincorporado — `npm run test:e2e` usa
+# `jest --config ./test/jest-e2e.json` explícito (ver package.json), así
+# que ese archivo raíz (si existiera) nunca se consulta para e2e.
 jest.config.js
 
 # Logs y temporales.
