@@ -1,5 +1,7 @@
 {
   "projects": {
-    "default": "demo-ridepro-security-tests"
+    "default": "demo-ridepro-security-tests",
+    "development": "ridepro-development",
+    "production": "ridepro-dbafe"
   }
 }
