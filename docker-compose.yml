@@ -8,14 +8,21 @@
 # migraciones pendientes (`npm run migrate:up`, mismo comando que usa
 # `.github/workflows/ci.yml`) antes de que el backend arranque.
 #
-# Sin Redis (T-F0.4, no iniciada) y sin emulador de Firebase: el propio
-# CI (`ci.yml`, job "Backend — migración + e2e") ya arranca y prueba
-# el backend completo con FIREBASE_PROJECT_ID ficticio y sin ningún
-# emulador — FirebaseTokenVerifierService se mockea en los tests que lo
-# necesitan, ninguna llamada real a Firebase ocurre al arrancar.
+# T-F0.4: Redis respalda ahora el storage del rate limiter (compartido
+# entre instancias del backend, ver backend/src/app.module.ts) — servicio
+# "redis" abajo, sin puerto publicado al host (nada fuera de la red de
+# Compose necesita conectarse a él directamente). Sin emulador de
+# Firebase: el propio CI (`ci.yml`, job "Backend — migración + e2e") ya
+# arranca y prueba el backend completo con FIREBASE_PROJECT_ID ficticio y
+# sin ningún emulador — FirebaseTokenVerifierService se mockea en los
+# tests que lo necesitan, ninguna llamada real a Firebase ocurre al
+# arrancar.
 #
 # Para correr la suite e2e contra este stack desde `backend/` (Postgres
-# expuesto en localhost:5432, claves ya generadas en `./secrets/`):
+# expuesto en localhost:5432, claves ya generadas en `./secrets/`; Redis
+# NO expuesto al host — usar `docker compose --profile test run --rm
+# backend-e2e` en su lugar, o publicar temporalmente el puerto 6379 si
+# hace falta correrlo desde el host):
 #   DATABASE_URL=postgres://ridepro:devpassword@localhost:5432/ridepro_dev \
 #   JWT_PRIVATE_KEY_PATH=./secrets/jwt_private.pem \
 #   JWT_PUBLIC_KEY_PATH=./secrets/jwt_public.pem \
@@ -35,6 +42,18 @@ services:
       - postgres_data:/var/lib/postgresql/data
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U ridepro -d ridepro_dev"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+      start_period: 5s
+
+  # T-F0.4: storage distribuido del rate limiter (backend/src/app.module.ts).
+  # Sin puerto publicado al host — solo los servicios de esta red de
+  # Compose necesitan conectarse; nada fuera de ella lo requiere hoy.
+  redis:
+    image: redis:7-alpine
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
       interval: 5s
       timeout: 5s
       retries: 10
@@ -92,6 +111,7 @@ services:
       DATABASE_URL: postgres://ridepro:devpassword@postgres:5432/ridepro_dev
       JWT_PRIVATE_KEY_PATH: /app/secrets/jwt_private.pem
       JWT_PUBLIC_KEY_PATH: /app/secrets/jwt_public.pem
+      REDIS_URL: redis://redis:6379
       # Ficticio a propósito — igual que FIREBASE_PROJECT_ID=ridepro-ci en
       # ci.yml: el backend exige que la variable exista, pero ninguna
       # llamada real a Firebase ocurre para levantar el servidor.
@@ -101,6 +121,8 @@ services:
       - ./backend/secrets:/app/secrets:ro
     depends_on:
       postgres:
+        condition: service_healthy
+      redis:
         condition: service_healthy
       migrate:
         condition: service_completed_successfully
@@ -124,13 +146,23 @@ services:
     tmpfs:
       - /run/test-secrets
     environment:
+      NODE_ENV: test
       DATABASE_URL: postgres://ridepro:devpassword@postgres:5432/ridepro_dev
       JWT_PRIVATE_KEY_PATH: /run/test-secrets/jwt_private.pem
       JWT_PUBLIC_KEY_PATH: /run/test-secrets/jwt_public.pem
+      # Base de datos Redis 15, reservada EXCLUSIVAMENTE para la suite
+      # e2e — separada de la base 0 que usa "backend" (arriba). Aísla el
+      # estado del rate limiter entre archivos de test sin arriesgar
+      # ningún dato de la app "real" del stack (ver
+      # test/setup-throttler-cleanup.js, que hace flushDb() sobre esta
+      # base únicamente).
+      REDIS_URL: redis://redis:6379/15
       FIREBASE_PROJECT_ID: ridepro-local
       FIREBASE_CHECK_REVOKED: "false"
     depends_on:
       postgres:
+        condition: service_healthy
+      redis:
         condition: service_healthy
       migrate:
         condition: service_completed_successfully
