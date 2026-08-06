@@ -14,6 +14,14 @@
       },
       "oauth_client": [
         {
+          "client_id": "1020003121433-lpe5e0k3cma01fh7pia8tpquidjdnges.apps.googleusercontent.com",
+          "client_type": 1,
+          "android_info": {
+            "package_name": "com.ridepro.app.dev",
+            "certificate_hash": "8a8b7fa855c74ce45442e647dc59bdce2a306c64"
+          }
+        },
+        {
           "client_id": "1020003121433-oi44p0m9fbjh4j83gagorgroijhrp5lf.apps.googleusercontent.com",
           "client_type": 3
         }
