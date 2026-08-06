@@ -1,7 +1,16 @@
 const { createClient } = require('redis');
 
 const EXPECTED_NODE_ENV = 'test';
-const EXPECTED_REDIS_URL = 'redis://redis:6379/15';
+// Base Redis 15, reservada exclusivamente para la suite e2e, en los dos
+// hosts válidos donde esta suite corre hoy: "redis" (servicio de
+// docker-compose.yml, servicio "backend-e2e") y "localhost" (contenedor
+// de servicio de .github/workflows/ci.yml, job "Backend — migración +
+// e2e (C2)", que publica el puerto 6379 en el runner). Cualquier otra
+// URL sigue rechazada — fail-closed, no se limpia nada.
+const ALLOWED_REDIS_URLS = new Set([
+  'redis://redis:6379/15',
+  'redis://localhost:6379/15',
+]);
 
 let redis;
 
@@ -12,14 +21,14 @@ beforeAll(async () => {
     );
   }
 
-  if (process.env.REDIS_URL !== EXPECTED_REDIS_URL) {
+  if (!ALLOWED_REDIS_URLS.has(process.env.REDIS_URL)) {
     throw new Error(
       `REDIS_URL no corresponde a la base e2e reservada: "${process.env.REDIS_URL}" ` +
-        `(se requiere exactamente "${EXPECTED_REDIS_URL}").`,
+        `(se requiere una de: ${[...ALLOWED_REDIS_URLS].join(', ')}).`,
     );
   }
 
-  redis = createClient({ url: EXPECTED_REDIS_URL });
+  redis = createClient({ url: process.env.REDIS_URL });
   await redis.connect();
 });
 
