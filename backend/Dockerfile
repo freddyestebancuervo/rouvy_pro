@@ -27,6 +27,21 @@ COPY src ./src
 RUN npm run build
 
 # =============================================================================
+# Etapa "test" — exclusiva del servicio "backend-e2e" (perfil "test" de
+# docker-compose.yml). Parte de "build" (ya tiene TODAS las dependencias,
+# incluidas devDependencies, y el código fuente) y agrega únicamente
+# test/, que "build" no copia. Sin CMD ni claves propias — el par RS256
+# se genera al iniciar el contenedor, nunca en tiempo de build (ver
+# docker-compose.yml, servicio "backend-e2e"). Nunca es base de
+# "runtime" ni se referencia desde ahí — la etapa "runtime", que sigue
+# siendo la última del archivo, queda exactamente igual que antes: sin
+# Jest, sin test/, sin ningún devDependency.
+# =============================================================================
+FROM build AS test
+
+COPY test ./test
+
+# =============================================================================
 # Etapa 2 — runtime: imagen final. Solo dependencias de PRODUCCIÓN + el
 # resultado ya compilado (dist/) — sin TypeScript, sin ts-jest, sin eslint,
 # sin ningún devDependency, sin el código fuente .ts original.

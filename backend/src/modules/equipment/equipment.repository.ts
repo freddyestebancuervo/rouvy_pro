@@ -305,6 +305,7 @@ export class EquipmentRepository {
     await client.query(
       `SELECT id FROM equipment
        WHERE user_id = $1 AND category_code = $2 AND archived_at IS NULL
+       ORDER BY id
        FOR UPDATE`,
       [userId, categoryCode],
     );

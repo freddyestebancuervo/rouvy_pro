@@ -1,5 +1,5 @@
 import { Module } from '@nestjs/common';
-import { applicationDefault, initializeApp } from 'firebase-admin/app';
+import { applicationDefault, getApp, initializeApp } from 'firebase-admin/app';
 import { Auth, getAuth } from 'firebase-admin/auth';
 import { FIREBASE_AUTH } from './firebase-auth.token';
 import { FirebaseTokenVerifierService } from './firebase-token-verifier.service';
@@ -35,10 +35,23 @@ import { FirebaseTokenVerifierService } from './firebase-token-verifier.service'
         if (!projectId) {
           throw new Error('FIREBASE_PROJECT_ID no está definida — ver .env.example.');
         }
-        const app = initializeApp({
-          credential: applicationDefault(),
-          projectId,
-        });
+        // Reutiliza la app "[DEFAULT]" si ya existe en el proceso (p. ej.
+        // dos instancias de la aplicación Nest en el mismo proceso de
+        // test — ver rate-limit-multi-instance.e2e-spec.ts, T-F0.4) en
+        // vez de que `initializeApp()` falle porque el SDK de
+        // `firebase-admin` registra esa app a nivel de proceso, no por
+        // contenedor de DI. Nunca crea una app con nombre distinto de
+        // "[DEFAULT]".
+        const app = (() => {
+          try {
+            return getApp();
+          } catch {
+            return initializeApp({
+              credential: applicationDefault(),
+              projectId,
+            });
+          }
+        })();
         return getAuth(app);
       },
     },
