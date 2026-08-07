@@ -98,7 +98,29 @@ jobs:
       - name: Launch app and monitor for immediate crash
         run: |
           SIM_UDID="${{ steps.boot_sim.outputs.sim_udid }}"
-          BUNDLE_ID="com.ridepro.app"
+
+          # Bundle ID obtenido dinámicamente desde el propio Runner.app
+          # compilado — nunca hardcodeado, para no quedar desactualizado
+          # ante un cambio de identificador (ver Info.plist empaquetado
+          # dentro de la app, no el Info.plist fuente del repositorio).
+          APP_PATH=$(find build/ios/iphonesimulator -maxdepth 1 -iname "Runner.app" | head -1)
+          if [ -z "$APP_PATH" ]; then
+            echo "Runner.app no encontrado en build/ios/iphonesimulator"
+            exit 1
+          fi
+
+          INFO_PLIST="$APP_PATH/Info.plist"
+          if [ ! -f "$INFO_PLIST" ]; then
+            echo "Info.plist no encontrado en $INFO_PLIST"
+            exit 1
+          fi
+
+          BUNDLE_ID=$(/usr/libexec/PlistBuddy -c "Print :CFBundleIdentifier" "$INFO_PLIST")
+          if [ -z "$BUNDLE_ID" ]; then
+            echo "No se pudo obtener CFBundleIdentifier desde $INFO_PLIST"
+            exit 1
+          fi
+          echo "BUNDLE_ID_DETECTED=$BUNDLE_ID"
 
           # Captura de logs del simulador en segundo plano durante toda
           # la ventana de observación.
