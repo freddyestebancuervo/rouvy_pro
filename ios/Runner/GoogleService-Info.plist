@@ -3,9 +3,11 @@
 <plist version="1.0">
 <dict>
 	<key>CLIENT_ID</key>
-	<string>731660820861-2f4o4t78j5u30d3gtb54v2a4117fie36.apps.googleusercontent.com</string>
+	<string>731660820861-09qqql10tm55tbkk20v0ug6a7sj964ur.apps.googleusercontent.com</string>
 	<key>REVERSED_CLIENT_ID</key>
-	<string>com.googleusercontent.apps.731660820861-2f4o4t78j5u30d3gtb54v2a4117fie36</string>
+	<string>com.googleusercontent.apps.731660820861-09qqql10tm55tbkk20v0ug6a7sj964ur</string>
+	<key>ANDROID_CLIENT_ID</key>
+	<string>731660820861-7b08sno7lohbn5bqh3pcjsv5lan36iof.apps.googleusercontent.com</string>
 	<key>API_KEY</key>
 	<string>AIzaSyCOlFzTpQgmdq4xObfZcPvr4y0JwhBK1z4</string>
 	<key>GCM_SENDER_ID</key>
@@ -13,7 +15,7 @@
 	<key>PLIST_VERSION</key>
 	<string>1</string>
 	<key>BUNDLE_ID</key>
-	<string>com.ridepro.app</string>
+	<string>com.korixa.app</string>
 	<key>PROJECT_ID</key>
 	<string>ridepro-dbafe</string>
 	<key>STORAGE_BUCKET</key>
@@ -29,6 +31,6 @@
 	<key>IS_SIGNIN_ENABLED</key>
 	<true></true>
 	<key>GOOGLE_APP_ID</key>
-	<string>1:731660820861:ios:66ffd802759ec547c16c14</string>
+	<string>1:731660820861:ios:8d99c2d330181c16c16c14</string>
 </dict>
 </plist>

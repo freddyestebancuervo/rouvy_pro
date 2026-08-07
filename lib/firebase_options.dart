@@ -73,11 +73,11 @@ class DefaultFirebaseOptions {
 
   static const FirebaseOptions ios = FirebaseOptions(
     apiKey: 'AIzaSyCOlFzTpQgmdq4xObfZcPvr4y0JwhBK1z4',
-    appId: '1:731660820861:ios:66ffd802759ec547c16c14',
+    appId: '1:731660820861:ios:8d99c2d330181c16c16c14',
     messagingSenderId: '731660820861',
     projectId: 'ridepro-dbafe',
     storageBucket: 'ridepro-dbafe.firebasestorage.app',
-    iosClientId: '731660820861-2f4o4t78j5u30d3gtb54v2a4117fie36.apps.googleusercontent.com',
-    iosBundleId: 'com.ridepro.app',
+    iosClientId: '731660820861-09qqql10tm55tbkk20v0ug6a7sj964ur.apps.googleusercontent.com',
+    iosBundleId: 'com.korixa.app',
   );
 }
