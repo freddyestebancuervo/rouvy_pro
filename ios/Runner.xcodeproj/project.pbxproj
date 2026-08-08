@@ -385,7 +385,7 @@ cp \"$SOURCE_PLIST\" \"$DESTINATION_PLIST\"
 			};
 			name = Profile;
 		};
-		F00DBEEF0001000000000003 /* Profile */ = {
+		F00DBEEF0001000000000003 /* Profile-development */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
 				ALWAYS_SEARCH_USER_PATHS = NO;
@@ -458,7 +458,7 @@ cp \"$SOURCE_PLIST\" \"$DESTINATION_PLIST\"
 			};
 			name = Profile;
 		};
-		F00DBEEF0002000000000003 /* Profile */ = {
+		F00DBEEF0002000000000003 /* Profile-development */ = {
 			isa = XCBuildConfiguration;
 			baseConfigurationReference = F00DBEEF0004000000000002 /* Release-development.xcconfig */;
 			buildSettings = {
@@ -630,7 +630,7 @@ cp \"$SOURCE_PLIST\" \"$DESTINATION_PLIST\"
 			};
 			name = Debug;
 		};
-		F00DBEEF0001000000000001 /* Debug */ = {
+		F00DBEEF0001000000000001 /* Debug-development */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
 				ALWAYS_SEARCH_USER_PATHS = NO;
@@ -741,7 +741,7 @@ cp \"$SOURCE_PLIST\" \"$DESTINATION_PLIST\"
 			};
 			name = Release;
 		};
-		F00DBEEF0001000000000002 /* Release */ = {
+		F00DBEEF0001000000000002 /* Release-development */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
 				ALWAYS_SEARCH_USER_PATHS = NO;
@@ -817,7 +817,7 @@ cp \"$SOURCE_PLIST\" \"$DESTINATION_PLIST\"
 			};
 			name = Debug;
 		};
-		F00DBEEF0002000000000001 /* Debug */ = {
+		F00DBEEF0002000000000001 /* Debug-development */ = {
 			isa = XCBuildConfiguration;
 			baseConfigurationReference = F00DBEEF0004000000000001 /* Debug-development.xcconfig */;
 			buildSettings = {
@@ -860,7 +860,7 @@ cp \"$SOURCE_PLIST\" \"$DESTINATION_PLIST\"
 			};
 			name = Release;
 		};
-		F00DBEEF0002000000000002 /* Release */ = {
+		F00DBEEF0002000000000002 /* Release-development */ = {
 			isa = XCBuildConfiguration;
 			baseConfigurationReference = F00DBEEF0004000000000002 /* Release-development.xcconfig */;
 			buildSettings = {
