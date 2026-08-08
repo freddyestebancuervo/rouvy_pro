@@ -7,6 +7,16 @@ name: iOS — build validation
 # runtime (Firebase, Google Sign-In, HealthKit, APNs, Keychain). No se
 # declara check obligatorio en esta primera versión estable — solo debe
 # promoverse a required check tras varias ejecuciones estables.
+#
+# T-F0.2 iOS Development: matrix con dos entornos independientes
+# (production/development), cada uno con su propio job/check y su propio
+# plist fuente esperado — Production nunca depende de que Development
+# pase, ni exige el plist fuente de Development, y viceversa. Cada build
+# verifica, sobre el Runner.app real compilado (no sobre archivos
+# fuente): Bundle ID, GoogleService-Info.plist empaquetado (exactamente
+# uno, BUNDLE_ID y PROJECT_ID correctos) y que el callback de Google
+# Sign-In (REVERSED_CLIENT_ID) coincida con el URL Scheme realmente
+# empaquetado en Info.plist — sin referencias cruzadas entre entornos.
 on:
   workflow_dispatch: {}
   pull_request:
@@ -25,6 +35,23 @@ jobs:
     name: iOS — build (no code signing)
     runs-on: macos-latest
     timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        environment: [production, development]
+        include:
+          - environment: production
+            entry_point: lib/main.dart
+            flavor_args: ""
+            expected_bundle_id: com.korixa.app
+            expected_project_id: ridepro-dbafe
+            expected_source_plist: ios/Runner/Firebase/Production/GoogleService-Info.plist
+          - environment: development
+            entry_point: lib/main_development.dart
+            flavor_args: "--flavor development"
+            expected_bundle_id: com.korixa.app.dev
+            expected_project_id: ridepro-development
+            expected_source_plist: ios/Runner/Firebase/Development/GoogleService-Info.plist
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -71,13 +98,59 @@ jobs:
           test -f ios/Runner.xcworkspace/contents.xcworkspacedata && echo "OK: ios/Runner.xcworkspace/contents.xcworkspacedata"
           test -f ios/Runner/AppDelegate.swift && echo "OK: ios/Runner/AppDelegate.swift"
           test -f ios/Runner/Info.plist && echo "OK: ios/Runner/Info.plist"
-          test -f ios/Runner/GoogleService-Info.plist && echo "OK: ios/Runner/GoogleService-Info.plist"
+          test -f "${{ matrix.expected_source_plist }}" && echo "OK: ${{ matrix.expected_source_plist }}"
           echo ""
           echo "=== deployment target actual ==="
           grep -n "IPHONEOS_DEPLOYMENT_TARGET" ios/Runner.xcodeproj/project.pbxproj
 
-      - name: Build iOS without code signing
-        run: flutter build ios --debug --no-codesign -v
+      - name: Build iOS (${{ matrix.environment }}) without code signing
+        run: flutter build ios --debug --no-codesign ${{ matrix.flavor_args }} -t ${{ matrix.entry_point }} -v
+
+      - name: Verify Bundle ID, Firebase plist and Google Sign-In callback (${{ matrix.environment }})
+        run: |
+          APP_PATH=$(find build/ios/iphoneos -maxdepth 1 -iname "Runner.app" | head -1)
+          if [ -z "$APP_PATH" ]; then
+            echo "Runner.app no encontrado en build/ios/iphoneos"
+            exit 1
+          fi
+          echo "APP_PATH=$APP_PATH"
+
+          BUNDLE_ID=$(/usr/libexec/PlistBuddy -c "Print :CFBundleIdentifier" "$APP_PATH/Info.plist")
+          echo "BUNDLE_ID_DETECTED=$BUNDLE_ID"
+          if [ "$BUNDLE_ID" != "${{ matrix.expected_bundle_id }}" ]; then
+            echo "Bundle ID inesperado para ${{ matrix.environment }}: se esperaba ${{ matrix.expected_bundle_id }}, se obtuvo $BUNDLE_ID"
+            exit 1
+          fi
+
+          PLIST_MATCHES=$(find "$APP_PATH" -iname "GoogleService-Info.plist" | wc -l | tr -d ' ')
+          echo "PACKAGED_PLIST_COUNT=$PLIST_MATCHES"
+          if [ "$PLIST_MATCHES" != "1" ]; then
+            echo "Se esperaba exactamente 1 GoogleService-Info.plist dentro de Runner.app, se encontraron $PLIST_MATCHES"
+            exit 1
+          fi
+          PLIST_PATH=$(find "$APP_PATH" -iname "GoogleService-Info.plist")
+
+          PLIST_BUNDLE_ID=$(/usr/libexec/PlistBuddy -c "Print :BUNDLE_ID" "$PLIST_PATH")
+          echo "PLIST_BUNDLE_ID_DETECTED=$PLIST_BUNDLE_ID"
+          if [ "$PLIST_BUNDLE_ID" != "${{ matrix.expected_bundle_id }}" ]; then
+            echo "GoogleService-Info.plist empaquetado no corresponde a ${{ matrix.environment }}: se esperaba ${{ matrix.expected_bundle_id }}, se obtuvo $PLIST_BUNDLE_ID"
+            exit 1
+          fi
+
+          PLIST_PROJECT_ID=$(/usr/libexec/PlistBuddy -c "Print :PROJECT_ID" "$PLIST_PATH")
+          echo "PLIST_PROJECT_ID_DETECTED=$PLIST_PROJECT_ID"
+          if [ "$PLIST_PROJECT_ID" != "${{ matrix.expected_project_id }}" ]; then
+            echo "GoogleService-Info.plist empaquetado apunta al proyecto Firebase equivocado: se esperaba ${{ matrix.expected_project_id }}, se obtuvo $PLIST_PROJECT_ID"
+            exit 1
+          fi
+
+          PLIST_REVERSED_CLIENT_ID=$(/usr/libexec/PlistBuddy -c "Print :REVERSED_CLIENT_ID" "$PLIST_PATH")
+          INFO_URL_SCHEME=$(/usr/libexec/PlistBuddy -c "Print :CFBundleURLTypes:0:CFBundleURLSchemes:0" "$APP_PATH/Info.plist")
+          if [ "$PLIST_REVERSED_CLIENT_ID" != "$INFO_URL_SCHEME" ]; then
+            echo "El REVERSED_CLIENT_ID del GoogleService-Info.plist no coincide con el URL Scheme de Google Sign-In empaquetado en Info.plist"
+            exit 1
+          fi
+          echo "GOOGLE_SIGNIN_CALLBACK_MATCH=true"
 
       - name: Inspect generated artifacts
         if: always()

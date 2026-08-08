@@ -1,1 +1,7 @@
 #include "Generated.xcconfig"
+
+// T-F0.2 -- iOS Development: selecciona el plist Firebase y el
+// callback de Google Sign-In por configuracion, sin hardcodear
+// ningun valor en project.pbxproj ni en Info.plist.
+FIREBASE_PLIST_PATH = Runner/Firebase/Production/GoogleService-Info.plist
+GOOGLE_REVERSED_CLIENT_ID = com.googleusercontent.apps.731660820861-09qqql10tm55tbkk20v0ug6a7sj964ur
