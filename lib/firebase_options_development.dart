@@ -20,13 +20,15 @@ class DefaultFirebaseOptionsDevelopment {
     switch (defaultTargetPlatform) {
       case TargetPlatform.android:
         return android;
+      case TargetPlatform.iOS:
+        return ios;
       default:
         throw UnsupportedError(
           'El proyecto Firebase de Development (`ridepro-development`) no '
-          'tiene configuración para $defaultTargetPlatform todavía (solo Web '
-          'y Android, T-F0.2 Bloque 5A) — iOS queda explícitamente pendiente. '
-          'Registrá la app que falte en Firebase (`firebase apps:create`) y '
-          'agregala acá antes de correr main_development.dart en esa plataforma.',
+          'tiene configuración para $defaultTargetPlatform todavía (Web, '
+          'Android e iOS, T-F0.2) — Registrá la app que falte en Firebase '
+          '(`firebase apps:create`) y agregala acá antes de correr '
+          'main_development.dart en esa plataforma.',
         );
     }
   }
@@ -49,5 +51,16 @@ class DefaultFirebaseOptionsDevelopment {
     messagingSenderId: '1020003121433',
     projectId: 'ridepro-development',
     storageBucket: 'ridepro-development.firebasestorage.app',
+  );
+
+  /// Registrada en T-F0.2 iOS Development (Bundle ID com.korixa.app.dev).
+  static const FirebaseOptions ios = FirebaseOptions(
+    apiKey: 'AIzaSyDSahBGUaF2hFEVAoQ4IXhtiejSyxjWsGA',
+    appId: '1:1020003121433:ios:fdfe193b6d9e99130f6d88',
+    messagingSenderId: '1020003121433',
+    projectId: 'ridepro-development',
+    storageBucket: 'ridepro-development.firebasestorage.app',
+    iosClientId: '1020003121433-65qqk5sir98buvfffd6ua0g51jqor8av.apps.googleusercontent.com',
+    iosBundleId: 'com.korixa.app.dev',
   );
 }

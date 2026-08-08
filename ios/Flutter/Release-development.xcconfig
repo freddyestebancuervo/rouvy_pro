@@ -1,0 +1,7 @@
+#include "Release.xcconfig"
+
+// Sobrescribe los valores de Production heredados de "Release.xcconfig" --
+// Development NUNCA debe compilar con el plist ni el callback de
+// Google Sign-In de Production.
+FIREBASE_PLIST_PATH = Runner/Firebase/Development/GoogleService-Info.plist
+GOOGLE_REVERSED_CLIENT_ID = com.googleusercontent.apps.1020003121433-65qqk5sir98buvfffd6ua0g51jqor8av
