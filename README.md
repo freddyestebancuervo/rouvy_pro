@@ -4,9 +4,14 @@
 > **Korixa**. Este repositorio (`freddyestebancuervo/rouvy_pro`) y varios
 > identificadores técnicos conservan el nombre anterior del producto,
 > **RidePro**, y no han sido renombrados: nombre del repositorio
-> (`rouvy_pro`), Bundle ID de iOS (`com.ridepro.app`), nombres de archivo
+> (`rouvy_pro`), namespace Android `com.ridepro.app` (Development usa el
+> `applicationId`/package `com.ridepro.app.dev`; Production conserva el
+> `applicationId` placeholder `com.ridepro.app.YOUR_APPLICATION_ID`,
+> pendiente — ver `android/app/build.gradle.kts`), nombres de archivo
 > como `RIDEPRO_DEVELOPMENT_PROTOCOL.md`, y referencias internas en
-> código/configuración. Este documento usa "Korixa" para el producto y
+> código/configuración. **El Bundle ID de iOS sí fue renombrado**:
+> `com.korixa.app` en Production y `com.korixa.app.dev` en Development
+> — ver `PROJECT_STATUS.md` §5 para el detalle. Este documento usa "Korixa" para el producto y
 > conserva los identificadores técnicos reales sin alterarlos — no se ha
 > ejecutado ninguna migración masiva de nombre. Ver
 > `PROJECT_STATUS.md` y `docs/product/PRODUCT_IDEAS_REGISTRY.md` para más
@@ -33,8 +38,8 @@ para el porqué de dos fuentes de datos).
 
 | Plataforma | Estado |
 |---|---|
-| Android | Implementado — proyecto nativo generado y en uso. |
-| iOS | Implementado y validado en CI: compila (dispositivo sin firma y simulador), se instala, arranca, renderiza y Firebase se inicializa en runtime (ver `PROJECT_STATUS.md` §1.1/§3). No validado: Auth/Firestore/Analytics funcional real, HealthKit, APNs, firma de código real. |
+| Android | Implementado — proyecto nativo generado y en uso. Flavor `development` real, con **Google Sign-In validado en runtime** (2026-08-09 — ver `PROJECT_STATUS.md` §5); Production conserva un `applicationId` placeholder pendiente de corrección. |
+| iOS | CI valida por separado Production y Development (`ios-build.yml`): compilación sin firma, Bundle ID (`com.korixa.app`/`com.korixa.app.dev`), `GoogleService-Info.plist` empaquetado, `PROJECT_ID` y callback/configuración de Google Sign-In (ver `PROJECT_STATUS.md` §1.1/§3/§5). El smoke test de simulador (`ios-simulator-smoke.yml`) compila con `flutter build ios --debug --simulator`, sin `--flavor development` ni `-t lib/main_development.dart` — **no constituye evidencia runtime del flavor Development**. No validado: login Google/Auth real en runtime (no en iOS; sí validado en Android Development), Firestore/Analytics funcional real, HealthKit, APNs, firma de código real. |
 | Web | Implementado — incluye el guard de plataforma para Wearables (`T-F0.1`, integrado a `main`). |
 | Windows | **Objetivo declarado, no implementado todavía.** El directorio nativo `windows/` no existe en `main`; generarlo y validar plugins de riesgo (Google/Apple Sign-In, Firebase con config de Web como placeholder) es la tarea abierta `T-F2.7` del backlog. |
 
@@ -237,7 +242,12 @@ PostgreSQL) tampoco es ya un scaffold sin ejecutar: existe, se prueba en
 CI contra un Postgres 16 real (86/86 pruebas e2e en verde) y tiene una
 imagen Docker de producción validada — ver `backend/README.md` y
 `PROJECT_STATUS.md`. **Pendiente:** despliegue real a un hosting en vivo
-(`T-F1.1`) y separación de proyectos Firebase por entorno (`T-F0.2`).
+(`T-F1.1`). `T-F0.2`/`C1` sigue abierto. Development ya tiene
+configuración para Web, Android e iOS y Google Sign-In real fue
+validado en Android Development. El cierre formal sigue pendiente de la
+reconciliación final de las puertas A–J; entre los gaps ya confirmados
+están la validación de reglas de Firestore contra el proyecto real,
+CI/CD de despliegue y el ensayo de rollback. Ver `PROJECT_STATUS.md`.
 
 **Ver `VERIFICATION_GUIDE.md`** para los comandos exactos y el resultado
 esperado de cada uno. **Sin terminal disponible (p. ej. desde el celular)?**
