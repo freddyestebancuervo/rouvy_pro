@@ -1,11 +1,10 @@
 // Configuración manual del entorno Development (`ridepro-development`),
-// obtenida con `firebase apps:sdkconfig WEB <appId> --project
+// obtenida con `firebase apps:sdkconfig <PLATFORM> <appId> --project
 // ridepro-development` — mismo formato que genera FlutterFire CLI para
-// `firebase_options.dart` (Production), pero mantenido a mano porque hoy
-// `ridepro-development` solo tiene registrada una app Web (ver
-// `docs/audits/AUDITORIA_FINAL/17_CIERRE_FIRESTORE_RIDEPRO_DEVELOPMENT.md`,
-// secciones 11-12). Actualizar corriendo `flutterfire configure --project
-// ridepro-development` en cuanto se registren más plataformas.
+// `firebase_options.dart` (Production), pero mantenido a mano. Web, Android
+// e iOS ya están registradas y configuradas abajo (Web desde el bootstrap
+// inicial, Android desde T-F0.2 Bloque 5A, iOS desde T-F0.2 Bloque 7 — ver
+// PROJECT_STATUS.md §5 para el detalle y evidencia de cada una).
 // ignore_for_file: type=lint
 import 'package:firebase_core/firebase_core.dart' show FirebaseOptions;
 import 'package:flutter/foundation.dart'
@@ -25,10 +24,10 @@ class DefaultFirebaseOptionsDevelopment {
       default:
         throw UnsupportedError(
           'El proyecto Firebase de Development (`ridepro-development`) no '
-          'tiene configuración para $defaultTargetPlatform todavía (Web, '
-          'Android e iOS, T-F0.2) — Registrá la app que falte en Firebase '
-          '(`firebase apps:create`) y agregala acá antes de correr '
-          'main_development.dart en esa plataforma.',
+          'tiene configuración para $defaultTargetPlatform (Web, Android e '
+          'iOS ya están configuradas arriba) — registrá la app que falte '
+          'en Firebase (`firebase apps:create`) y agregala acá antes de '
+          'correr main_development.dart en esa plataforma.',
         );
     }
   }
@@ -43,8 +42,9 @@ class DefaultFirebaseOptionsDevelopment {
   );
 
   /// Registrada en T-F0.2 Bloque 5A (Android Development Foundation).
-  /// Google Sign-In Android en Development queda pendiente de SHA-1/SHA-256
-  /// — ver docs/audits/AUDITORIA_FINAL/24_ANDROID_DEVELOPMENT_FOUNDATION.md.
+  /// Google Sign-In Android en Development validado en runtime real el
+  /// 2026-08-09 (SHA-1/SHA-256 registrados, login real confirmado en
+  /// Firebase Authentication) — ver PROJECT_STATUS.md §5.
   static const FirebaseOptions android = FirebaseOptions(
     apiKey: 'AIzaSyC51G-OHGDmZbFHgyRGhUFB-Cis-txJxW8',
     appId: '1:1020003121433:android:cb71425e96b4fe430f6d88',
