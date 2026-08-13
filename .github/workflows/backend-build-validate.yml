@@ -1,0 +1,33 @@
+name: Backend — validar build de imagen (Puerta H)
+
+# Puerta H (docs/audits/AUDITORIA_FINAL/23_MATRIZ_FORMAL_ENTORNOS.md §6):
+# primer paso mínimo de CI/CD hacia Development. Reproduce exactamente el
+# `docker build` que hoy se ejecuta a mano antes de cada despliegue manual
+# a Cloud Run Development (docs/audits/AUDITORIA_FINAL/fase_4_1/02_IMAGEN_Y_DESPLIEGUE.md),
+# para detectar roturas de build antes de llegar a ese paso manual.
+#
+# Deliberadamente NO es un workflow de despliegue: no se autentica contra
+# GCP, no hace push a ningún registry y no toca Cloud Run. La automatización
+# de push/deploy requeriría Workload Identity Federation (una escritura de
+# IAM) y queda fuera de alcance de este cambio.
+on:
+  workflow_dispatch: {}
+  pull_request:
+    paths:
+      - 'backend/**'
+      - '.github/workflows/backend-build-validate.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'backend/**'
+      - '.github/workflows/backend-build-validate.yml'
+
+jobs:
+  build-validate:
+    name: Backend — docker build (sin push, sin GCP)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Construir imagen (mismo comando que el despliegue manual)
+        run: docker build --no-cache -t ridepro-backend-build-validate:${{ github.sha }} ./backend
