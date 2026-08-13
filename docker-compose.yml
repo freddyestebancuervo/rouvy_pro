@@ -108,6 +108,10 @@ services:
     environment:
       PORT: 3000
       NODE_ENV: development
+      # T-F0.2 Puerta F: declarado explicitamente aunque REDIS_URL ya esta
+      # presente abajo (Redis local sigue disponible y probado) — ver
+      # config/redis.config.ts, resolveThrottlerStrategy.
+      BACKEND_ENVIRONMENT: development
       DATABASE_URL: postgres://ridepro:devpassword@postgres:5432/ridepro_dev
       JWT_PRIVATE_KEY_PATH: /app/secrets/jwt_private.pem
       JWT_PUBLIC_KEY_PATH: /app/secrets/jwt_public.pem
@@ -147,6 +151,11 @@ services:
       - /run/test-secrets
     environment:
       NODE_ENV: test
+      # T-F0.2 Puerta F: declarado explicitamente — REDIS_URL (abajo) sigue
+      # presente y la suite Redis/multi-instancia sigue corriendo contra
+      # Redis real; throttler-environment.e2e-spec.ts manipula REDIS_URL
+      # puntualmente dentro de sus propios tests, sin depender de este valor.
+      BACKEND_ENVIRONMENT: development
       DATABASE_URL: postgres://ridepro:devpassword@postgres:5432/ridepro_dev
       JWT_PRIVATE_KEY_PATH: /run/test-secrets/jwt_private.pem
       JWT_PUBLIC_KEY_PATH: /run/test-secrets/jwt_public.pem

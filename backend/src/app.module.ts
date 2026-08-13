@@ -1,12 +1,9 @@
 import { Module } from '@nestjs/common';
 import { APP_GUARD } from '@nestjs/core';
 import { ConfigModule } from '@nestjs/config';
-import { ThrottlerGuard, ThrottlerModule } from '@nestjs/throttler';
-import { RedisModule, RedisToken } from '@nestjs-redis/client';
-import { RedisThrottlerStorage } from '@nestjs-redis/throttler-storage';
-import type { RedisClientType } from 'redis';
+import { ThrottlerGuard } from '@nestjs/throttler';
 import { AppController } from './app.controller';
-import { resolveRedisUrl } from './config/redis.config';
+import { buildThrottlerModule } from './config/redis.config';
 import { DatabaseModule } from './database/database.module';
 import { JwtModule } from './jwt/jwt.module';
 import { AuthModule } from './modules/auth/auth.module';
@@ -43,14 +40,12 @@ import { WorkoutsModule } from './modules/workouts/workouts.module';
     // implementación en memoria concreta — ver el propio docblock de
     // `RefreshThrottleGuard`. `ttl`/`limit` sin cambios respecto al
     // storage en memoria anterior.
-    ThrottlerModule.forRootAsync({
-      imports: [RedisModule.forRoot({ options: { url: resolveRedisUrl() } })],
-      inject: [RedisToken()],
-      useFactory: (redis: RedisClientType) => ({
-        throttlers: [{ ttl: 60000, limit: 100 }],
-        storage: new RedisThrottlerStorage(redis),
-      }),
-    }),
+    //
+    // T-F0.2 Puerta F: `buildThrottlerModule()` (config/redis.config.ts)
+    // decide entre Redis y memoria según `BACKEND_ENVIRONMENT`/`REDIS_URL`
+    // — solo Development puede caer a memoria; Staging/Production siguen
+    // exigiendo Redis y fallan cerrado. Ver `resolveThrottlerStrategy`.
+    buildThrottlerModule(),
 
     DatabaseModule,
     JwtModule,
