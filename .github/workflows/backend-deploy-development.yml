@@ -1,0 +1,78 @@
+name: Backend — publish Development
+
+# Puerta H (docs/audits/AUDITORIA_FINAL/23_MATRIZ_FORMAL_ENTORNOS.md §6) —
+# primera automatización con identidad cloud real: autentica contra GCP vía
+# Workload Identity Federation (sin ninguna credencial de larga duración, sin
+# JSON key), construye la imagen del backend y la publica en Artifact
+# Registry con un tag inmutable (`github.sha`).
+#
+# Deliberadamente NO despliega a Cloud Run todavía — ese paso queda para un
+# bloque posterior, una vez validado que WIF + push funcionan de extremo a
+# extremo. Disparo manual únicamente (`workflow_dispatch`): la primera
+# ejecución real requiere autorización explícita después de que este
+# workflow esté fusionado a main.
+on:
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  publish:
+    name: Publicar imagen (WIF + build + push, sin deploy)
+    runs-on: ubuntu-latest
+    environment: development
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+
+      - id: auth
+        uses: google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093 # v3
+        with:
+          project_id: ridepro-development
+          workload_identity_provider: projects/1020003121433/locations/global/workloadIdentityPools/github-actions-pool/providers/github-actions-provider
+          service_account: ridepro-github-deployer@ridepro-development.iam.gserviceaccount.com
+
+      - uses: google-github-actions/setup-gcloud@aa5489c8933f4cc7a4f7d45035b3b1440c9c10db # v3
+
+      - name: Verificar projectId ANTES de cualquier publicación
+        run: |
+          ACTUAL_PROJECT="$(gcloud config get-value project)"
+          if [ "$ACTUAL_PROJECT" != "ridepro-development" ]; then
+            echo "PROJECT MISMATCH: esperado ridepro-development, obtenido '$ACTUAL_PROJECT'"
+            exit 1
+          fi
+          echo "PROJECT_ID=$ACTUAL_PROJECT" >> "$GITHUB_OUTPUT"
+        id: project-check
+
+      - name: Configurar Docker exclusivamente para Artifact Registry southamerica-east1
+        run: gcloud auth configure-docker southamerica-east1-docker.pkg.dev --quiet
+
+      - name: Build (mismo comando ya validado en PR #39/redeploy manual de Puerta F)
+        run: docker build --no-cache -t southamerica-east1-docker.pkg.dev/ridepro-development/ridepro-backend/api:${{ github.sha }} ./backend
+
+      - name: Push imagen etiquetada por commit SHA (nunca latest)
+        run: docker push southamerica-east1-docker.pkg.dev/ridepro-development/ridepro-backend/api:${{ github.sha }}
+
+      - name: Resolver y validar digest publicado
+        id: digest
+        run: |
+          DIGEST="$(gcloud artifacts docker images describe southamerica-east1-docker.pkg.dev/ridepro-development/ridepro-backend/api:${{ github.sha }} --format='value(image_summary.digest)')"
+          if [ -z "$DIGEST" ]; then
+            echo "DIGEST vacío — la publicación no puede darse por válida"
+            exit 1
+          fi
+          echo "digest=$DIGEST" >> "$GITHUB_OUTPUT"
+
+      - name: Reporte (sin datos sensibles)
+        run: |
+          {
+            echo "PROJECT_ID = ridepro-development"
+            echo "GITHUB_SHA = ${{ github.sha }}"
+            echo "IMAGE = southamerica-east1-docker.pkg.dev/ridepro-development/ridepro-backend/api:${{ github.sha }}"
+            echo "DIGEST = ${{ steps.digest.outputs.digest }}"
+            echo "WIF_AUTH = PASS"
+            echo "ARTIFACT_PUSH = PASS"
+          } >> "$GITHUB_STEP_SUMMARY"
