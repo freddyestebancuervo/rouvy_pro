@@ -1,5 +1,6 @@
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:dio/dio.dart';
+import 'package:firebase_crashlytics/firebase_crashlytics.dart';
 import 'package:flutter/services.dart';
 import 'package:sign_in_with_apple/sign_in_with_apple.dart';
 
@@ -26,7 +27,14 @@ import 'failures.dart';
 class AppErrorHandler {
   const AppErrorHandler._();
 
-  static Failure handle(Object error) {
+  /// [stackTrace] es opcional para no obligar a cambiar cada `catch (e)`
+  /// existente en los repositorios a `catch (e, stackTrace)` — si no se
+  /// provee, se usa `StackTrace.current` (el punto de esta llamada,
+  /// suficientemente cercano al `catch` real ya que la conversión ocurre
+  /// de forma síncrona). Solo se usa para el registro técnico del branch
+  /// no clasificado (ver abajo) — los errores ya clasificados no lo
+  /// necesitan, no son bugs, son casos de dominio esperados.
+  static Failure handle(Object error, [StackTrace? stackTrace]) {
     if (error is FirebaseAuthException) {
       return AuthFailure(_mapFirebaseAuthMessage(error.code));
     }
@@ -62,7 +70,28 @@ class AppErrorHandler {
     if (error is CacheException) {
       return CacheFailure(error.message);
     }
-    return UnexpectedFailure(error.toString());
+
+    // Error verdaderamente no clasificado (bug/excepción no anticipada) —
+    // el único punto de este manejador que podía perder información
+    // técnica al convertir a un `Failure` de dominio (Documento de
+    // auditoría "MVP Fase 0.1", saneamiento del fallback). Se registra el
+    // error ORIGINAL + stack trace para diagnóstico técnico — nunca se
+    // expone al usuario. `core/` no depende de `AppLocalizations` (eso
+    // acoplaría esta capa a `presentation`, que no tiene `BuildContext`
+    // aquí) — se usa el mensaje seguro que `UnexpectedFailure` ya trae
+    // por defecto, no un `error.toString()` crudo.
+    try {
+      FirebaseCrashlytics.instance.recordError(
+        error,
+        stackTrace ?? StackTrace.current,
+        fatal: false,
+      );
+    } catch (_) {
+      // El registro es best-effort: si Crashlytics no está disponible
+      // (p. ej. en pruebas sin Firebase inicializado), el manejo del
+      // error original no debe verse afectado ni interrumpirse.
+    }
+    return const UnexpectedFailure();
   }
 
   static String _mapAppleErrorMessage(AuthorizationErrorCode code) {
@@ -98,8 +127,9 @@ class AppErrorHandler {
   /// pasara por acá) o a un texto genérico si no hay nada usable.
   static Failure _mapBackendResponse(DioException error) {
     final dynamic data = error.response?.data;
-    final Map<String, dynamic>? envelope =
-        (data is Map && data['error'] is Map) ? (data['error'] as Map).cast<String, dynamic>() : null;
+    final Map<String, dynamic>? envelope = (data is Map && data['error'] is Map)
+        ? (data['error'] as Map).cast<String, dynamic>()
+        : null;
     final String message = (envelope?['message'] as String?) ??
         (data is Map ? data['message']?.toString() : null) ??
         'Error al comunicarse con el servidor.';

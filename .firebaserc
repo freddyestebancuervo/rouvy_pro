@@ -1,5 +1,16 @@
 {
   "projects": {
-    "default": "demo-ridepro-security-tests"
-  }
+    "default": "demo-ridepro-security-tests",
+    "development": "ridepro-development"
+  },
+  "targets": {
+    "ridepro-development": {
+      "hosting": {
+        "development": [
+          "ridepro-development"
+        ]
+      }
+    }
+  },
+  "etags": {}
 }

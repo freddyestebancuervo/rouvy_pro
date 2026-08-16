@@ -19,7 +19,8 @@ class _FixedWorkoutsRepository implements WorkoutsRepository {
   @override
   Future<Either<Failure, List<Workout>>> fetchAll({required bool mineOnly}) async {
     if (shouldFail) return const Left(ServerFailure('Error simulado'));
-    final List<Workout> filtered = mineOnly ? workouts.where((Workout w) => w.isMine).toList() : workouts;
+    final List<Workout> filtered =
+        mineOnly ? workouts.where((Workout w) => w.isMine).toList() : workouts;
     return Right(filtered);
   }
 
@@ -106,7 +107,8 @@ void main() {
     expect(find.byIcon(Icons.fitness_center_outlined), findsOneWidget);
   });
 
-  testWidgets('muestra el estado de error con botón de reintentar cuando falla', (WidgetTester tester) async {
+  testWidgets('muestra el estado de error con botón de reintentar cuando falla',
+      (WidgetTester tester) async {
     await tester.pumpWidget(
       _wrap(
         const WorkoutsListPage(),
@@ -117,9 +119,16 @@ void main() {
 
     expect(find.byIcon(Icons.error_outline), findsOneWidget);
     expect(find.widgetWithText(FilledButton, 'Reintentar'), findsOneWidget);
+    // Regresión del bug "minified:DJ" (Documento de auditoría de
+    // Entrenamientos): el mensaje real de la Failure debe mostrarse tal
+    // cual, nunca el nombre de la clase ni un runtimeType minificado.
+    expect(find.text('Error simulado'), findsOneWidget);
+    expect(find.textContaining('ServerFailure'), findsNothing);
+    expect(find.textContaining('Instance of'), findsNothing);
   });
 
-  testWidgets('el filtro "Míos" oculta los entrenamientos que no son propios', (WidgetTester tester) async {
+  testWidgets('el filtro "Míos" oculta los entrenamientos que no son propios',
+      (WidgetTester tester) async {
     await tester.pumpWidget(
       _wrap(
         const WorkoutsListPage(),

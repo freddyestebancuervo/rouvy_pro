@@ -3,6 +3,7 @@ import 'dart:io';
 import 'package:health/health.dart';
 import 'package:permission_handler/permission_handler.dart' as ph;
 
+import '../platform/platform_capabilities.dart';
 import 'health_availability.dart';
 import 'health_permission_status.dart';
 import 'health_platform_gateway.dart';
@@ -39,6 +40,16 @@ class HealthPlatformGatewayImpl implements HealthPlatformGateway {
 
   @override
   Future<HealthAvailability> checkAvailability() async {
+    if (PlatformCapabilities.isWeb) {
+      // `dart:io`'s `Platform.isIOS`/`Platform.isAndroid` lanzan
+      // `UnsupportedError` en tiempo de ejecución en Flutter Web — ninguna
+      // plataforma de salud aplica ahí de todas formas (ver el mismo
+      // veredicto ya existente más abajo para desktop), así que se
+      // devuelve `unavailable` ANTES de tocar `Platform`, sin esperar a
+      // que la comprobación de iOS/Android truene primero.
+      return HealthAvailability.unavailable;
+    }
+
     if (Platform.isIOS) {
       // HealthKit está presente en todo iOS desde la versión 8 — el único
       // caso real de "no disponible" es un iPad (algunas versiones de
@@ -74,7 +85,8 @@ class HealthPlatformGatewayImpl implements HealthPlatformGateway {
       }
     }
 
-    // Web/desktop: ninguna plataforma de salud aplicable.
+    // Desktop (Windows/Linux/macOS, no Web — Web ya se resolvió arriba):
+    // ninguna plataforma de salud aplicable.
     return HealthAvailability.unavailable;
   }
 

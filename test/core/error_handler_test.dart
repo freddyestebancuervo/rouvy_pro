@@ -6,6 +6,15 @@ import 'package:rouvy_pro/core/error/error_handler.dart';
 import 'package:rouvy_pro/core/error/exceptions.dart';
 import 'package:rouvy_pro/core/error/failures.dart';
 
+/// Excepción de prueba cuyo `toString()` revela deliberadamente detalles
+/// internos — simula el tipo de excepción no clasificada que, antes de la
+/// corrección de `AppErrorHandler`, terminaba filtrándose como mensaje de
+/// usuario vía `UnexpectedFailure(error.toString())`.
+class _RevealingTestException implements Exception {
+  @override
+  String toString() => 'Exception: secreto-interno-no-mostrar (RevealingTestException)';
+}
+
 DioException _dioErrorWithEnvelope(int statusCode, Map<String, dynamic> errorEnvelope) {
   final RequestOptions requestOptions = RequestOptions(path: '/workouts');
   return DioException(
@@ -31,8 +40,7 @@ void main() {
     });
 
     test('traduce FirebaseAuthException(email-already-in-use) correctamente', () {
-      final FirebaseAuthException exception =
-          FirebaseAuthException(code: 'email-already-in-use');
+      final FirebaseAuthException exception = FirebaseAuthException(code: 'email-already-in-use');
 
       final Failure failure = AppErrorHandler.handle(exception);
 
@@ -54,6 +62,43 @@ void main() {
       final Failure failure = AppErrorHandler.handle(error);
 
       expect(failure, isA<UnexpectedFailure>());
+    });
+
+    test(
+      'un error desconocido nunca expone su texto original ni detalles técnicos en el mensaje',
+      () {
+        // Excepción deliberadamente "reveladora" en su toString() — simula
+        // exactamente el caso que originaba "minified:DJ" en Web release.
+        final Object revealingError = _RevealingTestException();
+
+        final Failure failure = AppErrorHandler.handle(revealingError);
+
+        expect(failure, isA<UnexpectedFailure>());
+        expect(failure.message, 'Ocurrió un error inesperado.');
+        expect(failure.message, isNot(contains('RevealingTestException')));
+        expect(failure.message, isNot(contains('secreto-interno-no-mostrar')));
+        expect(failure.message, isNot(contains('Exception')));
+        expect(failure.message, isNot(contains('Instance of')));
+        expect(failure.message, isNot(contains('minified')));
+      },
+    );
+
+    test(
+      'no lanza excepción aunque el registro técnico (Crashlytics) no esté disponible '
+      '— el sistema sigue funcionando (VM de pruebas, sin Firebase inicializado)',
+      () {
+        expect(
+          () => AppErrorHandler.handle(Exception('boom sin Firebase inicializado')),
+          returnsNormally,
+        );
+      },
+    );
+
+    test('acepta un StackTrace explícito para el registro técnico sin cambiar el resultado', () {
+      final Failure failure = AppErrorHandler.handle(Exception('boom'), StackTrace.current);
+
+      expect(failure, isA<UnexpectedFailure>());
+      expect(failure.message, 'Ocurrió un error inesperado.');
     });
 
     // --- Sobre de error del backend propio (NestJS, ApiExceptionFilter):

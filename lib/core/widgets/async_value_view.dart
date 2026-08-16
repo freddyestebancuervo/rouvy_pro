@@ -1,6 +1,9 @@
+import 'package:firebase_crashlytics/firebase_crashlytics.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../../l10n/generated/app_localizations.dart';
+import '../error/failures.dart';
 import 'empty_state_view.dart';
 import 'error_state_view.dart';
 
@@ -43,10 +46,34 @@ class AsyncValueView<T> extends StatelessWidget {
   Widget build(BuildContext context) {
     return value.when(
       loading: () => const Center(child: CircularProgressIndicator()),
-      error: (Object error, StackTrace stackTrace) => ErrorStateView(
-        message: error.toString(),
-        onRetry: onRetry,
-      ),
+      error: (Object error, StackTrace stackTrace) {
+        // Los providers de lectura (p. ej. `workoutsListProvider`) lanzan
+        // el `Failure` de dominio directamente — nunca se le llama
+        // `.toString()` para mostrarlo: `Failure` extiende `Equatable`,
+        // cuyo `toString()` por defecto devuelve `'$runtimeType'`, que en
+        // un build Web release minificado aparece como
+        // `Instance of 'minified:XX'` en vez de un mensaje legible.
+        // `ErrorStateView.failure` ya extrae `.message` correctamente.
+        if (error is Failure) {
+          return ErrorStateView(failure: error, onRetry: onRetry);
+        }
+
+        // Error no modelado como `Failure` (bug/excepción no anticipada):
+        // se registra para diagnóstico técnico — nunca se muestra al
+        // usuario ni su `runtimeType` ni su stack trace. El registro se
+        // envuelve en `try/catch` porque nunca debe impedir mostrar el
+        // estado de error (p. ej. en pruebas de widget sin Firebase
+        // inicializado).
+        try {
+          FirebaseCrashlytics.instance.recordError(error, stackTrace, fatal: false);
+        } catch (_) {
+          // Sin acción: el registro es best-effort, no debe romper la UI.
+        }
+        return ErrorStateView(
+          message: AppLocalizations.of(context).genericErrorMessage,
+          onRetry: onRetry,
+        );
+      },
       data: (T loadedValue) {
         if (isEmpty != null && isEmpty!(loadedValue) && emptyMessage != null) {
           return EmptyStateView(message: emptyMessage!, icon: emptyIcon);
