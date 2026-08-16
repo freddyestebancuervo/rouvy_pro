@@ -10,8 +10,10 @@ import {
   Patch,
   Post,
   Query,
+  Res,
   UseGuards,
 } from '@nestjs/common';
+import { Response } from 'express';
 import { AuthUser } from '../../common/auth/auth-user.interface';
 import { CurrentUser } from '../../common/auth/current-user.decorator';
 import { JwtAuthGuard } from '../../common/auth/jwt-auth.guard';
@@ -45,11 +47,25 @@ export class WorkoutsController {
     return this.workoutsService.create(user.userId, dto);
   }
 
+  /**
+   * T-F0.5 (docs/tasks/TF0_5_PAGINATION_CONTRACT.md) — mismo criterio
+   * que `EquipmentController.list`: body siempre `ARRAY`, cursor
+   * exclusivamente en `X-Next-Cursor`, legacy intacto sin
+   * `limit`/`cursor`.
+   */
   @Get()
-  list(
+  async list(
     @CurrentUser() user: AuthUser,
     @Query() query: WorkoutQueryDto,
+    @Res({ passthrough: true }) res: Response,
   ): Promise<WorkoutListItemResponse[]> {
+    if (query.limit !== undefined || query.cursor !== undefined) {
+      const page = await this.workoutsService.listPaginated(user.userId, query);
+      if (page.nextCursor !== null) {
+        res.setHeader('X-Next-Cursor', page.nextCursor);
+      }
+      return page.items;
+    }
     return this.workoutsService.list(user.userId, query);
   }
 

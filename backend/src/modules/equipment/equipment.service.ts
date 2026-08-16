@@ -2,6 +2,12 @@ import { HttpStatus, Injectable } from '@nestjs/common';
 import { isPgUniqueViolation, pgConstraintName } from '../../common/database/pg-error.util';
 import { ApiException } from '../../common/exceptions/api.exception';
 import { assertOwned } from '../../common/ownership/assert-owned.util';
+import {
+  computeFilterFingerprint,
+  decodeCursor,
+  encodeCursor,
+  parseLimit,
+} from '../../common/pagination/pagination.util';
 import { CreateEquipmentDto } from './dto/create-equipment.dto';
 import { EquipmentQueryDto } from './dto/equipment-query.dto';
 import { UpdateEquipmentDto } from './dto/update-equipment.dto';
@@ -30,6 +36,15 @@ export interface EquipmentResponse {
   archivedAt: Date | null;
   createdAt: Date;
   updatedAt: Date;
+}
+
+/** T-F0.5 (docs/tasks/TF0_5_PAGINATION_CONTRACT.md) — resultado interno
+ * del modo paginado. El controller es quien decide cómo exponer
+ * `nextCursor` (header `X-Next-Cursor`, nunca en el body — contract
+ * §6.1/§10). */
+export interface EquipmentPage {
+  items: EquipmentResponse[];
+  nextCursor: string | null;
 }
 
 const EQUIPMENT_NOT_FOUND = (): ApiException =>
@@ -121,6 +136,46 @@ export class EquipmentService {
       includeArchived: query.includeArchived === 'true',
     });
     return records.map((record) => this.toResponse(record));
+  }
+
+  /**
+   * T-F0.5 — modo paginado opt-in (contract §6.1/§9/§10), usado
+   * exclusivamente por el controller cuando el request trae `limit` y/o
+   * `cursor`. `list()` arriba queda intacto, byte a byte, para el
+   * camino legacy — esta ruta nunca lo llama ni lo altera.
+   */
+  async listPaginated(userId: string, query: EquipmentQueryDto): Promise<EquipmentPage> {
+    if (query.category) {
+      await this.assertValidCategory(query.category);
+    }
+    const includeArchived = query.includeArchived === 'true';
+    // Ausente y `false` son el mismo filtro efectivo (mismo criterio que
+    // `list()` arriba) — deben producir el mismo fingerprint (contract
+    // §8.1 nota de Fase H).
+    const fingerprint = computeFilterFingerprint({
+      category: query.category ?? null,
+      includeArchived,
+    });
+    const limit = parseLimit(query.limit);
+    const cursor = query.cursor !== undefined ? decodeCursor(query.cursor, fingerprint) : null;
+
+    const rows = await this.equipmentRepository.findPageForUser(
+      userId,
+      { category: query.category, includeArchived },
+      { limit: limit + 1, cursor },
+    );
+
+    const hasMore = rows.length > limit;
+    const pageRows = hasMore ? rows.slice(0, limit) : rows;
+    const items = pageRows.map((row) => this.toResponse(row.record));
+
+    let nextCursor: string | null = null;
+    if (hasMore) {
+      const last = pageRows[pageRows.length - 1];
+      nextCursor = encodeCursor({ createdAt: last.cursorCreatedAt, id: last.record.id, fingerprint });
+    }
+
+    return { items, nextCursor };
   }
 
   async getById(userId: string, id: string): Promise<EquipmentResponse> {
