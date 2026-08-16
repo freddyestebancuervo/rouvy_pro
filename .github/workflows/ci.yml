@@ -28,29 +28,58 @@ jobs:
       # Escaneo de secretos de alta confianza, fail-closed, ANTES de
       # instalar cualquier dependencia — si detecta un match, este mismo
       # required check (Flutter — analyze + test) falla. Solo patrones de
-      # muy alta confianza (PEM, AWS, Google, GitHub, Slack); nunca
-      # genérico tipo password=/secret=/token= para evitar falsos
-      # positivos contra configuración/datos ficticios de test ya
-      # presentes en el repo (p. ej. POSTGRES_PASSWORD=devpassword).
-      # Nunca imprime el valor coincidente, solo el nombre del archivo.
+      # muy alta confianza; nunca genérico tipo password=/secret=/token=
+      # para evitar falsos positivos contra configuración/datos ficticios
+      # de test ya presentes en el repo (p. ej.
+      # POSTGRES_PASSWORD=devpassword). Nunca imprime el valor
+      # coincidente, solo el nombre del archivo.
+      #
+      # PEM/AWS/GitHub/Slack se bloquean en CUALQUIER archivo tracked,
+      # sin excepción. Google API keys (AIza...) son, por diseño de
+      # Firebase/Google, configuración de cliente pública (restringidas
+      # por dominio/plataforma en la consola de Firebase, no secretas) —
+      # se toleran EXCLUSIVAMENTE en estos 6 archivos de configuración de
+      # cliente ya conocidos y auditados; una AIza... en cualquier otro
+      # path sigue haciendo fallar el check igual que cualquier otro
+      # patrón. La allowlist es de paths exactos, nunca wildcard.
       - name: Escaneo de secretos de alta confianza (fail-closed)
         shell: bash
         run: |
           set -euo pipefail
 
-          PATTERN='-----BEGIN [A-Z ]*PRIVATE KEY-----|AKIA[0-9A-Z]{16}|AIza[0-9A-Za-z_-]{35}|gh[pousr]_[A-Za-z0-9]{20,}|xox[baprs]-[0-9A-Za-z-]+'
+          ALWAYS_BLOCK_PATTERN='-----BEGIN [A-Z ]*PRIVATE KEY-----|AKIA[0-9A-Z]{16}|gh[pousr]_[A-Za-z0-9]{20,}|xox[baprs]-[0-9A-Za-z-]+'
+          GOOGLE_API_KEY_PATTERN='AIza[0-9A-Za-z_-]{35}'
 
-          MATCH_FILE="$(mktemp)"
+          ALWAYS_MATCH_FILE="$(mktemp)"
+          GOOGLE_MATCH_FILE="$(mktemp)"
+          trap 'rm -f "$ALWAYS_MATCH_FILE" "$GOOGLE_MATCH_FILE"' EXIT
 
-          if git grep -I -l -E -e "$PATTERN" -- . > "$MATCH_FILE"; then
-            echo "::error::Posible secreto de alta confianza detectado en archivos tracked."
+          if git grep -I -l -E -e "$ALWAYS_BLOCK_PATTERN" -- . > "$ALWAYS_MATCH_FILE"; then
+            echo "::error::Posible secreto de alta confianza detectado en archivos tracked (PEM/AWS/GitHub/Slack)."
             echo "Archivos afectados:"
-            sed 's/^/ - /' "$MATCH_FILE"
-            rm -f "$MATCH_FILE"
+            sed 's/^/ - /' "$ALWAYS_MATCH_FILE"
             exit 1
           fi
 
-          rm -f "$MATCH_FILE"
+          if git grep -I -l -E -e "$GOOGLE_API_KEY_PATTERN" -- . > "$GOOGLE_MATCH_FILE"; then
+            while IFS= read -r FILE; do
+              case "$FILE" in
+                android/app/google-services.json|\
+                android/app/src/development/google-services.json|\
+                ios/Runner/Firebase/Development/GoogleService-Info.plist|\
+                ios/Runner/Firebase/Production/GoogleService-Info.plist|\
+                lib/firebase_options.dart|\
+                lib/firebase_options_development.dart)
+                  ;;
+                *)
+                  echo "::error::Google API key detectada fuera de la allowlist exacta de configuración de cliente Firebase."
+                  echo "Archivo inesperado: $FILE"
+                  exit 1
+                  ;;
+              esac
+            done < "$GOOGLE_MATCH_FILE"
+          fi
+
           echo "SECRET_SCAN=PASS"
 
       - uses: subosito/flutter-action@1a449444c387b1966244ae4d4f8c696479add0b2 # v2.23.0
