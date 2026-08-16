@@ -26,6 +26,7 @@ jobs:
   guard:
     name: Guard — main only
     runs-on: ubuntu-latest
+    timeout-minutes: 5
     # Segunda barrera explícita, independiente de la restricción de
     # deployment branch policy ya aplicada sobre el Environment
     # `development` (protected_branches=false, custom_branch_policies=true,
@@ -62,9 +63,10 @@ jobs:
     needs: guard
     name: Publicar y desplegar (WIF + build + push + deploy sin tráfico + switch + rollback)
     runs-on: ubuntu-latest
+    timeout-minutes: 45
     environment: development
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
 
@@ -258,7 +260,7 @@ jobs:
           ATTEMPT=1
           SUCCESS=false
           while [ $ATTEMPT -le $MAX_ATTEMPTS ]; do
-            RESPONSE="$(curl -s -w '\n%{http_code}' "$URL/v1/health" || true)"
+            RESPONSE="$(curl -sS --connect-timeout 5 --max-time 15 -w '\n%{http_code}' "$URL/v1/health" || true)"
             HTTP_CODE="$(echo "$RESPONSE" | tail -n1)"
             BODY="$(echo "$RESPONSE" | sed '$d')"
             if [ "$HTTP_CODE" = "200" ] && echo "$BODY" | jq -e '.status=="ok" and .database=="connected"' >/dev/null 2>&1; then
