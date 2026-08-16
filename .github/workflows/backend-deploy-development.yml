@@ -23,7 +23,43 @@ permissions:
   id-token: write
 
 jobs:
+  guard:
+    name: Guard — main only
+    runs-on: ubuntu-latest
+    # Segunda barrera explícita, independiente de la restricción de
+    # deployment branch policy ya aplicada sobre el Environment
+    # `development` (protected_branches=false, custom_branch_policies=true,
+    # única policy `main`/branch). Corre ANTES de cualquier acceso a WIF/
+    # Cloud/Environment — sin permisos OIDC, sin checkout, sin gcloud.
+    permissions: {}
+    steps:
+      - name: Rechazar refs distintas de main antes de acceso cloud
+        shell: bash
+        run: |
+          echo "EVENT_NAME=$GITHUB_EVENT_NAME"
+          echo "REF=$GITHUB_REF"
+          echo "REF_TYPE=$GITHUB_REF_TYPE"
+
+          if [ "$GITHUB_EVENT_NAME" != "workflow_dispatch" ]; then
+            echo "::error::Evento inesperado: $GITHUB_EVENT_NAME"
+            exit 1
+          fi
+
+          if [ "$GITHUB_REF_TYPE" != "branch" ]; then
+            echo "::error::Development solo admite una branch; ref_type=$GITHUB_REF_TYPE"
+            exit 1
+          fi
+
+          if [ "$GITHUB_REF" != "refs/heads/main" ]; then
+            echo "::error::Development deploy bloqueado: solo refs/heads/main puede continuar. Ref recibida: $GITHUB_REF"
+            exit 1
+          fi
+
+          echo "GUARD=PASS"
+          echo "REF autorizada: refs/heads/main"
+
   publish:
+    needs: guard
     name: Publicar y desplegar (WIF + build + push + deploy sin tráfico + switch + rollback)
     runs-on: ubuntu-latest
     environment: development
