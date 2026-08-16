@@ -4,10 +4,61 @@
 
 > Documento vivo. Se actualiza en la Etapa 10 (Cierre) de toda tarea, el mismo día en que se cierra, según `RIDEPRO_DEVELOPMENT_PROTOCOL.md` §6. Nunca se reescribe el historial de cambios — solo se agregan entradas nuevas al final. Fuente de los datos iniciales: `docs/audits/AUDITORIA_FINAL/MASTER_EXECUTION_PLAN.md` y `BACKLOG_MAESTRO.md` — cero hallazgos nuevos generados al crear este documento.
 
-- **Fecha de última actualización:** 2026-08-15
-- **Actualizado por:** Ejecutor técnico documental (cierre formal de `T-F0.2`/`C1` — Puerta H cumplida tras el primer deploy automatizado real a Cloud Run Development, `workflow_dispatch` run `31924059938`, conclusión SUCCESS — ver historial)
-- **Commit base de `main` auditado al iniciar este bloque:** `c2b6f260d2b79a49c8db335991b09abdea6a56ab`
+- **Fecha de última actualización:** 2026-08-16
+- **Actualizado por:** Ejecutor técnico documental (añade la sección "ESTADO VIGENTE — LEER PRIMERO" para prevenir la interpretación errónea de estados históricos superados; cierre de las Tareas Git Windows #1-#3 — ver historial)
+- **Commit base de `main` auditado al iniciar este bloque:** `d26feddca9a0b0a75820a4988cd98e4f7b0e990a`
 - **Rama de referencia:** `main` — `feature/d2` continúa como rama de desarrollo activo protegida (no se toca fuera de su propio flujo de integración por bloques)
+
+---
+
+## 0. ESTADO VIGENTE — LEER PRIMERO
+
+> Esta sección es la fuente de verdad operativa inmediata.
+> Las entradas históricas posteriores se conservan por trazabilidad y
+> describen correctamente el estado de su fecha, pero una afirmación
+> histórica que contradiga esta tabla queda SUPERADA por evidencia posterior.
+> Ningún agente debe reabrir, reimplementar o volver a ejecutar una tarea
+> marcada **CERRADA** aquí basándose únicamente en una frase histórica aislada.
+
+| Área / tarea | Estado vigente | Evidencia / nota |
+|---|---|---|
+| `T-F0.1` (crash de Wearables en Flutter Web) | **PARCIAL** | Implementación + test de regresión automatizado integrados a `main` (PR #9), en verde. La validación manual complementaria en navegador real (protocolo §1, Etapa 5/Puerta 3) **sigue sin ejecutarse** — sin infraestructura de navegador real disponible en este entorno. No confundir con "no implementado": el código sí está en `main`. |
+| `T-F0.2` / `C1` (separación de entornos Firebase) | **CERRADA** | Declarada formalmente cerrada el 2026-08-15 — las 10 puertas del Documento 15 §12 (A-J) están **Cumplida** para Development, incluida la Puerta H (primer deploy automatizado real a Cloud Run Development, `workflow_dispatch` run `31924059938`, `SUCCESS`). Ver historial 2026-08-15. **No reabrir** sin `REOPEN_REASON`/`NEW_EVIDENCE`/`LAST_CLOSING_EVIDENCE`/`WHY_CLOSURE_IS_INVALID` explícitos. |
+| `T-F0.3` (`docker-compose.yml` local) | **CERRADA** | Integrada a `main` — PR #29 (merge `2d8e5751931c2a76a300dcaf7a7ee812ad19a2d0`). |
+| `T-F0.4` (rate limiter → Redis) | **CERRADA** | Integrada a `main` — PR #30 (merge `ce54cb5fd769177e32a4fa3feb8d144bee1d91b5`). |
+| `T-F0.5` (paginación real en `equipment`/`workouts`) | **ABIERTA — sin iniciar** | Sin dependencias bloqueantes. Una auditoría previa de solo lectura (diseño de cursor-based pagination) quedó registrada, pero **ningún código fue implementado todavía** — no marcar como cerrada ni parcial. |
+| Android Production / Bloque 5C (`applicationId` placeholder) | **PENDIENTE — propuesto, no autorizado** | `com.ridepro.app.YOUR_APPLICATION_ID` sigue sin corregir en Production. Decisión de reemplazo (`com.ridepro.app`) ya aprobada (Documento 15, D3) pero nunca ejecutada. Requiere registrar una app Android nueva en `ridepro-dbafe` — no iniciar sin autorización explícita. |
+| `T-F1.1` (elegir plataforma de hosting del backend) | **ABIERTA** | Decisión de negocio formal sin tomar para Production — requiere autorización del propietario (`BACKLOG_MAESTRO.md`). Development ya opera de facto sobre Cloud Run/Cloud SQL, pero eso **no constituye** el cierre formal de esta tarea para Production. |
+| Staging | **NO INICIADO** | Ningún proyecto GCP/Firebase de Staging existe todavía (Documento 23). |
+| Production backend | **NO DESPLEGADO** | `ridepro-dbafe` conserva únicamente configuración de cliente histórica (Auth, Android, Web, iOS). Cloud Firestore nunca fue habilitado ahí. Sin backend propio desplegado — despliegue real depende de `T-F1.1`. |
+| Tareas Git Windows #1-#3 (protección/preservación local) | **CERRADAS** | Auditoría de solo lectura del Git local de Windows, clasificación y preservación remota de todo el contenido local único identificado, y confirmación final de respaldo — completadas 2026-08-16. Contenido preservado en `backup/local-pre-limpieza-2026-07-21` y `backup/windows-local-wip-20260816`. **"Respaldado" no significa "aprobado para integrarse a `main`"** — ambas ramas son referencias de preservación, no cambios funcionales revisados ni aceptados. |
+
+**FUENTE_DE_VERDAD** (en caso de contradicción, en este orden):
+1. `origin/main` actual y el estado real verificable (código, configuración, runtime).
+2. Esta tabla — ESTADO VIGENTE.
+3. Evidencia posterior de PR/CI/runtime documentada en la sección 5 (Historial).
+4. `BACKLOG_MAESTRO.md` / `MASTER_EXECUTION_PLAN.md` para IDs, dependencias y criterios de aceptación (documentos congelados, no se editan).
+5. Auditorías históricas (`docs/audits/AUDITORIA_FINAL/*`) únicamente como fotografías válidas de su propia fecha.
+
+**REGLA_DE_REAPERTURA:** una tarea marcada **CERRADA** aquí no se reabre por encontrar una frase histórica aislada que la contradiga. Toda reapertura debe declarar explícitamente:
+`REOPEN_REASON` / `NEW_EVIDENCE` / `LAST_CLOSING_EVIDENCE` / `WHY_CLOSURE_IS_INVALID`. Sin los cuatro campos justificados con evidencia real, no se reabre. (Mismo mecanismo ya vigente en "Cómo actualizar este documento", al final de este archivo.)
+
+**REGLA_DE_RAMAS:** toda nueva implementación debe comenzar desde el HEAD vigente de `origin/main`, en una rama propia y aislada, salvo una excepción documentada y explícitamente autorizada. No reutilizar ramas antiguas de bloques ya cerrados.
+
+**REGLA_DE_GIT_WINDOWS:** `backup/local-pre-limpieza-2026-07-21` y `backup/windows-local-wip-20260816` son referencias de preservación de contenido local histórico de una máquina Windows. No significan aprobación funcional, no se fusionan automáticamente a `main`, y no se eliminan automáticamente — cualquier decisión sobre su destino final queda pendiente del propietario.
+
+### Próximo camino operativo
+
+Orden vigente, sin declarar ninguno de estos pasos como ya ejecutado:
+
+1. Cerrar la Puerta 0 documental mediante el PR de esta misma tarea.
+2. Verificar/proteger `main` y endurecer CI/deployment donde falte.
+3. Control mínimo de migraciones de base de datos.
+4. `T-F0.5` — paginación real y segura de `equipment`/`workouts`.
+5. `T-F0.1` (validación manual en navegador) puede ejecutarse en paralelo a lo anterior.
+6. Luego, `QG0` (Documento `MASTER_EXECUTION_PLAN.md` §9) y el inicio de Fase 1.
+
+`T-F0.2` **no** aparece en esta lista — ya está cerrada (ver tabla arriba).
 
 ---
 
@@ -232,6 +283,7 @@ Entre estos dos, ninguna prioridad documentada obliga un orden — `BACKLOG_MAES
 | 2026-08-15 | **PR #42** (`feat/tf02-gate-h-wif-artifact-push-20260815`) integrado a `main` (merge commit `c7ae222b10750661a032163a313962a72eca9ad4`): primer workflow con identidad cloud real hacia Development — `.github/workflows/backend-deploy-development.yml`. Infraestructura GCP/GitHub creada en la misma sesión, en bloques H0-H4 pequeños y reversibles: **H0** protección de la rama `main` (PR obligatorio, 3 checks requeridos, `enforce_admins=true`); **H1** Workload Identity Pool `github-actions-pool`; **H2** Provider OIDC `github-actions-provider` (issuer `https://token.actions.githubusercontent.com`, `attribute-condition` restringido a `repository_owner`+`repository`+`ref=refs/heads/main`+`workflow_ref` del archivo exacto del workflow); **H3** service account dedicada `ridepro-github-deployer@ridepro-development.iam.gserviceaccount.com` (nunca la SA runtime); **H4** 4 IAM bindings de mínimo privilegio a nivel de recurso, confirmando que el binding preexistente `allUsers→run.invoker` de Cloud Run no se tocó. El workflow en este PR: trigger únicamente `workflow_dispatch`, autenticación WIF sin JSON key, verificación de `projectId` antes de publicar, build+push a Artifact Registry con tag inmutable `github.sha` — deliberadamente sin ningún paso de deploy a Cloud Run todavía. Ejecutado una vez de extremo a extremo antes de fusionar (run `31917884315`, `SUCCESS`): WIF+build+push confirmados, sin tocar Cloud Run. |
 | 2026-08-15 | **PR #43** (`feat/tf02-gate-h-cloud-run-deploy-rollback-20260815`) integrado a `main` (merge commit `c2b6f260d2b79a49c8db335991b09abdea6a56ab`): extiende el workflow de PR #42 con el deploy real a Cloud Run, controlado y reversible. Flujo: capturar `PREVIOUS_REVISION` (fail-closed si el tráfico actual no es exactamente 1 revisión al 100%) → `gcloud run deploy --image=...@DIGEST --no-traffic` → identificar `NEW_REVISION` sin ambigüedad → validar la candidata (Ready=True, imagen distinta a la previa, 0% de tráfico) **antes** de mover nada → `update-traffic` explícito a `NEW_REVISION=100` → verificar el split → health check acotado (`/v1/health`, HTTP 200 + `status=ok` + `database=connected`) → confirmar ausencia de drift → **rollback condicionado** (nunca `if: failure()` genérico, solo si el tráfico pudo haberse movido; si se ejecuta, el job siempre termina en `FAILURE`). `concurrency: {group: cloud-run-deploy-development, cancel-in-progress: false}` evita dos `workflow_dispatch` simultáneos. Auditoría final de solo lectura previa al merge: `VERDICT = PASS WITH WARNINGS` — único hallazgo no bloqueante: la validación HTTP de `/v1/health` ocurre después del switch de tráfico, respaldada por el rollback automático. |
 | 2026-08-15 | **Puerta H — primer deploy automatizado real a Cloud Run Development, `workflow_dispatch` run `31924059938` sobre `main`=`c2b6f260d2b79a49c8db335991b09abdea6a56ab`, conclusión `SUCCESS`:** 18 pasos sustantivos en `success` (WIF auth, project guard, build, push, digest, captura de estado previo, deploy `--no-traffic`, identificación y validación de la candidata, switch de tráfico, verificación, health check, no-drift-check); rollback `skipped` — no fue necesario. `PREVIOUS_REVISION = ridepro-backend-dev-00008-ddl` → `NEW_REVISION = ridepro-backend-dev-00009-fsz` (`Ready=True`, digest `sha256:835aa45ce790c27f14c4f58b827842886f9c0b2de8ed7405d0c0eb9aae859776`), 100% del tráfico movido explícitamente. `GET /v1/health` → `200 {"status":"ok","database":"connected"}`. Verificado de forma independiente: service account, Cloud SQL, `ingress`, `SERVICE_MAX_INSTANCES=1` y referencia del secreto `DATABASE_URL` idénticos a antes del deploy — sin deriva. Puerta H pasa de **Parcial** a **Cumplida**: WIF sin credenciales de larga duración, verificación explícita de `projectId` antes de publicar, y ahora un deploy real completado con éxito. **Con esto, las 10 puertas del Documento 15 §12 (A, B, C, D, E, F, G, H, I, J) quedan Cumplida para Development — `T-F0.2`/`C1` se declara formalmente CERRADA.** El mecanismo de rollback automático permanece disponible y ya fue ensayado realmente en Puerta J (2026-08-13); no fue necesario invocarlo en este primer deploy real. |
+| 2026-08-16 | **Añadida la sección "0. ESTADO VIGENTE — LEER PRIMERO"** al principio de este documento (PR documental separado, sin cambios de código/infraestructura). Motivo: el historial de este documento es correctamente append-only y extenso, y una entrada histórica aislada leída fuera de contexto podía interpretarse erróneamente como un estado abierto ya superado por evidencia posterior — en particular el riesgo de que `T-F0.2`/`C1` (formalmente **CERRADA** el 2026-08-15, entrada anterior) fuera malinterpretada como abierta a partir de alguna de las ~15 entradas previas que documentan su progreso parcial en su propia fecha. La nueva sección no reescribe ni elimina ninguna entrada histórica; declara una jerarquía de fuentes de verdad y una regla explícita de no-reapertura sin `REOPEN_REASON`/`NEW_EVIDENCE`/`LAST_CLOSING_EVIDENCE`/`WHY_CLOSURE_IS_INVALID`, consistente con la regla ya existente en "Cómo actualizar este documento" (§6 más abajo). **Cierre de las Tareas Git Windows #1-#3** (auditoría de solo lectura del Git local en Windows, clasificación y preservación remota de todo el contenido local único identificado — 24 archivos de un commit local `63f61d2` y 13 archivos del working tree, ninguno reachable desde ningún remoto antes de esta preservación —, y confirmación final de respaldo): contenido preservado en las ramas `backup/local-pre-limpieza-2026-07-21` (SHA `63f61d23e1b76351fcde4d989cbd791827c9f793`, historia sin alterar) y `backup/windows-local-wip-20260816` (SHA `e5e687b600d22d77d10ce6b0a9afbdcf98237bb0`, un único commit de preservación sobre la base `f0f7809186df594ecbe60d6c4e3f13fdd17a5330`). Ambas ramas son **referencias de preservación únicamente** — no implican revisión, aprobación funcional, ni integración a `main`; su destino final queda pendiente de decisión del propietario. `main` auditado para esta tarea: `d26feddca9a0b0a75820a4988cd98e4f7b0e990a` (sin avance desde el cierre de `T-F0.2`/`C1`). |
 
 ---
 
