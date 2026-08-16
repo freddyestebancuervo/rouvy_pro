@@ -4,10 +4,19 @@ name: Backend — publish Development
 # primera automatización con identidad cloud real: autentica contra GCP vía
 # Workload Identity Federation (sin ninguna credencial de larga duración, sin
 # JSON key), construye la imagen del backend, la publica en Artifact
-# Registry con un tag inmutable (`github.sha`), y despliega a Cloud Run
-# Development mediante --no-traffic + validación de la candidata + switch
-# explícito de tráfico + health check, con rollback condicionado si algo
-# falla después de que el tráfico pudo haberse movido.
+# Registry con un tag determinístico por commit SHA (`github.sha`), y
+# despliega a Cloud Run Development mediante --no-traffic + validación de
+# la candidata + switch explícito de tráfico + health check, con rollback
+# condicionado si algo falla después de que el tráfico pudo haberse
+# movido.
+#
+# Terminología (Tarea #11 — trazabilidad SHA → imagen → digest):
+# el TAG (`github.sha`) es solo una referencia determinística — puede
+# volver a resolverse a contenido distinto si la imagen se reconstruye y
+# re-empuja con el mismo tag. El elemento criptográficamente INMUTABLE es
+# el DIGEST (`sha256:...`) resuelto después del push — ver el step
+# `digest` y `steps.digest.outputs.immutable_ref`, que es la única
+# referencia usada para el deploy real.
 #
 # Disparo manual únicamente (`workflow_dispatch`) — cada deploy real sigue
 # siendo una decisión explícita.
@@ -70,6 +79,38 @@ jobs:
         with:
           persist-credentials: false
 
+      # Primer eslabón de la cadena de trazabilidad (Tarea #11):
+      # SOURCE_SHA → CHECKED_OUT_SHA → imagen → digest → deploy. Corre
+      # ANTES de WIF/auth, fail-closed. No exige que SOURCE_SHA sea el
+      # HEAD más reciente de main en este instante — solo que el commit
+      # capturado por el evento sea exactamente el que terminó
+      # físicamente en el working tree del runner.
+      - name: Verificar SHA fuente exacto antes de autenticar
+        id: source
+        run: |
+          set -euo pipefail
+
+          SOURCE_SHA="$GITHUB_SHA"
+          CHECKED_OUT_SHA="$(git rev-parse HEAD)"
+
+          if ! [[ "$SOURCE_SHA" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "::error::GITHUB_SHA no tiene formato de SHA-1 completo (40 hex): '$SOURCE_SHA'"
+            exit 1
+          fi
+
+          if ! [[ "$CHECKED_OUT_SHA" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "::error::El HEAD del checkout no tiene formato de SHA-1 completo (40 hex): '$CHECKED_OUT_SHA'"
+            exit 1
+          fi
+
+          if [ "$CHECKED_OUT_SHA" != "$SOURCE_SHA" ]; then
+            echo "::error::El working tree del runner ($CHECKED_OUT_SHA) no coincide con el SOURCE_SHA declarado por el evento ($SOURCE_SHA)."
+            exit 1
+          fi
+
+          echo "source_sha=$SOURCE_SHA" >> "$GITHUB_OUTPUT"
+          echo "checked_out_sha=$CHECKED_OUT_SHA" >> "$GITHUB_OUTPUT"
+
       - id: auth
         uses: google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093 # v3
         with:
@@ -92,29 +133,62 @@ jobs:
       - name: Configurar Docker exclusivamente para Artifact Registry southamerica-east1
         run: gcloud auth configure-docker southamerica-east1-docker.pkg.dev --quiet
 
-      - name: Build (mismo comando ya validado en PR #39/redeploy manual de Puerta F)
-        run: docker build --no-cache -t southamerica-east1-docker.pkg.dev/ridepro-development/ridepro-backend/api:${{ github.sha }} ./backend
+      - name: Build (mismo comando ya validado en PR #39/redeploy manual de Puerta F), con label OCI de revisión
+        run: |
+          docker build --no-cache \
+            --label "org.opencontainers.image.revision=${{ steps.source.outputs.source_sha }}" \
+            -t southamerica-east1-docker.pkg.dev/ridepro-development/ridepro-backend/api:${{ steps.source.outputs.source_sha }} \
+            ./backend
 
-      - name: Push imagen etiquetada por commit SHA (nunca latest)
-        run: docker push southamerica-east1-docker.pkg.dev/ridepro-development/ridepro-backend/api:${{ github.sha }}
+      # Segundo eslabón de la cadena: la imagen local debe declarar el
+      # SOURCE_SHA verificado ANTES de publicarse — fail-closed, corre
+      # antes del push, nunca después.
+      - name: Verificar label OCI de revisión en la imagen local ANTES de publicar
+        id: verify-image-label
+        run: |
+          set -euo pipefail
+          ACTUAL_LABEL="$(docker image inspect southamerica-east1-docker.pkg.dev/ridepro-development/ridepro-backend/api:${{ steps.source.outputs.source_sha }} --format '{{ index .Config.Labels "org.opencontainers.image.revision" }}')"
+          if [ "$ACTUAL_LABEL" != "${{ steps.source.outputs.source_sha }}" ]; then
+            echo "::error::org.opencontainers.image.revision de la imagen local ('$ACTUAL_LABEL') no coincide con SOURCE_SHA ('${{ steps.source.outputs.source_sha }}')."
+            exit 1
+          fi
+          echo "IMAGE_REVISION_LABEL_VERIFIED=YES"
 
+      - name: Push imagen etiquetada por commit SHA (referencia determinística, nunca latest — no es el elemento inmutable, ver el step siguiente)
+        run: docker push southamerica-east1-docker.pkg.dev/ridepro-development/ridepro-backend/api:${{ steps.source.outputs.source_sha }}
+
+      # Tercer eslabón: el DIGEST es el único identificador
+      # criptográficamente inmutable de esta publicación. Este step es la
+      # fuente canónica única de image_tag_ref/artifact_digest/
+      # immutable_ref — todo lo que despliega/reporta después referencia
+      # estos outputs, nunca reconstruye la referencia por su cuenta.
       - name: Resolver y validar digest publicado
         id: digest
         run: |
-          DIGEST="$(gcloud artifacts docker images describe southamerica-east1-docker.pkg.dev/ridepro-development/ridepro-backend/api:${{ github.sha }} --format='value(image_summary.digest)')"
-          if [ -z "$DIGEST" ]; then
-            echo "DIGEST vacío — la publicación no puede darse por válida"
+          set -euo pipefail
+
+          IMAGE_TAG_REF="southamerica-east1-docker.pkg.dev/ridepro-development/ridepro-backend/api:${{ steps.source.outputs.source_sha }}"
+          ARTIFACT_DIGEST="$(gcloud artifacts docker images describe "$IMAGE_TAG_REF" --format='value(image_summary.digest)')"
+
+          if ! [[ "$ARTIFACT_DIGEST" =~ ^sha256:[0-9a-f]{64}$ ]]; then
+            echo "::error::ARTIFACT_DIGEST no tiene formato sha256 válido (esperado ^sha256:[0-9a-f]{64}$): '$ARTIFACT_DIGEST'"
             exit 1
           fi
-          echo "digest=$DIGEST" >> "$GITHUB_OUTPUT"
+
+          IMMUTABLE_REF="southamerica-east1-docker.pkg.dev/ridepro-development/ridepro-backend/api@${ARTIFACT_DIGEST}"
+
+          echo "image_tag_ref=$IMAGE_TAG_REF" >> "$GITHUB_OUTPUT"
+          echo "artifact_digest=$ARTIFACT_DIGEST" >> "$GITHUB_OUTPUT"
+          echo "immutable_ref=$IMMUTABLE_REF" >> "$GITHUB_OUTPUT"
 
       - name: Reporte de publicación (sin datos sensibles)
         run: |
           {
             echo "PROJECT_ID = ridepro-development"
-            echo "GITHUB_SHA = ${{ github.sha }}"
-            echo "IMAGE = southamerica-east1-docker.pkg.dev/ridepro-development/ridepro-backend/api:${{ github.sha }}"
-            echo "DIGEST = ${{ steps.digest.outputs.digest }}"
+            echo "SOURCE_SHA = ${{ steps.source.outputs.source_sha }}"
+            echo "IMAGE_TAG_REF = ${{ steps.digest.outputs.image_tag_ref }}"
+            echo "ARTIFACT_ROOT_DIGEST = ${{ steps.digest.outputs.artifact_digest }}"
+            echo "IMMUTABLE_IMAGE_REF = ${{ steps.digest.outputs.immutable_ref }}"
             echo "WIF_AUTH = PASS"
             echo "ARTIFACT_PUSH = PASS"
           } >> "$GITHUB_STEP_SUMMARY"
@@ -160,11 +234,15 @@ jobs:
           FINGERPRINT="$(gcloud run services describe ridepro-backend-dev --project=ridepro-development --region=southamerica-east1 --format=json | jq -S -c '{serviceAccount: .spec.template.spec.serviceAccountName, cloudsql: .spec.template.metadata.annotations["run.googleapis.com/cloudsql-instances"], ingress: .metadata.annotations["run.googleapis.com/ingress"], serviceMaxScale: .metadata.annotations["run.googleapis.com/maxScale"], envRefs: ([.spec.template.spec.containers[0].env[] | {name: .name, secretRef: (.valueFrom.secretKeyRef.name // null)}] | sort_by(.name))}')"
           echo "pre_fingerprint=$FINGERPRINT" >> "$GITHUB_OUTPUT"
 
+      # El deploy consume EXCLUSIVAMENTE steps.digest.outputs.immutable_ref
+      # (repo@sha256:...) — nunca el tag por SHA. Congelado el digest en el
+      # step anterior, no se vuelve a resolver el tag para decidir qué se
+      # despliega.
       - name: Deploy por digest, SIN tráfico
         id: deploy-no-traffic
         run: |
           gcloud run deploy ridepro-backend-dev \
-            --image="southamerica-east1-docker.pkg.dev/ridepro-development/ridepro-backend/api@${{ steps.digest.outputs.digest }}" \
+            --image="${{ steps.digest.outputs.immutable_ref }}" \
             --no-traffic \
             --region=southamerica-east1 \
             --project=ridepro-development \
@@ -205,19 +283,33 @@ jobs:
               ;;
           esac
 
-          # Nota: NO se compara ACTUAL_IMAGE contra el digest del tag (ver
-          # ARTIFACT_DIGEST) mediante igualdad de string. Evidencia empírica
-          # de este mismo bloque: `gcloud artifacts docker images describe`
-          # devuelve el digest del manifest LIST (índice multi-plataforma,
-          # generado por BuildKit con provenance/attestations), mientras que
-          # Cloud Run resuelve y fija en la revisión el digest del manifest
-          # de imagen concreto que efectivamente ejecuta — ambos digests son
-          # legítimos pero distintos entre sí para la misma publicación. Se
-          # verifica en su lugar, de forma robusta ante esa resolución: (a)
-          # el repositorio/formato es el correcto, y (b) el digest cambió
-          # respecto a PREVIOUS_REVISION — prueba de que una imagen realmente
-          # nueva está corriendo, sin asumir igualdad textual de un digest
-          # que Cloud Run puede reescribir internamente.
+          # Cuarto eslabón de la cadena de trazabilidad (Tarea #11):
+          # capturar y validar el digest con el que Cloud Run REALMENTE
+          # arrancó la revisión (CLOUD_RUN_RUNTIME_DIGEST), como evidencia
+          # independiente del digest resuelto en Artifact Registry al
+          # publicar (ARTIFACT_ROOT_DIGEST, ver step `digest`).
+          CLOUD_RUN_RUNTIME_DIGEST="${ACTUAL_IMAGE#*@}"
+          if ! [[ "$CLOUD_RUN_RUNTIME_DIGEST" =~ ^sha256:[0-9a-f]{64}$ ]]; then
+            echo "::error::CLOUD_RUN_RUNTIME_DIGEST no tiene formato sha256 válido: '$CLOUD_RUN_RUNTIME_DIGEST'"
+            exit 1
+          fi
+          echo "runtime_image=$ACTUAL_IMAGE" >> "$GITHUB_OUTPUT"
+          echo "runtime_digest=$CLOUD_RUN_RUNTIME_DIGEST" >> "$GITHUB_OUTPUT"
+
+          # Nota: NO se compara CLOUD_RUN_RUNTIME_DIGEST contra
+          # ARTIFACT_ROOT_DIGEST (ver step `digest`) mediante igualdad de
+          # string. Evidencia empírica de este mismo bloque: `gcloud
+          # artifacts docker images describe` devuelve el digest del
+          # manifest LIST (índice multi-plataforma, generado por BuildKit
+          # con provenance/attestations), mientras que Cloud Run resuelve
+          # y fija en la revisión el digest del manifest de imagen
+          # concreto que efectivamente ejecuta — ambos digests son
+          # legítimos pero distintos entre sí para la misma publicación.
+          # Se verifica en su lugar, de forma robusta ante esa resolución:
+          # (a) el repositorio/formato es el correcto, y (b) el digest
+          # cambió respecto a PREVIOUS_REVISION — prueba de que una imagen
+          # realmente nueva está corriendo, sin asumir igualdad textual de
+          # un digest que Cloud Run puede reescribir internamente.
           PREV_IMAGE="$(gcloud run revisions describe "${{ steps.capture-previous.outputs.previous_revision }}" --project=ridepro-development --region=southamerica-east1 --format='value(spec.containers[0].image)')"
           if [ "$ACTUAL_IMAGE" = "$PREV_IMAGE" ]; then
             echo "La imagen de la candidata es idéntica a la de PREVIOUS_REVISION — no se detecta un cambio real de imagen"
@@ -312,13 +404,24 @@ jobs:
           fi
           exit 1
 
+      # Resumen final — incluye la cadena completa de trazabilidad de la
+      # Tarea #11 (SOURCE_SHA → imagen → digest → deploy → revisión), sin
+      # imprimir tokens, JWT, secrets, valores de env ni credenciales de
+      # servicio.
       - name: Resumen final del deploy (sin datos sensibles)
         if: always()
         run: |
           {
-            echo "PREVIOUS_REVISION = ${{ steps.capture-previous.outputs.previous_revision }}"
-            echo "NEW_REVISION = ${{ steps.identify-new-revision.outputs.new_revision }}"
-            echo "DIGEST = ${{ steps.digest.outputs.digest }}"
+            echo "TRACE_SOURCE_SHA = ${{ steps.source.outputs.source_sha }}"
+            echo "TRACE_CHECKED_OUT_SHA = ${{ steps.source.outputs.checked_out_sha }}"
+            echo "TRACE_IMAGE_TAG_REF = ${{ steps.digest.outputs.image_tag_ref }}"
+            echo "TRACE_IMAGE_REVISION_LABEL = ${{ steps.source.outputs.source_sha }}"
+            echo "TRACE_ARTIFACT_ROOT_DIGEST = ${{ steps.digest.outputs.artifact_digest }}"
+            echo "TRACE_IMMUTABLE_IMAGE_REF = ${{ steps.digest.outputs.immutable_ref }}"
+            echo "TRACE_PREVIOUS_REVISION = ${{ steps.capture-previous.outputs.previous_revision }}"
+            echo "TRACE_NEW_REVISION = ${{ steps.identify-new-revision.outputs.new_revision }}"
+            echo "TRACE_CLOUD_RUN_RUNTIME_IMAGE = ${{ steps.validate-candidate.outputs.runtime_image }}"
+            echo "TRACE_CLOUD_RUN_RUNTIME_DIGEST = ${{ steps.validate-candidate.outputs.runtime_digest }}"
             echo "DEPLOY_NO_TRAFFIC = ${{ steps.deploy-no-traffic.outcome }}"
             echo "CANDIDATE_VALIDATION = ${{ steps.validate-candidate.outcome }}"
             echo "TRAFFIC_SWITCH = ${{ steps.switch-traffic.outcome }}"
@@ -326,4 +429,8 @@ jobs:
             echo "HEALTH_CHECK = ${{ steps.health-check.outcome }}"
             echo "NO_DRIFT_CHECK = ${{ steps.no-drift-check.outcome }}"
             echo "ROLLBACK_ATTEMPTED = ${{ steps.rollback.outcome }}"
+            echo "TRACEABILITY_SOURCE_SHA = ${{ steps.source.outcome }}"
+            echo "TRACEABILITY_IMAGE_LABEL = ${{ steps.verify-image-label.outcome }}"
+            echo "TRACEABILITY_ARTIFACT_DIGEST = ${{ steps.digest.outcome }}"
+            echo "TRACEABILITY_IMMUTABLE_DEPLOY_REF = ${{ steps.deploy-no-traffic.outcome }}"
           } >> "$GITHUB_STEP_SUMMARY"
