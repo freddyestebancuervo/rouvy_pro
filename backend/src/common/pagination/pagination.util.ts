@@ -95,6 +95,50 @@ const CURSOR_FINGERPRINT_RE = /^[0-9a-f]{12}$/;
 const BASE64URL_ALPHABET_RE = /^[A-Za-z0-9_-]+$/;
 const CURSOR_EXPECTED_KEYS = 'createdAt,f,id,v';
 
+const DAYS_IN_MONTH = [31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
+
+function isLeapYear(year: number): boolean {
+  return year % 4 === 0 && (year % 100 !== 0 || year % 400 === 0);
+}
+
+/**
+ * `CURSOR_TIMESTAMP_RE` solo valida la FORMA (conteo de dígitos por
+ * componente) — `"2026-02-30T10:20:30.123456Z"` matchea el regex
+ * perfectamente aunque el 30 de febrero no exista (hallazgo bloqueante
+ * de revisión de PR #52). Esta función valida el CALENDARIO real:
+ * mes 1-12, día válido para ese mes (con año bisiesto correcto para
+ * febrero), hora 0-23, minuto 0-59, segundo 0-59.
+ *
+ * Determinista y sin dependencias: NO usa `Date`/`Date.UTC` — evita
+ * cualquier ambigüedad sobre auto-normalización de fechas inválidas
+ * (p. ej. `new Date(Date.UTC(2026, 1, 30))` "corrige" en silencio el 30
+ * de febrero a 2 de marzo en vez de señalarlo como inválido) y evita
+ * cualquier acoplamiento a la precisión de milisegundos de `Date`.
+ *
+ * Recibe un string que YA pasó `CURSOR_TIMESTAMP_RE` — el slicing por offsets
+ * fijos es seguro porque el formato de ancho fijo ya está garantizado.
+ */
+function isValidCalendarTimestamp(iso: string): boolean {
+  const year = Number(iso.slice(0, 4));
+  const month = Number(iso.slice(5, 7));
+  const day = Number(iso.slice(8, 10));
+  const hour = Number(iso.slice(11, 13));
+  const minute = Number(iso.slice(14, 16));
+  const second = Number(iso.slice(17, 19));
+
+  if (month < 1 || month > 12) {
+    return false;
+  }
+  const maxDay = month === 2 && isLeapYear(year) ? 29 : DAYS_IN_MONTH[month - 1];
+  if (day < 1 || day > maxDay) {
+    return false;
+  }
+  if (hour > 23 || minute > 59 || second > 59) {
+    return false;
+  }
+  return true;
+}
+
 /**
  * Cursor v1 (contract §8.1): `base64url(JSON({v,createdAt,id,f}))`, sin
  * padding. El orden de claves del JSON es fijo para que
@@ -156,7 +200,11 @@ export function decodeCursor(raw: string, expectedFingerprint: string): CursorPo
   if (obj.v !== CURSOR_VERSION) {
     throw PAGINATION_CURSOR_INVALID();
   }
-  if (typeof obj.createdAt !== 'string' || !CURSOR_TIMESTAMP_RE.test(obj.createdAt)) {
+  if (
+    typeof obj.createdAt !== 'string' ||
+    !CURSOR_TIMESTAMP_RE.test(obj.createdAt) ||
+    !isValidCalendarTimestamp(obj.createdAt)
+  ) {
     throw PAGINATION_CURSOR_INVALID();
   }
   if (typeof obj.id !== 'string' || !CURSOR_UUID_RE.test(obj.id)) {

@@ -182,4 +182,33 @@ describe('encodeCursor / decodeCursor', () => {
     const differentFingerprint = computeFilterFingerprint({ mine: true });
     expectPaginationError(() => decodeCursor(cursor, differentFingerprint), 'PAGINATION_CURSOR_FILTER_MISMATCH');
   });
+
+  describe('validación semántica de calendario (createdAt estructuralmente correcto pero imposible)', () => {
+    function cursorWithTimestamp(createdAt: string): string {
+      return Buffer.from(
+        JSON.stringify({ v: 1, createdAt, id: validPosition.id, f: fingerprint }),
+        'utf8',
+      ).toString('base64url');
+    }
+
+    it('2024-02-29 (año bisiesto) es aceptado', () => {
+      const cursor = cursorWithTimestamp('2024-02-29T23:59:59.123456Z');
+      const decoded = decodeCursor(cursor, fingerprint);
+      expect(decoded.createdAt).toBe('2024-02-29T23:59:59.123456Z');
+    });
+
+    it.each([
+      ['2026-02-29T10:20:30.123456Z', '2026 no es bisiesto — 29 de febrero no existe'],
+      ['2026-02-30T10:20:30.123456Z', '30 de febrero no existe en ningún año'],
+      ['2026-04-31T10:20:30.123456Z', 'abril tiene 30 días, no 31'],
+      ['2026-13-01T10:20:30.123456Z', 'mes 13 no existe'],
+      ['2026-01-00T10:20:30.123456Z', 'día 0 no existe'],
+      ['2026-01-01T24:00:00.123456Z', 'hora 24 no existe (0-23)'],
+      ['2026-01-01T10:60:00.123456Z', 'minuto 60 no existe (0-59)'],
+      ['2026-01-01T10:20:60.123456Z', 'segundo 60 no existe (0-59)'],
+    ])('%s (%s) es rechazado con PAGINATION_CURSOR_INVALID, nunca llega a SQL', (createdAt) => {
+      const cursor = cursorWithTimestamp(createdAt);
+      expectPaginationError(() => decodeCursor(cursor, fingerprint), 'PAGINATION_CURSOR_INVALID');
+    });
+  });
 });

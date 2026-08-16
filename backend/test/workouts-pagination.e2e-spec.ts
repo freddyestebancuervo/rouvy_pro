@@ -2,6 +2,7 @@ import { INestApplication } from '@nestjs/common';
 import { randomUUID } from 'crypto';
 import { Pool } from 'pg';
 import * as request from 'supertest';
+import { computeFilterFingerprint } from '../src/common/pagination/pagination.util';
 import { PG_POOL } from '../src/database/database.module';
 import { createTestApp } from './utils/test-app';
 
@@ -111,6 +112,24 @@ describe('WorkoutsController (e2e) — paginación T-F0.5', () => {
       ).toString('base64url');
       const res = await request(app.getHttpServer())
         .get(`/v1/workouts?limit=10&cursor=${unknownVersionCursor}`)
+        .set('Authorization', `Bearer ${mainToken}`)
+        .expect(400);
+      expect(res.body.error.code).toBe('PAGINATION_CURSOR_INVALID');
+    });
+
+    it('cursor estructuralmente correcto pero con fecha de calendario imposible (30 de febrero) responde 400 PAGINATION_CURSOR_INVALID, nunca 500', async () => {
+      // Sin `mine` en el request → filtro efectivo { mine: false },
+      // exactamente lo que calcula el servicio real — el fingerprint DEBE
+      // coincidir para que este test pruebe específicamente el timestamp
+      // inválido y no falle antes por PAGINATION_CURSOR_FILTER_MISMATCH.
+      const fingerprint = computeFilterFingerprint({ mine: false });
+      const impossibleDateCursor = Buffer.from(
+        JSON.stringify({ v: 1, createdAt: '2026-02-30T10:20:30.123456Z', id: randomUUID(), f: fingerprint }),
+        'utf8',
+      ).toString('base64url');
+
+      const res = await request(app.getHttpServer())
+        .get(`/v1/workouts?limit=10&cursor=${impossibleDateCursor}`)
         .set('Authorization', `Bearer ${mainToken}`)
         .expect(400);
       expect(res.body.error.code).toBe('PAGINATION_CURSOR_INVALID');
