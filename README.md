@@ -241,13 +241,19 @@ verde (evidencia directa, run de CI de 2026-07-31 — ver
 PostgreSQL) tampoco es ya un scaffold sin ejecutar: existe, se prueba en
 CI contra un Postgres 16 real (86/86 pruebas e2e en verde) y tiene una
 imagen Docker de producción validada — ver `backend/README.md` y
-`PROJECT_STATUS.md`. **Pendiente:** despliegue real a un hosting en vivo
-(`T-F1.1`). `T-F0.2`/`C1` sigue abierto. Development ya tiene
-configuración para Web, Android e iOS y Google Sign-In real fue
-validado en Android Development. El cierre formal sigue pendiente de la
-reconciliación final de las puertas A–J; entre los gaps ya confirmados
-están la validación de reglas de Firestore contra el proyecto real,
-CI/CD de despliegue y el ensayo de rollback. Ver `PROJECT_STATUS.md`.
+`PROJECT_STATUS.md`. El backend de **Development** ya está realmente
+desplegado en Cloud Run (`ridepro-backend-dev`), con CI/CD autenticado
+operativo vía Workload Identity Federation (sin credenciales de larga
+duración): un `workflow_dispatch` construye la imagen, la publica en
+Artifact Registry y la despliega con validación previa, switch explícito
+de tráfico, health check y rollback automático condicionado — primer
+deploy real completado con éxito. **Pendiente:** despliegue real a un
+hosting en vivo de **Producción** (`T-F1.1`) — no confundir con
+Development, que sí está desplegado. `T-F0.2`/`C1` **está cerrado**: las
+10 puertas de la reconciliación de entornos (Documento 15 §12) quedan
+cumplidas para Development, incluidas la validación de reglas de
+Firestore contra el proyecto real, el CI/CD de despliegue autenticado y
+el ensayo real de rollback. Ver `PROJECT_STATUS.md`.
 
 **Ver `VERIFICATION_GUIDE.md`** para los comandos exactos y el resultado
 esperado de cada uno. **Sin terminal disponible (p. ej. desde el celular)?**
