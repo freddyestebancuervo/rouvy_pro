@@ -3,16 +3,20 @@ name: Backend — publish Development
 # Puerta H (docs/audits/AUDITORIA_FINAL/23_MATRIZ_FORMAL_ENTORNOS.md §6) —
 # primera automatización con identidad cloud real: autentica contra GCP vía
 # Workload Identity Federation (sin ninguna credencial de larga duración, sin
-# JSON key), construye la imagen del backend y la publica en Artifact
-# Registry con un tag inmutable (`github.sha`).
+# JSON key), construye la imagen del backend, la publica en Artifact
+# Registry con un tag inmutable (`github.sha`), y despliega a Cloud Run
+# Development mediante --no-traffic + validación de la candidata + switch
+# explícito de tráfico + health check, con rollback condicionado si algo
+# falla después de que el tráfico pudo haberse movido.
 #
-# Deliberadamente NO despliega a Cloud Run todavía — ese paso queda para un
-# bloque posterior, una vez validado que WIF + push funcionan de extremo a
-# extremo. Disparo manual únicamente (`workflow_dispatch`): la primera
-# ejecución real requiere autorización explícita después de que este
-# workflow esté fusionado a main.
+# Disparo manual únicamente (`workflow_dispatch`) — cada deploy real sigue
+# siendo una decisión explícita.
 on:
   workflow_dispatch: {}
+
+concurrency:
+  group: cloud-run-deploy-development
+  cancel-in-progress: false
 
 permissions:
   contents: read
@@ -20,7 +24,7 @@ permissions:
 
 jobs:
   publish:
-    name: Publicar imagen (WIF + build + push, sin deploy)
+    name: Publicar y desplegar (WIF + build + push + deploy sin tráfico + switch + rollback)
     runs-on: ubuntu-latest
     environment: development
     steps:
@@ -66,7 +70,7 @@ jobs:
           fi
           echo "digest=$DIGEST" >> "$GITHUB_OUTPUT"
 
-      - name: Reporte (sin datos sensibles)
+      - name: Reporte de publicación (sin datos sensibles)
         run: |
           {
             echo "PROJECT_ID = ridepro-development"
@@ -75,4 +79,213 @@ jobs:
             echo "DIGEST = ${{ steps.digest.outputs.digest }}"
             echo "WIF_AUTH = PASS"
             echo "ARTIFACT_PUSH = PASS"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      # =======================================================================
+      # A partir de aquí: deploy a Cloud Run. gcloud run deploy --image=...
+      # NO garantiza por sí solo que la revisión nueva reciba tráfico — Cloud
+      # Run puede conservar el split existente. Por eso el flujo es explícito:
+      # capturar estado previo -> deploy --no-traffic -> validar candidata ->
+      # mover tráfico explícitamente -> verificar -> health -> rollback
+      # condicionado si algo falla DESPUÉS de que el tráfico pudo moverse.
+      # =======================================================================
+
+      - name: Capturar PREVIOUS_REVISION y huella de configuración (fail-closed si el tráfico actual es ambiguo)
+        id: capture-previous
+        run: |
+          TRAFFIC_JSON="$(gcloud run services describe ridepro-backend-dev --project=ridepro-development --region=southamerica-east1 --format='json(status.traffic)')"
+          COUNT="$(echo "$TRAFFIC_JSON" | jq '.status.traffic | length')"
+          if [ "$COUNT" != "1" ]; then
+            echo "Estado de tráfico ambiguo: se esperaba exactamente 1 entrada en status.traffic, se encontraron $COUNT — FAIL CLOSED, no se despliega nada."
+            exit 1
+          fi
+
+          PREV_REV="$(echo "$TRAFFIC_JSON" | jq -r '.status.traffic[0].revisionName')"
+          PREV_PCT="$(echo "$TRAFFIC_JSON" | jq -r '.status.traffic[0].percent')"
+          if [ -z "$PREV_REV" ] || [ "$PREV_REV" = "null" ]; then
+            echo "PREVIOUS_REVISION vacío — FAIL CLOSED"
+            exit 1
+          fi
+          if [ "$PREV_PCT" != "100" ]; then
+            echo "La única entrada de tráfico no tiene 100% (tiene $PREV_PCT%) — estado inesperado, FAIL CLOSED"
+            exit 1
+          fi
+
+          READY="$(gcloud run revisions describe "$PREV_REV" --project=ridepro-development --region=southamerica-east1 --format=json | jq -r '.status.conditions[] | select(.type=="Ready") | .status')"
+          if [ "$READY" != "True" ]; then
+            echo "PREVIOUS_REVISION ($PREV_REV) no está Ready=True — FAIL CLOSED"
+            exit 1
+          fi
+
+          echo "previous_revision=$PREV_REV" >> "$GITHUB_OUTPUT"
+
+          FINGERPRINT="$(gcloud run services describe ridepro-backend-dev --project=ridepro-development --region=southamerica-east1 --format=json | jq -S -c '{serviceAccount: .spec.template.spec.serviceAccountName, cloudsql: .spec.template.metadata.annotations["run.googleapis.com/cloudsql-instances"], ingress: .metadata.annotations["run.googleapis.com/ingress"], serviceMaxScale: .metadata.annotations["run.googleapis.com/maxScale"], envRefs: ([.spec.template.spec.containers[0].env[] | {name: .name, secretRef: (.valueFrom.secretKeyRef.name // null)}] | sort_by(.name))}')"
+          echo "pre_fingerprint=$FINGERPRINT" >> "$GITHUB_OUTPUT"
+
+      - name: Deploy por digest, SIN tráfico
+        id: deploy-no-traffic
+        run: |
+          gcloud run deploy ridepro-backend-dev \
+            --image="southamerica-east1-docker.pkg.dev/ridepro-development/ridepro-backend/api@${{ steps.digest.outputs.digest }}" \
+            --no-traffic \
+            --region=southamerica-east1 \
+            --project=ridepro-development \
+            --quiet
+
+      - name: Identificar NEW_REVISION sin ambigüedad
+        id: identify-new-revision
+        run: |
+          NEW_REV="$(gcloud run services describe ridepro-backend-dev --project=ridepro-development --region=southamerica-east1 --format='value(status.latestCreatedRevisionName)')"
+          if [ -z "$NEW_REV" ]; then
+            echo "latestCreatedRevisionName vacío tras el deploy — no se puede identificar la revisión candidata"
+            exit 1
+          fi
+          if [ "$NEW_REV" = "${{ steps.capture-previous.outputs.previous_revision }}" ]; then
+            echo "latestCreatedRevisionName ($NEW_REV) es igual a PREVIOUS_REVISION — el deploy no creó una revisión nueva"
+            exit 1
+          fi
+          echo "new_revision=$NEW_REV" >> "$GITHUB_OUTPUT"
+
+      - name: Validar candidata ANTES de mover tráfico
+        id: validate-candidate
+        run: |
+          NEW_REV="${{ steps.identify-new-revision.outputs.new_revision }}"
+          REV_JSON="$(gcloud run revisions describe "$NEW_REV" --project=ridepro-development --region=southamerica-east1 --format=json)"
+
+          READY="$(echo "$REV_JSON" | jq -r '.status.conditions[] | select(.type=="Ready") | .status')"
+          if [ "$READY" != "True" ]; then
+            echo "Candidata $NEW_REV no está Ready=True (obtenido: '$READY')"
+            exit 1
+          fi
+
+          ACTUAL_IMAGE="$(echo "$REV_JSON" | jq -r '.spec.containers[0].image')"
+          case "$ACTUAL_IMAGE" in
+            southamerica-east1-docker.pkg.dev/ridepro-development/ridepro-backend/api@sha256:*) ;;
+            *)
+              echo "Imagen de la candidata no usa el repositorio/formato de digest esperado: $ACTUAL_IMAGE"
+              exit 1
+              ;;
+          esac
+
+          # Nota: NO se compara ACTUAL_IMAGE contra el digest del tag (ver
+          # ARTIFACT_DIGEST) mediante igualdad de string. Evidencia empírica
+          # de este mismo bloque: `gcloud artifacts docker images describe`
+          # devuelve el digest del manifest LIST (índice multi-plataforma,
+          # generado por BuildKit con provenance/attestations), mientras que
+          # Cloud Run resuelve y fija en la revisión el digest del manifest
+          # de imagen concreto que efectivamente ejecuta — ambos digests son
+          # legítimos pero distintos entre sí para la misma publicación. Se
+          # verifica en su lugar, de forma robusta ante esa resolución: (a)
+          # el repositorio/formato es el correcto, y (b) el digest cambió
+          # respecto a PREVIOUS_REVISION — prueba de que una imagen realmente
+          # nueva está corriendo, sin asumir igualdad textual de un digest
+          # que Cloud Run puede reescribir internamente.
+          PREV_IMAGE="$(gcloud run revisions describe "${{ steps.capture-previous.outputs.previous_revision }}" --project=ridepro-development --region=southamerica-east1 --format='value(spec.containers[0].image)')"
+          if [ "$ACTUAL_IMAGE" = "$PREV_IMAGE" ]; then
+            echo "La imagen de la candidata es idéntica a la de PREVIOUS_REVISION — no se detecta un cambio real de imagen"
+            exit 1
+          fi
+
+          TRAFFIC_JSON="$(gcloud run services describe ridepro-backend-dev --project=ridepro-development --region=southamerica-east1 --format='json(status.traffic)')"
+          NEW_PCT="$(echo "$TRAFFIC_JSON" | jq -r --arg rev "$NEW_REV" '[.status.traffic[] | select(.revisionName==$rev) | .percent][0] // 0')"
+          if [ "$NEW_PCT" != "0" ]; then
+            echo "La candidata ya recibe tráfico distinto de 0% antes del switch explícito ($NEW_PCT%) — estado inesperado"
+            exit 1
+          fi
+
+      - name: Mover 100% del tráfico a NEW_REVISION
+        id: switch-traffic
+        run: |
+          gcloud run services update-traffic ridepro-backend-dev \
+            --to-revisions "${{ steps.identify-new-revision.outputs.new_revision }}=100" \
+            --region=southamerica-east1 \
+            --project=ridepro-development \
+            --quiet
+
+      - name: Verificar split de tráfico tras el switch
+        id: verify-traffic-split
+        run: |
+          TRAFFIC_JSON="$(gcloud run services describe ridepro-backend-dev --project=ridepro-development --region=southamerica-east1 --format='json(status.traffic)')"
+          NEW_PCT="$(echo "$TRAFFIC_JSON" | jq -r --arg rev "${{ steps.identify-new-revision.outputs.new_revision }}" '[.status.traffic[] | select(.revisionName==$rev) | .percent][0] // 0')"
+          PREV_PCT="$(echo "$TRAFFIC_JSON" | jq -r --arg rev "${{ steps.capture-previous.outputs.previous_revision }}" '[.status.traffic[] | select(.revisionName==$rev) | .percent][0] // 0')"
+          TOTAL="$(echo "$TRAFFIC_JSON" | jq '[.status.traffic[].percent] | add')"
+          if [ "$NEW_PCT" != "100" ] || [ "$PREV_PCT" != "0" ] || [ "$TOTAL" != "100" ]; then
+            echo "Split de tráfico inesperado: new=$NEW_PCT% previous=$PREV_PCT% total=$TOTAL%"
+            exit 1
+          fi
+
+      - name: Health check tras el switch (intentos acotados, sin bucle infinito)
+        id: health-check
+        run: |
+          URL="$(gcloud run services describe ridepro-backend-dev --project=ridepro-development --region=southamerica-east1 --format='value(status.url)')"
+          MAX_ATTEMPTS=6
+          ATTEMPT=1
+          SUCCESS=false
+          while [ $ATTEMPT -le $MAX_ATTEMPTS ]; do
+            RESPONSE="$(curl -s -w '\n%{http_code}' "$URL/v1/health" || true)"
+            HTTP_CODE="$(echo "$RESPONSE" | tail -n1)"
+            BODY="$(echo "$RESPONSE" | sed '$d')"
+            if [ "$HTTP_CODE" = "200" ] && echo "$BODY" | jq -e '.status=="ok" and .database=="connected"' >/dev/null 2>&1; then
+              SUCCESS=true
+              break
+            fi
+            ATTEMPT=$((ATTEMPT+1))
+            sleep 5
+          done
+          if [ "$SUCCESS" != "true" ]; then
+            echo "Health check no alcanzó 200 + status=ok + database=connected tras $MAX_ATTEMPTS intentos"
+            exit 1
+          fi
+
+      - name: Confirmar ausencia de drift en configuración no relacionada con el deploy
+        id: no-drift-check
+        run: |
+          POST_FINGERPRINT="$(gcloud run services describe ridepro-backend-dev --project=ridepro-development --region=southamerica-east1 --format=json | jq -S -c '{serviceAccount: .spec.template.spec.serviceAccountName, cloudsql: .spec.template.metadata.annotations["run.googleapis.com/cloudsql-instances"], ingress: .metadata.annotations["run.googleapis.com/ingress"], serviceMaxScale: .metadata.annotations["run.googleapis.com/maxScale"], envRefs: ([.spec.template.spec.containers[0].env[] | {name: .name, secretRef: (.valueFrom.secretKeyRef.name // null)}] | sort_by(.name))}')"
+          PRE_FINGERPRINT='${{ steps.capture-previous.outputs.pre_fingerprint }}'
+          if [ "$POST_FINGERPRINT" != "$PRE_FINGERPRINT" ]; then
+            echo "DRIFT DETECTADO en configuración que no debía cambiar con este deploy."
+            echo "ANTES:    $PRE_FINGERPRINT"
+            echo "DESPUES:  $POST_FINGERPRINT"
+            exit 1
+          fi
+
+      - name: Rollback condicionado — SOLO si el tráfico pudo haberse movido y algo falló después
+        id: rollback
+        if: always() && steps.capture-previous.outcome == 'success' && (steps.switch-traffic.outcome == 'failure' || steps.verify-traffic-split.outcome == 'failure' || steps.health-check.outcome == 'failure' || steps.no-drift-check.outcome == 'failure')
+        run: |
+          echo "Iniciando rollback de tráfico a PREVIOUS_REVISION=${{ steps.capture-previous.outputs.previous_revision }}"
+          if gcloud run services update-traffic ridepro-backend-dev \
+              --to-revisions "${{ steps.capture-previous.outputs.previous_revision }}=100" \
+              --region=southamerica-east1 \
+              --project=ridepro-development \
+              --quiet; then
+            TRAFFIC_JSON="$(gcloud run services describe ridepro-backend-dev --project=ridepro-development --region=southamerica-east1 --format='json(status.traffic)')"
+            PREV_PCT="$(echo "$TRAFFIC_JSON" | jq -r --arg rev "${{ steps.capture-previous.outputs.previous_revision }}" '[.status.traffic[] | select(.revisionName==$rev) | .percent][0] // 0')"
+            URL="$(gcloud run services describe ridepro-backend-dev --project=ridepro-development --region=southamerica-east1 --format='value(status.url)')"
+            RESPONSE="$(curl -s -w '\n%{http_code}' "$URL/v1/health" || true)"
+            HTTP_CODE="$(echo "$RESPONSE" | tail -n1)"
+            if [ "$PREV_PCT" = "100" ] && [ "$HTTP_CODE" = "200" ]; then
+              echo "ROLLBACK = SUCCESS (tráfico restaurado a ${{ steps.capture-previous.outputs.previous_revision }}, health 200). El despliegue original queda marcado FAILURE deliberadamente."
+            else
+              echo "ROLLBACK = INCONCLUSIVO (previous_pct=$PREV_PCT health_http=$HTTP_CODE). CRITICAL: requiere verificación manual inmediata."
+            fi
+          else
+            echo "ROLLBACK = FAILED — el comando de restauración de tráfico falló. CRITICAL: el servicio puede estar en un estado ambiguo, requiere intervención manual inmediata."
+          fi
+          exit 1
+
+      - name: Resumen final del deploy (sin datos sensibles)
+        if: always()
+        run: |
+          {
+            echo "PREVIOUS_REVISION = ${{ steps.capture-previous.outputs.previous_revision }}"
+            echo "NEW_REVISION = ${{ steps.identify-new-revision.outputs.new_revision }}"
+            echo "DIGEST = ${{ steps.digest.outputs.digest }}"
+            echo "DEPLOY_NO_TRAFFIC = ${{ steps.deploy-no-traffic.outcome }}"
+            echo "CANDIDATE_VALIDATION = ${{ steps.validate-candidate.outcome }}"
+            echo "TRAFFIC_SWITCH = ${{ steps.switch-traffic.outcome }}"
+            echo "TRAFFIC_VERIFY = ${{ steps.verify-traffic-split.outcome }}"
+            echo "HEALTH_CHECK = ${{ steps.health-check.outcome }}"
+            echo "NO_DRIFT_CHECK = ${{ steps.no-drift-check.outcome }}"
+            echo "ROLLBACK_ATTEMPTED = ${{ steps.rollback.outcome }}"
           } >> "$GITHUB_STEP_SUMMARY"
