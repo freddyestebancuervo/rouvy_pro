@@ -9,6 +9,11 @@ on:
   pull_request:
   workflow_dispatch: {}
 
+# Ninguno de los 3 jobs escribe al repositorio, publica paquetes, ni
+# necesita id-token OIDC — solo leen el código para analizarlo/probarlo.
+permissions:
+  contents: read
+
 jobs:
   # =========================================================================
   # Job 1 — Tests del cliente Flutter (análisis estático + tests unitarios)
@@ -16,10 +21,39 @@ jobs:
   flutter-checks:
     name: Flutter — analyze + test
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
-      - uses: subosito/flutter-action@v2
+      # Escaneo de secretos de alta confianza, fail-closed, ANTES de
+      # instalar cualquier dependencia — si detecta un match, este mismo
+      # required check (Flutter — analyze + test) falla. Solo patrones de
+      # muy alta confianza (PEM, AWS, Google, GitHub, Slack); nunca
+      # genérico tipo password=/secret=/token= para evitar falsos
+      # positivos contra configuración/datos ficticios de test ya
+      # presentes en el repo (p. ej. POSTGRES_PASSWORD=devpassword).
+      # Nunca imprime el valor coincidente, solo el nombre del archivo.
+      - name: Escaneo de secretos de alta confianza (fail-closed)
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          PATTERN='-----BEGIN [A-Z ]*PRIVATE KEY-----|AKIA[0-9A-Z]{16}|AIza[0-9A-Za-z_-]{35}|gh[pousr]_[A-Za-z0-9]{20,}|xox[baprs]-[0-9A-Za-z-]+'
+
+          MATCH_FILE="$(mktemp)"
+
+          if git grep -I -l -E -e "$PATTERN" -- . > "$MATCH_FILE"; then
+            echo "::error::Posible secreto de alta confianza detectado en archivos tracked."
+            echo "Archivos afectados:"
+            sed 's/^/ - /' "$MATCH_FILE"
+            rm -f "$MATCH_FILE"
+            exit 1
+          fi
+
+          rm -f "$MATCH_FILE"
+          echo "SECRET_SCAN=PASS"
+
+      - uses: subosito/flutter-action@1a449444c387b1966244ae4d4f8c696479add0b2 # v2.23.0
         with:
           flutter-version: '3.32.0'
           channel: stable
@@ -37,7 +71,7 @@ jobs:
       # descargable desde la propia página del run en GitHub — no hace
       # falta ninguna herramienta adicional para verlo.
       - name: Publicar reporte de cobertura
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         if: always()
         with:
           name: flutter-coverage
@@ -49,17 +83,18 @@ jobs:
   firestore-rules-tests:
     name: Firestore — reglas de seguridad (A3/A5)
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     defaults:
       run:
         working-directory: firebase/rules-tests
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: '20'
 
-      - uses: actions/setup-java@v4
+      - uses: actions/setup-java@b6effb05e454b25005698d916606bdc6ffcbf961 # v5.7.0
         with:
           distribution: temurin
           java-version: '17'
@@ -79,6 +114,7 @@ jobs:
   backend-tests:
     name: Backend — migración + e2e (C2)
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     defaults:
       run:
         working-directory: backend
@@ -136,9 +172,9 @@ jobs:
       FIREBASE_CHECK_REVOKED: "false"
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: '20'
 
