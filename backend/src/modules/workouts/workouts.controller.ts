@@ -48,10 +48,11 @@ export class WorkoutsController {
   }
 
   /**
-   * T-F0.5 (docs/tasks/TF0_5_PAGINATION_CONTRACT.md) — mismo criterio
-   * que `EquipmentController.list`: body siempre `ARRAY`, cursor
-   * exclusivamente en `X-Next-Cursor`, legacy intacto sin
-   * `limit`/`cursor`.
+   * T-F0.5 Enforcement (docs/tasks/TF0_5_PAGINATION_CONTRACT.md §6.3) —
+   * mismo criterio que `EquipmentController.list`: el listado SIEMPRE
+   * pasa por el modo paginado, incluso sin `limit`/`cursor`
+   * (`parseLimit(undefined)` aplica `DEFAULT_LIMIT=50`, contract §9.1).
+   * Body siempre `ARRAY`, cursor exclusivamente en `X-Next-Cursor`.
    */
   @Get()
   async list(
@@ -59,14 +60,11 @@ export class WorkoutsController {
     @Query() query: WorkoutQueryDto,
     @Res({ passthrough: true }) res: Response,
   ): Promise<WorkoutListItemResponse[]> {
-    if (query.limit !== undefined || query.cursor !== undefined) {
-      const page = await this.workoutsService.listPaginated(user.userId, query);
-      if (page.nextCursor !== null) {
-        res.setHeader('X-Next-Cursor', page.nextCursor);
-      }
-      return page.items;
+    const page = await this.workoutsService.listPaginated(user.userId, query);
+    if (page.nextCursor !== null) {
+      res.setHeader('X-Next-Cursor', page.nextCursor);
     }
-    return this.workoutsService.list(user.userId, query);
+    return page.items;
   }
 
   @Get(':id')
