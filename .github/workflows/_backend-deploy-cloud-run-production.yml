@@ -1,0 +1,53 @@
+name: (reusable) Backend — deploy to Cloud Run Production [contract bootstrap]
+
+# T-F1.2 Block A — congela el contrato/ruta (job_workflow_ref) de este
+# reusable ANTES de que exista ninguna identidad WIF ni infraestructura
+# de Production. Su propósito FUTURO (bloque separado, explícitamente
+# autorizado) será el flujo completo ya diseñado en T-F1.2-B0/B0.1/B0.2:
+# stale-SHA check inmediatamente antes de cualquier mutación de DB y de
+# tráfico, deploy --no-traffic, validación de candidata, switch
+# explícito de tráfico, health check, no-drift check y rollback
+# condicionado — usando PRODUCTION_DEPLOYER_SA, nunca la identidad de
+# publicación de artefactos.
+#
+# `environment: production` se declara deliberadamente NO en este
+# bloque (ver T-F1.2-B0.3, Fase 5): activarlo ya dispararía políticas
+# reales de GitHub Environment innecesarias mientras este job no hace
+# nada. Se agrega junto con la integración real de identidad, en el
+# mismo bloque que crea el GitHub Environment "production".
+#
+# SECURITY:
+# Production deploy capability is intentionally disabled in Block A.
+# OIDC, environment: production, Cloud Run operations and automatic
+# invocation require separately authorized security changes.
+
+on:
+  workflow_call:
+    inputs:
+      source_sha:
+        description: "SHA exacto ya validado que este reusable desplegará en el bloque futuro."
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  contract-only:
+    name: Contract validation (sin deploy, sin auth cloud)
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    # Sin id-token — este job no se autentica contra ningún proveedor
+    # cloud, no toca Cloud Run, Cloud SQL, Artifact Registry ni Secret
+    # Manager. No mueve tráfico. No ejecuta ninguna migración.
+    permissions: {}
+    steps:
+      - name: Validar input recibido (sin efectos, sin cloud)
+        shell: bash
+        run: |
+          if [ -z "${{ inputs.source_sha }}" ]; then
+            echo "::error::source_sha vacío"
+            exit 1
+          fi
+          echo "SOURCE_SHA recibido (solo validación): ${{ inputs.source_sha }}"
+          echo "Este reusable todavía no despliega nada a Cloud Run. La capacidad real (WIF, environment: production, no-traffic/candidate/switch/health/no-drift/rollback) se habilita en un bloque posterior, autorizado por separado, junto con PRODUCTION_DEPLOYER_SA y el GitHub Environment production."
