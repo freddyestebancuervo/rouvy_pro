@@ -214,7 +214,30 @@ describe('EquipmentController (e2e) — paginación T-F0.5', () => {
     expect(res.body).toEqual([]);
   });
 
-  // --- dataset grande: legacy sin truncar + recorrido completo sin dup/omisión ---
+  // --- Enforcement: GET /equipment completamente SIN ningún query param ---
+
+  describe('sin ningún query param (usuario dedicado)', () => {
+    let noQueryToken: string;
+
+    beforeAll(async () => {
+      noQueryToken = await registerUser('noquery');
+      for (let i = 0; i < 51; i += 1) {
+        await createEquipment(noQueryToken, { name: `SinQuery ${i}` });
+      }
+    });
+
+    it('T-F0.5 Enforcement: GET /equipment completamente sin category/includeArchived/limit/cursor también aplica DEFAULT_LIMIT=50 — el legacy ilimitado no sobrevive sin ningún filtro', async () => {
+      const res = await request(app.getHttpServer())
+        .get('/v1/equipment')
+        .set('Authorization', `Bearer ${noQueryToken}`)
+        .expect(200);
+      expect(Array.isArray(res.body)).toBe(true);
+      expect(res.body).toHaveLength(50);
+      expect(typeof res.headers['x-next-cursor']).toBe('string');
+    });
+  });
+
+  // --- dataset grande: Enforcement (default sin limit/cursor) + recorrido completo sin dup/omisión ---
 
   describe('dataset de 51 filas (categoría dedicada)', () => {
     const category = 'speed_cadence_combo';
@@ -228,13 +251,26 @@ describe('EquipmentController (e2e) — paginación T-F0.5', () => {
       }
     });
 
-    it('modo legacy (sin limit/cursor) sigue devolviendo las 51 filas completas — no se trunca a 50', async () => {
-      const res = await request(app.getHttpServer())
+    it('T-F0.5 Enforcement: sin limit/cursor (solo filtro category) aplica DEFAULT_LIMIT=50, no el legacy ilimitado — y el cursor devuelto permite completar el recorrido sin duplicar ni omitir', async () => {
+      const first = await request(app.getHttpServer())
         .get(`/v1/equipment?category=${category}`)
         .set('Authorization', `Bearer ${mainToken}`)
         .expect(200);
-      expect(res.body).toHaveLength(51);
-      expect(res.headers['x-next-cursor']).toBeUndefined();
+      expect(Array.isArray(first.body)).toBe(true);
+      expect(first.body).toHaveLength(50);
+      expect(typeof first.headers['x-next-cursor']).toBe('string');
+
+      const cursor = first.headers['x-next-cursor'];
+      const second = await request(app.getHttpServer())
+        .get(`/v1/equipment?category=${category}&cursor=${cursor}`)
+        .set('Authorization', `Bearer ${mainToken}`)
+        .expect(200);
+      expect(second.body).toHaveLength(1);
+      expect(second.headers['x-next-cursor']).toBeUndefined();
+
+      const combinedIds = [...first.body, ...second.body].map((e: { id: string }) => e.id);
+      expect(new Set(combinedIds).size).toBe(51);
+      expect(combinedIds.sort()).toEqual([...createdIds].sort());
     });
 
     it('recorrido paginado completo (limit=20) visita las 51 filas exactas, sin duplicados ni omisiones, conservando el filtro', async () => {

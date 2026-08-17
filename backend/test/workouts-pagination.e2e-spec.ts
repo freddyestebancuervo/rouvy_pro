@@ -228,7 +228,7 @@ describe('WorkoutsController (e2e) — paginación T-F0.5', () => {
     });
   });
 
-  // --- dataset grande: legacy sin truncar + recorrido completo sin dup/omisión ---
+  // --- dataset grande: Enforcement (default sin limit/cursor) + recorrido completo sin dup/omisión ---
 
   describe('dataset de 51 filas (usuario dedicado)', () => {
     let walkerToken: string;
@@ -243,13 +243,50 @@ describe('WorkoutsController (e2e) — paginación T-F0.5', () => {
       }
     });
 
-    it('modo legacy (sin limit/cursor) sigue devolviendo las 51 filas completas — no se trunca a 50', async () => {
-      const res = await request(app.getHttpServer())
+    it('T-F0.5 Enforcement: mine=true sin limit/cursor aplica DEFAULT_LIMIT=50, no el legacy ilimitado — y el cursor devuelto permite completar el recorrido sin duplicar ni omitir', async () => {
+      const first = await request(app.getHttpServer())
         .get('/v1/workouts?mine=true')
         .set('Authorization', `Bearer ${walkerToken}`)
         .expect(200);
-      expect(res.body).toHaveLength(51);
-      expect(res.headers['x-next-cursor']).toBeUndefined();
+      expect(Array.isArray(first.body)).toBe(true);
+      expect(first.body).toHaveLength(50);
+      expect(typeof first.headers['x-next-cursor']).toBe('string');
+
+      const cursor = first.headers['x-next-cursor'];
+      const second = await request(app.getHttpServer())
+        .get(`/v1/workouts?mine=true&cursor=${cursor}`)
+        .set('Authorization', `Bearer ${walkerToken}`)
+        .expect(200);
+      expect(second.body).toHaveLength(1);
+      expect(second.headers['x-next-cursor']).toBeUndefined();
+
+      const combinedIds = [...first.body, ...second.body].map((w: { id: string }) => w.id);
+      expect(new Set(combinedIds).size).toBe(51);
+      expect(combinedIds.sort()).toEqual([...createdIds].sort());
+    });
+
+    it('T-F0.5 Enforcement: sin mine (ausente) también queda limitado a DEFAULT_LIMIT=50 — el default legacy ilimitado no sobrevive por ninguna combinación de filtros', async () => {
+      // Bajo este mismo `walkerToken`, la visibilidad sin `mine` es
+      // `owner_id = $1 OR owner_id IS NULL OR is_public = TRUE` — sus 51
+      // workouts propios ya cumplen `owner_id = $1`, así que el conjunto
+      // elegible sigue siendo >=51 sin necesitar catálogo/públicos ajenos.
+      const res = await request(app.getHttpServer())
+        .get('/v1/workouts')
+        .set('Authorization', `Bearer ${walkerToken}`)
+        .expect(200);
+      expect(Array.isArray(res.body)).toBe(true);
+      expect(res.body).toHaveLength(50);
+      expect(typeof res.headers['x-next-cursor']).toBe('string');
+    });
+
+    it('T-F0.5 Enforcement: mine=false (explícito) también queda limitado a DEFAULT_LIMIT=50 — mismo criterio que mine ausente, no un valor distinto que reviva el legacy ilimitado', async () => {
+      const res = await request(app.getHttpServer())
+        .get('/v1/workouts?mine=false')
+        .set('Authorization', `Bearer ${walkerToken}`)
+        .expect(200);
+      expect(Array.isArray(res.body)).toBe(true);
+      expect(res.body).toHaveLength(50);
+      expect(typeof res.headers['x-next-cursor']).toBe('string');
     });
 
     it('recorrido paginado completo (limit=20) visita las 51 filas exactas, sin duplicados ni omisiones, conservando mine=true', async () => {

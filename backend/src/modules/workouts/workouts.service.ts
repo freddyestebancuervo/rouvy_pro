@@ -101,6 +101,13 @@ export class WorkoutsService {
     return this.toDetailResponse(workout, intervals, userId);
   }
 
+  /**
+   * Helper anterior a T-F0.5 Enforcement (docs/tasks/TF0_5_PAGINATION_CONTRACT.md
+   * §6.3) — `WorkoutsController.list` ya no lo invoca: TODO listado HTTP
+   * pasa por `listPaginated()` de abajo. Se conserva temporalmente sin
+   * cambios de comportamiento (no es un camino HTTP activo); su
+   * eliminación queda fuera de esta corrección (ver Fase E, MINIMAL_CHANGE).
+   */
   async list(userId: string, query: WorkoutQueryDto): Promise<WorkoutListItemResponse[]> {
     const records = await this.workoutsRepository.findAllForUser(userId, {
       mineOnly: query.mine === 'true',
@@ -109,9 +116,10 @@ export class WorkoutsService {
   }
 
   /**
-   * T-F0.5 — modo paginado opt-in (contract §6.1/§9/§11), usado
-   * exclusivamente cuando el request trae `limit`/`cursor`. `list()`
-   * arriba queda intacto para el camino legacy.
+   * T-F0.5 (contract §6.1/§9/§11) — usada por `WorkoutsController.list`
+   * para TODO listado HTTP, con o sin `limit`/`cursor` (Enforcement,
+   * contract §6.3): `limit` ausente aplica `DEFAULT_LIMIT=50` vía
+   * `parseLimit(undefined)`, no un camino sin límite.
    */
   async listPaginated(userId: string, query: WorkoutQueryDto): Promise<WorkoutPage> {
     const mineOnly = query.mine === 'true';

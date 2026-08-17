@@ -39,13 +39,15 @@ export class EquipmentController {
   }
 
   /**
-   * T-F0.5 (docs/tasks/TF0_5_PAGINATION_CONTRACT.md) — el body HTTP
-   * sigue siendo SIEMPRE `EquipmentResponse[]`, con o sin paginación
-   * (contract §6.1/§10): nunca se envuelve en `{ items, nextCursor }`.
-   * Sin `limit` NI `cursor` → modo legacy, delega en `list()` sin
-   * ningún cambio de comportamiento. Con cualquiera de los dos → modo
-   * paginado; el cursor de continuación viaja exclusivamente en el
-   * header `X-Next-Cursor` (ausente = última página).
+   * T-F0.5 Enforcement (docs/tasks/TF0_5_PAGINATION_CONTRACT.md §6.3) —
+   * el listado SIEMPRE pasa por el modo paginado, incluso sin
+   * `limit`/`cursor`: `parseLimit(undefined)` aplica
+   * `DEFAULT_LIMIT=50` (contract §9.1), en vez del legacy ilimitado que
+   * usaban Task14/Task16. El body HTTP sigue siendo SIEMPRE
+   * `EquipmentResponse[]` (contract §6.1/§10): nunca se envuelve en
+   * `{ items, nextCursor }`. El cursor de continuación viaja
+   * exclusivamente en el header `X-Next-Cursor` (ausente = última
+   * página).
    */
   @Get()
   async list(
@@ -53,14 +55,11 @@ export class EquipmentController {
     @Query() query: EquipmentQueryDto,
     @Res({ passthrough: true }) res: Response,
   ): Promise<EquipmentResponse[]> {
-    if (query.limit !== undefined || query.cursor !== undefined) {
-      const page = await this.equipmentService.listPaginated(user.userId, query);
-      if (page.nextCursor !== null) {
-        res.setHeader('X-Next-Cursor', page.nextCursor);
-      }
-      return page.items;
+    const page = await this.equipmentService.listPaginated(user.userId, query);
+    if (page.nextCursor !== null) {
+      res.setHeader('X-Next-Cursor', page.nextCursor);
     }
-    return this.equipmentService.list(user.userId, query);
+    return page.items;
   }
 
   @Get(':id')
