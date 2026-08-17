@@ -73,6 +73,31 @@ export interface EquipmentListFilters {
   includeArchived: boolean;
 }
 
+/**
+ * T-F0.5 (docs/tasks/TF0_5_PAGINATION_CONTRACT.md) — tipos de la ruta
+ * paginada, separados de los del camino legacy de arriba a propósito
+ * (contract Task14 Fase K: "no alterar innecesariamente la query legacy
+ * existente").
+ */
+export interface EquipmentKeysetCursor {
+  createdAt: string;
+  id: string;
+}
+
+export interface EquipmentPageArgs {
+  /** Ya incluye el "+1" de la detección `LIMIT N+1` (contract §9/Fase L) — el caller decide cuántas filas de más pedir. */
+  limit: number;
+  cursor: EquipmentKeysetCursor | null;
+}
+
+export interface EquipmentPageRow {
+  record: EquipmentRecord;
+  /** Timestamp de `created_at` con precisión de microsegundos, obtenido
+   * como texto directo de PostgreSQL (nunca del `Date` ya parseado por
+   * `pg` en `record.createdAt`) — contract §8.2. */
+  cursorCreatedAt: string;
+}
+
 function mapRow(row: Record<string, unknown>): EquipmentRecord {
   return {
     id: row.id as string,
@@ -143,6 +168,55 @@ export class EquipmentRepository {
       values,
     );
     return result.rows.map(mapRow);
+  }
+
+  /**
+   * T-F0.5 — ruta paginada keyset, usada exclusivamente cuando el
+   * caller pasó `limit`/`cursor` (contract §6.1/§10). `created_at DESC,
+   * id DESC` (contract §7); el predicado de continuación
+   * (`AND (created_at < $ OR (created_at = $ AND id < $))`) solo se
+   * agrega cuando hay cursor — nunca reemplaza el `WHERE` de ownership
+   * (`user_id = $1`) ni los filtros existentes, solo se les suma con
+   * `AND` (contract §13). `cursor_created_at` se selecciona con
+   * `to_char(... 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"')` para preservar los 6
+   * dígitos de microsegundos que el `Date` ya mapeado en
+   * `EquipmentRecord.createdAt` perdería (contract §8.2) — todos los
+   * valores van parametrizados, nunca interpolados en el SQL.
+   */
+  async findPageForUser(
+    userId: string,
+    filters: EquipmentListFilters,
+    page: EquipmentPageArgs,
+  ): Promise<EquipmentPageRow[]> {
+    const conditions: string[] = ['user_id = $1'];
+    const values: unknown[] = [userId];
+
+    if (!filters.includeArchived) {
+      conditions.push('archived_at IS NULL');
+    }
+    if (filters.category) {
+      values.push(filters.category);
+      conditions.push(`category_code = $${values.length}`);
+    }
+    if (page.cursor) {
+      values.push(page.cursor.createdAt, page.cursor.id);
+      const createdAtParam = `$${values.length - 1}::timestamptz`;
+      const idParam = `$${values.length}::uuid`;
+      conditions.push(`(created_at < ${createdAtParam} OR (created_at = ${createdAtParam} AND id < ${idParam}))`);
+    }
+    values.push(page.limit);
+
+    const result = await this.pool.query(
+      `SELECT *, to_char(created_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"') AS cursor_created_at
+       FROM equipment WHERE ${conditions.join(' AND ')}
+       ORDER BY created_at DESC, id DESC
+       LIMIT $${values.length}`,
+      values,
+    );
+    return result.rows.map((row) => ({
+      record: mapRow(row),
+      cursorCreatedAt: row.cursor_created_at as string,
+    }));
   }
 
   /**

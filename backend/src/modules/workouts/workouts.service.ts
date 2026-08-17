@@ -1,6 +1,12 @@
 import { HttpStatus, Injectable } from '@nestjs/common';
 import { ApiException } from '../../common/exceptions/api.exception';
 import { assertOwned } from '../../common/ownership/assert-owned.util';
+import {
+  computeFilterFingerprint,
+  decodeCursor,
+  encodeCursor,
+  parseLimit,
+} from '../../common/pagination/pagination.util';
 import { CreateWorkoutDto, CreateWorkoutIntervalDto } from './dto/create-workout.dto';
 import { UpdateWorkoutDto } from './dto/update-workout.dto';
 import { WorkoutQueryDto } from './dto/workout-query.dto';
@@ -33,6 +39,13 @@ export interface WorkoutListItemResponse {
 
 export interface WorkoutDetailResponse extends WorkoutListItemResponse {
   intervals: WorkoutIntervalResponse[];
+}
+
+/** T-F0.5 (docs/tasks/TF0_5_PAGINATION_CONTRACT.md) — resultado interno
+ * del modo paginado, mismo criterio que `EquipmentPage`. */
+export interface WorkoutPage {
+  items: WorkoutListItemResponse[];
+  nextCursor: string | null;
 }
 
 const WORKOUT_NOT_FOUND = (): ApiException =>
@@ -93,6 +106,34 @@ export class WorkoutsService {
       mineOnly: query.mine === 'true',
     });
     return records.map((record) => this.toListResponse(record, userId));
+  }
+
+  /**
+   * T-F0.5 — modo paginado opt-in (contract §6.1/§9/§11), usado
+   * exclusivamente cuando el request trae `limit`/`cursor`. `list()`
+   * arriba queda intacto para el camino legacy.
+   */
+  async listPaginated(userId: string, query: WorkoutQueryDto): Promise<WorkoutPage> {
+    const mineOnly = query.mine === 'true';
+    // Ausente y `false` son el mismo filtro efectivo (mismo criterio que
+    // `list()` arriba) — mismo fingerprint (contract §8.1 nota de Fase H).
+    const fingerprint = computeFilterFingerprint({ mine: mineOnly });
+    const limit = parseLimit(query.limit);
+    const cursor = query.cursor !== undefined ? decodeCursor(query.cursor, fingerprint) : null;
+
+    const rows = await this.workoutsRepository.findPageForUser(userId, { mineOnly }, { limit: limit + 1, cursor });
+
+    const hasMore = rows.length > limit;
+    const pageRows = hasMore ? rows.slice(0, limit) : rows;
+    const items = pageRows.map((row) => this.toListResponse(row.record, userId));
+
+    let nextCursor: string | null = null;
+    if (hasMore) {
+      const last = pageRows[pageRows.length - 1];
+      nextCursor = encodeCursor({ createdAt: last.cursorCreatedAt, id: last.record.id, fingerprint });
+    }
+
+    return { items, nextCursor };
   }
 
   async getById(userId: string, id: string): Promise<WorkoutDetailResponse> {

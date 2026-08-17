@@ -55,6 +55,26 @@ export interface WorkoutListFilters {
   mineOnly: boolean;
 }
 
+/**
+ * T-F0.5 (docs/tasks/TF0_5_PAGINATION_CONTRACT.md) — tipos de la ruta
+ * paginada, separados del camino legacy de arriba a propósito (contract
+ * Task14 Fase K).
+ */
+export interface WorkoutKeysetCursor {
+  createdAt: string;
+  id: string;
+}
+
+export interface WorkoutPageArgs {
+  limit: number;
+  cursor: WorkoutKeysetCursor | null;
+}
+
+export interface WorkoutPageRow {
+  record: WorkoutRecord;
+  cursorCreatedAt: string;
+}
+
 function mapWorkoutRow(row: Record<string, unknown>): WorkoutRecord {
   return {
     id: row.id as string,
@@ -189,6 +209,46 @@ export class WorkoutsRepository {
       [userId],
     );
     return result.rows.map(mapWorkoutRow);
+  }
+
+  /**
+   * T-F0.5 — ruta paginada keyset, usada exclusivamente cuando el
+   * caller pasó `limit`/`cursor` (contract §6.1/§11). Conserva
+   * exactamente la misma visibilidad que `findAllForUser` (`mineOnly` ?
+   * propios : propio OR catálogo OR público), solo le agrega con `AND`
+   * el predicado de continuación keyset — nunca la reemplaza (contract
+   * §13). Mismo criterio de precisión de timestamp que
+   * `EquipmentRepository.findPageForUser` (contract §8.2); todos los
+   * valores parametrizados, nunca interpolados.
+   */
+  async findPageForUser(
+    userId: string,
+    filters: WorkoutListFilters,
+    page: WorkoutPageArgs,
+  ): Promise<WorkoutPageRow[]> {
+    const values: unknown[] = [userId];
+    const visibility = filters.mineOnly ? 'owner_id = $1' : '(owner_id = $1 OR owner_id IS NULL OR is_public = TRUE)';
+    const conditions: string[] = [visibility, 'archived_at IS NULL'];
+
+    if (page.cursor) {
+      values.push(page.cursor.createdAt, page.cursor.id);
+      const createdAtParam = `$${values.length - 1}::timestamptz`;
+      const idParam = `$${values.length}::uuid`;
+      conditions.push(`(created_at < ${createdAtParam} OR (created_at = ${createdAtParam} AND id < ${idParam}))`);
+    }
+    values.push(page.limit);
+
+    const result = await this.pool.query(
+      `SELECT *, to_char(created_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"') AS cursor_created_at
+       FROM workouts WHERE ${conditions.join(' AND ')}
+       ORDER BY created_at DESC, id DESC
+       LIMIT $${values.length}`,
+      values,
+    );
+    return result.rows.map((row) => ({
+      record: mapWorkoutRow(row),
+      cursorCreatedAt: row.cursor_created_at as string,
+    }));
   }
 
   /** Devuelve `null` si `id` no existe o ya está archivado — mismo
