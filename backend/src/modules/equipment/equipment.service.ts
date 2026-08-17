@@ -127,6 +127,13 @@ export class EquipmentService {
     }
   }
 
+  /**
+   * Helper anterior a T-F0.5 Enforcement (docs/tasks/TF0_5_PAGINATION_CONTRACT.md
+   * §6.3) — `EquipmentController.list` ya no lo invoca: TODO listado HTTP
+   * pasa por `listPaginated()` de abajo. Se conserva temporalmente sin
+   * cambios de comportamiento (no es un camino HTTP activo); su
+   * eliminación queda fuera de esta corrección (ver Fase E, MINIMAL_CHANGE).
+   */
   async list(userId: string, query: EquipmentQueryDto): Promise<EquipmentResponse[]> {
     if (query.category) {
       await this.assertValidCategory(query.category);
@@ -139,10 +146,10 @@ export class EquipmentService {
   }
 
   /**
-   * T-F0.5 — modo paginado opt-in (contract §6.1/§9/§10), usado
-   * exclusivamente por el controller cuando el request trae `limit` y/o
-   * `cursor`. `list()` arriba queda intacto, byte a byte, para el
-   * camino legacy — esta ruta nunca lo llama ni lo altera.
+   * T-F0.5 (contract §6.1/§9/§10) — usada por `EquipmentController.list`
+   * para TODO listado HTTP, con o sin `limit`/`cursor` (Enforcement,
+   * contract §6.3): `limit` ausente aplica `DEFAULT_LIMIT=50` vía
+   * `parseLimit(undefined)`, no un camino sin límite.
    */
   async listPaginated(userId: string, query: EquipmentQueryDto): Promise<EquipmentPage> {
     if (query.category) {

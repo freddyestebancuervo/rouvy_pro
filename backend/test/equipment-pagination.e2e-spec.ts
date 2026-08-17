@@ -214,6 +214,29 @@ describe('EquipmentController (e2e) — paginación T-F0.5', () => {
     expect(res.body).toEqual([]);
   });
 
+  // --- Enforcement: GET /equipment completamente SIN ningún query param ---
+
+  describe('sin ningún query param (usuario dedicado)', () => {
+    let noQueryToken: string;
+
+    beforeAll(async () => {
+      noQueryToken = await registerUser('noquery');
+      for (let i = 0; i < 51; i += 1) {
+        await createEquipment(noQueryToken, { name: `SinQuery ${i}` });
+      }
+    });
+
+    it('T-F0.5 Enforcement: GET /equipment completamente sin category/includeArchived/limit/cursor también aplica DEFAULT_LIMIT=50 — el legacy ilimitado no sobrevive sin ningún filtro', async () => {
+      const res = await request(app.getHttpServer())
+        .get('/v1/equipment')
+        .set('Authorization', `Bearer ${noQueryToken}`)
+        .expect(200);
+      expect(Array.isArray(res.body)).toBe(true);
+      expect(res.body).toHaveLength(50);
+      expect(typeof res.headers['x-next-cursor']).toBe('string');
+    });
+  });
+
   // --- dataset grande: Enforcement (default sin limit/cursor) + recorrido completo sin dup/omisión ---
 
   describe('dataset de 51 filas (categoría dedicada)', () => {

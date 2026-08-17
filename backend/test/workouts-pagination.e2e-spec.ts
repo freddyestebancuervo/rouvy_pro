@@ -274,6 +274,17 @@ describe('WorkoutsController (e2e) — paginación T-F0.5', () => {
         .get('/v1/workouts')
         .set('Authorization', `Bearer ${walkerToken}`)
         .expect(200);
+      expect(Array.isArray(res.body)).toBe(true);
+      expect(res.body).toHaveLength(50);
+      expect(typeof res.headers['x-next-cursor']).toBe('string');
+    });
+
+    it('T-F0.5 Enforcement: mine=false (explícito) también queda limitado a DEFAULT_LIMIT=50 — mismo criterio que mine ausente, no un valor distinto que reviva el legacy ilimitado', async () => {
+      const res = await request(app.getHttpServer())
+        .get('/v1/workouts?mine=false')
+        .set('Authorization', `Bearer ${walkerToken}`)
+        .expect(200);
+      expect(Array.isArray(res.body)).toBe(true);
       expect(res.body).toHaveLength(50);
       expect(typeof res.headers['x-next-cursor']).toBe('string');
     });
