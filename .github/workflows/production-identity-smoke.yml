@@ -1,0 +1,58 @@
+name: Backend — Production identity smoke bootstrap
+
+# T-F1.2 Block A (docs/audits/AUDITORIA_FINAL/BACKLOG_MAESTRO.md) — este
+# archivo existe ÚNICAMENTE para congelar su ruta (workflow_ref) antes de
+# que exista ninguna identidad WIF real de Production. Su propósito
+# FUTURO (en un bloque separado, explícitamente autorizado) será probar
+# de forma aislada la identidad de publicación de artefactos
+# (ARTIFACT_PUBLISHER_SA) contra Artifact Registry de Production, sin
+# tocar Cloud Run/Cloud SQL en ningún momento.
+#
+# SECURITY:
+# This workflow is intentionally inert in Block A.
+# Cloud/OIDC activation requires a separately authorized change.
+
+on:
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+jobs:
+  guard:
+    name: Guard — main only (bootstrap, sin acceso cloud)
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    # Sin id-token, sin checkout, sin gcloud, sin docker — este job no
+    # tiene capacidad de tocar ningún recurso fuera de este runner.
+    permissions: {}
+    steps:
+      - name: Rechazar refs distintas de main
+        shell: bash
+        run: |
+          echo "EVENT_NAME=$GITHUB_EVENT_NAME"
+          echo "REF=$GITHUB_REF"
+          echo "REF_TYPE=$GITHUB_REF_TYPE"
+
+          if [ "$GITHUB_EVENT_NAME" != "workflow_dispatch" ]; then
+            echo "::error::Evento inesperado: $GITHUB_EVENT_NAME"
+            exit 1
+          fi
+
+          if [ "$GITHUB_REF_TYPE" != "branch" ]; then
+            echo "::error::Solo se admite una branch; ref_type=$GITHUB_REF_TYPE"
+            exit 1
+          fi
+
+          if [ "$GITHUB_REF" != "refs/heads/main" ]; then
+            echo "::error::Bloqueado: solo refs/heads/main puede continuar. Ref recibida: $GITHUB_REF"
+            exit 1
+          fi
+
+          echo "GUARD=PASS"
+
+      - name: Reportar estado inerte (sin auth, sin cloud, sin push)
+        shell: bash
+        run: |
+          echo "Production identity smoke path is bootstrapped but cloud execution is disabled until a later authorized block."
+          echo "No Google authentication, no docker build/push, no Artifact Registry access occurs in this run."

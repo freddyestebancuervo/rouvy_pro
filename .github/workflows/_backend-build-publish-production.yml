@@ -1,0 +1,46 @@
+name: (reusable) Backend — build & publish Production artifact [contract bootstrap]
+
+# T-F1.2 Block A — congela el contrato/ruta (job_workflow_ref) de este
+# reusable ANTES de que exista ninguna identidad WIF real. Su propósito
+# FUTURO (bloque separado, explícitamente autorizado) será: WIF auth
+# como ARTIFACT_PUBLISHER_SA → build de la imagen del backend → push a
+# Artifact Registry de Production (repo dedicado, distinto del de
+# Development) → resolver y verificar digest inmutable — nunca Cloud
+# Run, nunca Cloud SQL, nunca Secret Manager, nunca tráfico (ver
+# T-F1.2-B0.3, separación de capacidad por identidad).
+#
+# SECURITY:
+# Contract/path bootstrap only.
+# Artifact publishing is disabled until WIF and Artifact Registry
+# are separately authorized and configured.
+
+on:
+  workflow_call:
+    inputs:
+      source_sha:
+        description: "SHA exacto ya validado por CI que este reusable construirá/publicará en el bloque futuro."
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  contract-only:
+    name: Contract validation (sin build, sin push, sin auth cloud)
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    # Sin id-token — este job no se autentica contra ningún proveedor
+    # cloud. No hay build real, no hay imagen, no hay digest real que
+    # producir todavía; no se inventan outputs funcionales.
+    permissions: {}
+    steps:
+      - name: Validar input recibido (sin efectos, sin cloud)
+        shell: bash
+        run: |
+          if [ -z "${{ inputs.source_sha }}" ]; then
+            echo "::error::source_sha vacío"
+            exit 1
+          fi
+          echo "SOURCE_SHA recibido (solo validación): ${{ inputs.source_sha }}"
+          echo "Este reusable todavía no construye ni publica ninguna imagen. La capacidad real de build+push a Artifact Registry de Production se habilita en un bloque posterior, autorizado por separado, junto con ARTIFACT_PUBLISHER_SA."

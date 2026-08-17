@@ -1,0 +1,45 @@
+name: Backend — Production deploy bootstrap
+
+# T-F1.2 Block A (docs/audits/AUDITORIA_FINAL/BACKLOG_MAESTRO.md) — este
+# es el archivo MÁS crítico de todo el diseño T-F1.2: su ruta
+# (workflow_ref) es la que un futuro WIF provider de Production
+# restringirá exactamente. Se congela aquí, deliberadamente vacío de
+# cualquier capacidad real, para que ese provider pueda crearse contra
+# una ruta ya definitiva sin que este archivo tenga, todavía, forma de
+# ejercer ningún efecto sobre Production.
+#
+# El trigger automático real (workflow_run sobre el workflow "CI",
+# main, conclusion=success) y los jobs que invocan a
+# _backend-build-publish-production.yml /
+# _backend-deploy-cloud-run-production.yml se agregan en un bloque
+# POSTERIOR, separado y explícitamente autorizado — nunca en Block A.
+# Cambiar únicamente el `on:` de este archivo no invalida ninguna
+# condición WIF ya creada contra su ruta (workflow_ref se basa en
+# path@ref, no en contenido — ver T-F1.2-B0.3, Fase 10).
+#
+# SECURITY:
+# Automatic Production deployment is intentionally disabled.
+# workflow_run activation requires a separately authorized security change.
+
+on:
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+jobs:
+  guard:
+    name: Guard — bootstrap, sin acceso cloud
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    # Sin id-token, sin checkout, sin gcloud, sin docker, sin llamada a
+    # ningún reusable — este job no tiene capacidad de tocar ningún
+    # recurso de Production.
+    permissions: {}
+    steps:
+      - name: Confirmar estado deshabilitado
+        shell: bash
+        run: |
+          echo "AUTOMATIC_PRODUCTION_CD=DISABLED"
+          echo "CLOUD_ACCESS=DISABLED"
+          echo "Este workflow todavía no despliega nada. El camino automático (workflow_run) y la invocación real de los reusables de build/publish y deploy se habilitan en un bloque posterior, autorizado por separado."
