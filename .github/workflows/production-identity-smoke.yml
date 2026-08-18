@@ -1,26 +1,45 @@
 name: Backend — Production identity smoke bootstrap
 
-# T-F1.2 Block D1F1 (docs/audits/AUDITORIA_FINAL/BACKLOG_MAESTRO.md) — este
-# archivo permanece con disparo manual (workflow_dispatch) y guard
-# main-only sin OIDC. Después del guard, este workflow ahora invoca al
-# reusable _backend-build-publish-production.yml con operation=identity-smoke,
-# habilitando ÚNICAMENTE una prueba de autenticación (WIF → Artifact
-# Publisher Service Account → access token de corta duración). No publica
-# ningún artefacto, no construye ninguna imagen, no toca Cloud Run/Cloud
-# SQL/Secret Manager en ningún momento.
+# T-F1.2 Block D2B1 — este archivo permanece con disparo manual
+# (workflow_dispatch) y guard main-only sin OIDC. Después del guard, este
+# workflow invoca al reusable _backend-build-publish-production.yml con
+# la operation seleccionada explícitamente por quien dispara el run:
 #
-# Esta activación fue diseñada y congelada en T-F1.2 D1F0/D1F0-R1
-# (read-only preflight) y versionada en T-F1.2 D1F1. Este workflow NO ha
-# sido ejecutado (workflow_dispatch) todavía — su primera ejecución real
-# requiere una autorización separada e independiente (T-F1.2 D1F2).
+# identity-smoke (default): ÚNICAMENTE una prueba de autenticación (WIF →
+# Artifact Publisher Service Account → access token de corta duración).
+# No publica ningún artefacto, no construye ninguna imagen. Diseñada y
+# congelada en T-F1.2 D1F0/D1F0-R1, versionada en D1F1, ejecutada
+# funcionalmente en D1F2.
+#
+# build-publish: WIF → Artifact Publisher Service Account → docker build
+# del backend → push al repositorio Production korixa-backend →
+# resolución de digest inmutable. Diseñada y congelada en T-F1.2
+# D2B0-R0, versionada en D2B1. Su primera ejecución real requiere una
+# autorización separada e independiente (bloque D2B2 o equivalente).
+#
+# Ninguna de las dos operaciones toca Cloud Run/Cloud SQL/Secret Manager
+# en ningún momento — esa capacidad permanece en production-deploy.yml /
+# _backend-deploy-cloud-run-production.yml, deliberadamente inertes y no
+# tocados por este archivo.
 #
 # SECURITY:
-# id-token: write se concede EXCLUSIVAMENTE al job identity-smoke que
-# invoca al reusable — el job guard permanece sin ningún permiso
-# (permissions: {}) y sin capacidad de solicitar un token OIDC.
+# id-token: write se concede EXCLUSIVAMENTE al job que invoca al
+# reusable — el job guard permanece sin ningún permiso (permissions: {})
+# y sin capacidad de solicitar un token OIDC. Cualquier valor de
+# operation distinto de identity-smoke/build-publish falla fail-closed
+# dentro del reusable, antes de cualquier job con id-token.
 
 on:
-  workflow_dispatch: {}
+  workflow_dispatch:
+    inputs:
+      operation:
+        description: "Operación a ejecutar contra la identidad WIF de Production."
+        required: true
+        type: choice
+        default: identity-smoke
+        options:
+          - identity-smoke
+          - build-publish
 
 permissions:
   contents: read
@@ -34,12 +53,15 @@ jobs:
     # tiene capacidad de tocar ningún recurso fuera de este runner.
     permissions: {}
     steps:
-      - name: Rechazar refs distintas de main
+      - name: Rechazar refs/eventos/operaciones inesperadas
         shell: bash
+        env:
+          OPERATION: ${{ inputs.operation }}
         run: |
           echo "EVENT_NAME=$GITHUB_EVENT_NAME"
           echo "REF=$GITHUB_REF"
           echo "REF_TYPE=$GITHUB_REF_TYPE"
+          echo "OPERATION=$OPERATION"
 
           if [ "$GITHUB_EVENT_NAME" != "workflow_dispatch" ]; then
             echo "::error::Evento inesperado: $GITHUB_EVENT_NAME"
@@ -56,6 +78,11 @@ jobs:
             exit 1
           fi
 
+          if [ "$OPERATION" != "identity-smoke" ] && [ "$OPERATION" != "build-publish" ]; then
+            echo "::error::operation no soportada: $OPERATION"
+            exit 1
+          fi
+
           echo "GUARD=PASS"
 
   identity-smoke:
@@ -67,4 +94,4 @@ jobs:
     uses: freddyestebancuervo/rouvy_pro/.github/workflows/_backend-build-publish-production.yml@main
     with:
       source_sha: ${{ github.sha }}
-      operation: identity-smoke
+      operation: ${{ inputs.operation }}
