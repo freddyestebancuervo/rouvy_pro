@@ -1,16 +1,23 @@
 name: Backend — Production identity smoke bootstrap
 
-# T-F1.2 Block A (docs/audits/AUDITORIA_FINAL/BACKLOG_MAESTRO.md) — este
-# archivo existe ÚNICAMENTE para congelar su ruta (workflow_ref) antes de
-# que exista ninguna identidad WIF real de Production. Su propósito
-# FUTURO (en un bloque separado, explícitamente autorizado) será probar
-# de forma aislada la identidad de publicación de artefactos
-# (ARTIFACT_PUBLISHER_SA) contra Artifact Registry de Production, sin
-# tocar Cloud Run/Cloud SQL en ningún momento.
+# T-F1.2 Block D1F1 (docs/audits/AUDITORIA_FINAL/BACKLOG_MAESTRO.md) — este
+# archivo permanece con disparo manual (workflow_dispatch) y guard
+# main-only sin OIDC. Después del guard, este workflow ahora invoca al
+# reusable _backend-build-publish-production.yml con operation=identity-smoke,
+# habilitando ÚNICAMENTE una prueba de autenticación (WIF → Artifact
+# Publisher Service Account → access token de corta duración). No publica
+# ningún artefacto, no construye ninguna imagen, no toca Cloud Run/Cloud
+# SQL/Secret Manager en ningún momento.
+#
+# Esta activación fue diseñada y congelada en T-F1.2 D1F0/D1F0-R1
+# (read-only preflight) y versionada en T-F1.2 D1F1. Este workflow NO ha
+# sido ejecutado (workflow_dispatch) todavía — su primera ejecución real
+# requiere una autorización separada e independiente (T-F1.2 D1F2).
 #
 # SECURITY:
-# This workflow is intentionally inert in Block A.
-# Cloud/OIDC activation requires a separately authorized change.
+# id-token: write se concede EXCLUSIVAMENTE al job identity-smoke que
+# invoca al reusable — el job guard permanece sin ningún permiso
+# (permissions: {}) y sin capacidad de solicitar un token OIDC.
 
 on:
   workflow_dispatch: {}
@@ -20,7 +27,7 @@ permissions:
 
 jobs:
   guard:
-    name: Guard — main only (bootstrap, sin acceso cloud)
+    name: Guard — main only (sin acceso cloud, sin OIDC)
     runs-on: ubuntu-latest
     timeout-minutes: 5
     # Sin id-token, sin checkout, sin gcloud, sin docker — este job no
@@ -51,8 +58,13 @@ jobs:
 
           echo "GUARD=PASS"
 
-      - name: Reportar estado inerte (sin auth, sin cloud, sin push)
-        shell: bash
-        run: |
-          echo "Production identity smoke path is bootstrapped but cloud execution is disabled until a later authorized block."
-          echo "No Google authentication, no docker build/push, no Artifact Registry access occurs in this run."
+  identity-smoke:
+    name: Artifact WIF auth-only smoke (via reusable)
+    needs: guard
+    permissions:
+      contents: read
+      id-token: write
+    uses: freddyestebancuervo/rouvy_pro/.github/workflows/_backend-build-publish-production.yml@main
+    with:
+      source_sha: ${{ github.sha }}
+      operation: identity-smoke

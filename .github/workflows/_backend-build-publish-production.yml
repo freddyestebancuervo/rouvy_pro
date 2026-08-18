@@ -1,24 +1,35 @@
 name: (reusable) Backend — build & publish Production artifact [contract bootstrap]
 
-# T-F1.2 Block A — congela el contrato/ruta (job_workflow_ref) de este
-# reusable ANTES de que exista ninguna identidad WIF real. Su propósito
-# FUTURO (bloque separado, explícitamente autorizado) será: WIF auth
-# como ARTIFACT_PUBLISHER_SA → build de la imagen del backend → push a
-# Artifact Registry de Production (repo dedicado, distinto del de
-# Development) → resolver y verificar digest inmutable — nunca Cloud
-# Run, nunca Cloud SQL, nunca Secret Manager, nunca tráfico (ver
+# T-F1.2 Block D1F1 — este reusable admite ahora un input `operation`.
+# Para operation=identity-smoke, habilita ÚNICAMENTE una prueba de
+# autenticación WIF (checkout pinned → google-github-actions/auth pinned
+# como ARTIFACT_PUBLISHER_SA → access token de 300s → verificación no
+# sensible de outputs). Cualquier otro valor de `operation` falla
+# explícitamente (fail-closed) antes de llegar al job con id-token.
+#
+# La capacidad real de build+push a Artifact Registry de Production
+# (operation futuro, ej. build-publish) permanece sin implementar — se
+# habilitará en un bloque posterior, autorizado por separado — nunca
+# Cloud Run, nunca Cloud SQL, nunca Secret Manager, nunca tráfico (ver
 # T-F1.2-B0.3, separación de capacidad por identidad).
 #
 # SECURITY:
-# Contract/path bootstrap only.
-# Artifact publishing is disabled until WIF and Artifact Registry
-# are separately authorized and configured.
+# id-token: write se concede ÚNICAMENTE al job auth-smoke, y solo
+# después de que validate-contract confirme operation==identity-smoke y
+# la integridad de source_sha. El access token generado nunca se
+# imprime, nunca se persiste en un credentials file
+# (create_credentials_file=false) y nunca se exporta como variable de
+# entorno (export_environment_variables=false).
 
 on:
   workflow_call:
     inputs:
       source_sha:
-        description: "SHA exacto ya validado por CI que este reusable construirá/publicará en el bloque futuro."
+        description: "SHA exacto ya validado por CI que este reusable construirá/publicará (o, para identity-smoke, el SHA del evento que disparó la prueba)."
+        required: true
+        type: string
+      operation:
+        description: "Operación solicitada. Único valor admitido en D1F1: identity-smoke."
         required: true
         type: string
 
@@ -26,21 +37,99 @@ permissions:
   contents: read
 
 jobs:
-  contract-only:
-    name: Contract validation (sin build, sin push, sin auth cloud)
+  validate-contract:
+    name: Validate contract (sin checkout, sin OIDC, sin cloud)
     runs-on: ubuntu-latest
     timeout-minutes: 5
-    # Sin id-token — este job no se autentica contra ningún proveedor
-    # cloud. No hay build real, no hay imagen, no hay digest real que
-    # producir todavía; no se inventan outputs funcionales.
+    # Sin id-token, sin checkout — este job solo valida los inputs
+    # recibidos antes de que exista cualquier capacidad OIDC.
     permissions: {}
     steps:
-      - name: Validar input recibido (sin efectos, sin cloud)
+      - name: Validar operation y source_sha (sin efectos, sin cloud)
         shell: bash
+        env:
+          OPERATION: ${{ inputs.operation }}
+          SOURCE_SHA: ${{ inputs.source_sha }}
+          EVENT_SHA: ${{ github.sha }}
         run: |
-          if [ -z "${{ inputs.source_sha }}" ]; then
-            echo "::error::source_sha vacío"
+          set -euo pipefail
+
+          if [ "$OPERATION" != "identity-smoke" ]; then
+            echo "::error::operation no soportada en D1F1: $OPERATION"
             exit 1
           fi
-          echo "SOURCE_SHA recibido (solo validación): ${{ inputs.source_sha }}"
-          echo "Este reusable todavía no construye ni publica ninguna imagen. La capacidad real de build+push a Artifact Registry de Production se habilita en un bloque posterior, autorizado por separado, junto con ARTIFACT_PUBLISHER_SA."
+          echo "OPERATION_VALID=YES"
+
+          if ! [[ "$SOURCE_SHA" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "::error::source_sha con formato inválido"
+            exit 1
+          fi
+          if ! [[ "$EVENT_SHA" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "::error::github.sha con formato inválido"
+            exit 1
+          fi
+          echo "SOURCE_SHA_VALID=YES"
+
+          if [ "$SOURCE_SHA" != "$EVENT_SHA" ]; then
+            echo "::error::source_sha no coincide con github.sha"
+            exit 1
+          fi
+          echo "SOURCE_SHA_MATCH_EVENT_SHA=YES"
+
+  auth-smoke:
+    name: Artifact WIF auth-only smoke
+    needs: validate-contract
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - name: Checkout (requerido por google-github-actions/auth, sin persistir credenciales)
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+
+      - name: Google Auth — WIF → Artifact Publisher SA (access token de 300s)
+        id: auth
+        uses: google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093
+        with:
+          project_id: ridepro-dbafe
+          workload_identity_provider: projects/731660820861/locations/global/workloadIdentityPools/github-actions-pool/providers/github-artifact-publisher
+          service_account: korixa-artifact-publisher@ridepro-dbafe.iam.gserviceaccount.com
+          token_format: access_token
+          access_token_lifetime: 300s
+          create_credentials_file: false
+          export_environment_variables: false
+
+      - name: Verify auth outputs (sin revelar el token)
+        shell: bash
+        env:
+          AUTH_PROJECT_ID: ${{ steps.auth.outputs.project_id }}
+          ACCESS_TOKEN: ${{ steps.auth.outputs.access_token }}
+        run: |
+          set -euo pipefail
+
+          if [ "$AUTH_PROJECT_ID" != "ridepro-dbafe" ]; then
+            echo "::error::project_id inesperado"
+            exit 1
+          fi
+          echo "PROJECT_ID_MATCH=YES"
+
+          if [ -z "$ACCESS_TOKEN" ]; then
+            echo "::error::access_token vacío"
+            exit 1
+          fi
+          echo "ACCESS_TOKEN_PRESENT=YES"
+
+          echo "WIF_AUTH_SMOKE=PASS"
+
+          {
+            echo "### Production Artifact WIF auth-only smoke"
+            echo ""
+            echo "- PROJECT_ID_MATCH: YES"
+            echo "- ACCESS_TOKEN_PRESENT: YES"
+            echo "- WIF_AUTH_SMOKE: PASS"
+            echo ""
+            echo "No image build, no push, no Cloud Run, no Cloud SQL, no Secret Manager, no migration occurred in this run."
+          } >> "$GITHUB_STEP_SUMMARY"
