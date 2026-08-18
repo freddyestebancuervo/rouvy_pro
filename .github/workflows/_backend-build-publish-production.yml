@@ -228,24 +228,105 @@ jobs:
         run: |
           set -euo pipefail
 
-          IMAGE_TAG_REF="southamerica-east1-docker.pkg.dev/ridepro-dbafe/korixa-backend/api:${SOURCE_SHA}"
+          IMAGE_PATH="southamerica-east1-docker.pkg.dev/ridepro-dbafe/korixa-backend/api"
+          IMAGE_TAG_REF="${IMAGE_PATH}:${SOURCE_SHA}"
+
+          if ! command -v python3 >/dev/null 2>&1; then
+            echo "::error::IMMUTABLE_TAG_PRECHECK=PARSER_UNAVAILABLE — python3 no está disponible en el runner. FAIL_CLOSED."
+            exit 1
+          fi
+
+          LIST_STDOUT="$(mktemp)"
+          LIST_STDERR="$(mktemp)"
+
+          cleanup() {
+            rm -f "$LIST_STDOUT" "$LIST_STDERR"
+          }
+          trap cleanup EXIT
 
           set +e
-          LOOKUP_OUTPUT="$(gcloud artifacts docker images describe "$IMAGE_TAG_REF" --project=ridepro-dbafe --format='value(image_summary.digest)' 2>&1)"
-          LOOKUP_EXIT=$?
+          gcloud artifacts docker images list "$IMAGE_PATH" \
+            --include-tags \
+            --project=ridepro-dbafe \
+            --format=json \
+            >"$LIST_STDOUT" \
+            2>"$LIST_STDERR"
+          LIST_EXIT=$?
           set -e
 
-          if [ $LOOKUP_EXIT -eq 0 ]; then
-            echo "::error::IMMUTABLE_TAG_PRECHECK=TAG_ALREADY_EXISTS — el tag $SOURCE_SHA ya existe en korixa-backend; immutable tags impide sobrescribirlo. FAIL_CLOSED, sin reintento."
+          if [ "$LIST_EXIT" -ne 0 ]; then
+            echo "::error::IMMUTABLE_TAG_PRECHECK=LOOKUP_ERROR — docker images list terminó con exit=$LIST_EXIT. FAIL_CLOSED."
             exit 1
           fi
 
-          if echo "$LOOKUP_OUTPUT" | grep -qi "NOT_FOUND"; then
-            echo "IMMUTABLE_TAG_PRECHECK=TAG_NOT_FOUND"
-          else
-            echo "::error::IMMUTABLE_TAG_PRECHECK=UNEXPECTED_LOOKUP_ERROR — no se pudo confirmar inequívocamente la ausencia del tag. FAIL_CLOSED."
+          set +e
+          MATCH_COUNT="$(
+            python3 - "$SOURCE_SHA" "$LIST_STDOUT" <<'PY'
+          import json
+          import sys
+
+          source_sha = sys.argv[1]
+          json_path = sys.argv[2]
+
+          try:
+              with open(json_path, "r", encoding="utf-8") as handle:
+                  payload = json.load(handle)
+          except (OSError, json.JSONDecodeError):
+              sys.exit(20)
+
+          if not isinstance(payload, list):
+              sys.exit(21)
+
+          match_count = 0
+
+          for image in payload:
+              if not isinstance(image, dict):
+                  sys.exit(22)
+
+              tags = image.get("tags", [])
+
+              if tags is None:
+                  tags = []
+
+              if not isinstance(tags, list):
+                  sys.exit(23)
+
+              for tag in tags:
+                  if not isinstance(tag, str):
+                      sys.exit(24)
+
+                  if tag == source_sha:
+                      match_count += 1
+
+          print(match_count)
+          PY
+          )"
+          PARSE_EXIT=$?
+          set -e
+
+          if [ "$PARSE_EXIT" -ne 0 ]; then
+            echo "::error::IMMUTABLE_TAG_PRECHECK=LOOKUP_ERROR — stdout no cumple el JSON estructurado esperado; parser_exit=$PARSE_EXIT. FAIL_CLOSED."
             exit 1
           fi
+
+          if ! [[ "$MATCH_COUNT" =~ ^[0-9]+$ ]]; then
+            echo "::error::IMMUTABLE_TAG_PRECHECK=LOOKUP_ERROR — match_count inválido. FAIL_CLOSED."
+            exit 1
+          fi
+
+          case "$MATCH_COUNT" in
+            0)
+              echo "IMMUTABLE_TAG_PRECHECK=TAG_NOT_FOUND"
+              ;;
+            1)
+              echo "::error::IMMUTABLE_TAG_PRECHECK=TAG_ALREADY_EXISTS — el tag $SOURCE_SHA ya existe en korixa-backend. FAIL_CLOSED, sin reintento."
+              exit 1
+              ;;
+            *)
+              echo "::error::IMMUTABLE_TAG_PRECHECK=INVARIANT_VIOLATION — el tag exacto $SOURCE_SHA apareció $MATCH_COUNT veces. FAIL_CLOSED."
+              exit 1
+              ;;
+          esac
 
           echo "image_tag_ref=$IMAGE_TAG_REF" >> "$GITHUB_OUTPUT"
 
