@@ -1,25 +1,32 @@
-name: (reusable) Backend — build & publish Production artifact [contract bootstrap]
+name: (reusable) Backend — build & publish Production artifact
 
-# T-F1.2 Block D1F1 — este reusable admite ahora un input `operation`.
-# Para operation=identity-smoke, habilita ÚNICAMENTE una prueba de
-# autenticación WIF (checkout pinned → google-github-actions/auth pinned
-# como ARTIFACT_PUBLISHER_SA → access token de 300s → verificación no
-# sensible de outputs). Cualquier otro valor de `operation` falla
-# explícitamente (fail-closed) antes de llegar al job con id-token.
+# T-F1.2 Block D2B1 — este reusable admite dos operaciones:
 #
-# La capacidad real de build+push a Artifact Registry de Production
-# (operation futuro, ej. build-publish) permanece sin implementar — se
-# habilitará en un bloque posterior, autorizado por separado — nunca
-# Cloud Run, nunca Cloud SQL, nunca Secret Manager, nunca tráfico (ver
-# T-F1.2-B0.3, separación de capacidad por identidad).
+# operation=identity-smoke: prueba de autenticación WIF (checkout pinned
+# → google-github-actions/auth pinned como ARTIFACT_PUBLISHER_SA → access
+# token de 300s → verificación no sensible de outputs). Sin build, sin
+# push. Versionada en T-F1.2 D1F1, ejecutada funcionalmente en D1F2.
+#
+# operation=build-publish: WIF como ARTIFACT_PUBLISHER_SA → docker build
+# del backend → verificación de label OCI de revisión → precheck de
+# colisión de immutable tag (fail-closed) → docker push al repositorio
+# Production korixa-backend → resolución y validación de digest → emisión
+# de referencia inmutable repository@sha256:<digest>. Nunca Cloud Run,
+# nunca Cloud SQL, nunca Secret Manager, nunca tráfico (ver T-F1.2-B0.3,
+# separación de capacidad por identidad).
+#
+# Cualquier otro valor de `operation` falla explícitamente (fail-closed)
+# antes de llegar a cualquier job con id-token.
 #
 # SECURITY:
-# id-token: write se concede ÚNICAMENTE al job auth-smoke, y solo
-# después de que validate-contract confirme operation==identity-smoke y
-# la integridad de source_sha. El access token generado nunca se
-# imprime, nunca se persiste en un credentials file
-# (create_credentials_file=false) y nunca se exporta como variable de
-# entorno (export_environment_variables=false).
+# id-token: write se concede ÚNICAMENTE a los jobs auth-smoke y
+# build-publish, y solo después de que validate-contract confirme una
+# operation soportada y la integridad de source_sha. En identity-smoke el
+# access token generado nunca se imprime, nunca se persiste en un
+# credentials file (create_credentials_file=false) y nunca se exporta
+# como variable de entorno (export_environment_variables=false). En
+# build-publish nunca se imprimen tokens, credenciales ni cabeceras de
+# autorización — únicamente SHAs, referencias de imagen y digests.
 
 on:
   workflow_call:
@@ -29,9 +36,22 @@ on:
         required: true
         type: string
       operation:
-        description: "Operación solicitada. Único valor admitido en D1F1: identity-smoke."
+        description: "Operación solicitada: identity-smoke o build-publish."
         required: true
         type: string
+    outputs:
+      source_sha:
+        description: "SOURCE_SHA publicado (solo operation=build-publish)."
+        value: ${{ jobs.build-publish.outputs.source_sha }}
+      image_tag_ref:
+        description: "Referencia de imagen por tag determinístico (solo operation=build-publish)."
+        value: ${{ jobs.build-publish.outputs.image_tag_ref }}
+      artifact_digest:
+        description: "Digest resuelto en Artifact Registry tras el push (solo operation=build-publish)."
+        value: ${{ jobs.build-publish.outputs.artifact_digest }}
+      immutable_ref:
+        description: "Referencia inmutable repository@sha256:<digest> — única referencia válida para deploy (solo operation=build-publish)."
+        value: ${{ jobs.build-publish.outputs.immutable_ref }}
 
 permissions:
   contents: read
@@ -54,8 +74,8 @@ jobs:
         run: |
           set -euo pipefail
 
-          if [ "$OPERATION" != "identity-smoke" ]; then
-            echo "::error::operation no soportada en D1F1: $OPERATION"
+          if [ "$OPERATION" != "identity-smoke" ] && [ "$OPERATION" != "build-publish" ]; then
+            echo "::error::operation no soportada: $OPERATION"
             exit 1
           fi
           echo "OPERATION_VALID=YES"
@@ -79,6 +99,7 @@ jobs:
   auth-smoke:
     name: Artifact WIF auth-only smoke
     needs: validate-contract
+    if: inputs.operation == 'identity-smoke'
     runs-on: ubuntu-latest
     timeout-minutes: 10
     permissions:
@@ -133,3 +154,177 @@ jobs:
             echo ""
             echo "No image build, no push, no Cloud Run, no Cloud SQL, no Secret Manager, no migration occurred in this run."
           } >> "$GITHUB_STEP_SUMMARY"
+
+  build-publish:
+    name: Build & publish Production artifact
+    needs: validate-contract
+    if: inputs.operation == 'build-publish'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - name: Checkout SOURCE_SHA (sin persistir credenciales)
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: ${{ inputs.source_sha }}
+          persist-credentials: false
+
+      - name: Verificar SHA fuente exacto antes de autenticar
+        id: source
+        shell: bash
+        env:
+          SOURCE_SHA: ${{ inputs.source_sha }}
+        run: |
+          set -euo pipefail
+
+          CHECKED_OUT_SHA="$(git rev-parse HEAD)"
+
+          if ! [[ "$SOURCE_SHA" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "::error::source_sha no tiene formato de SHA-1 completo (40 hex): '$SOURCE_SHA'"
+            exit 1
+          fi
+
+          if ! [[ "$CHECKED_OUT_SHA" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "::error::El HEAD del checkout no tiene formato de SHA-1 completo (40 hex): '$CHECKED_OUT_SHA'"
+            exit 1
+          fi
+
+          if [ "$CHECKED_OUT_SHA" != "$SOURCE_SHA" ]; then
+            echo "::error::El working tree del runner ($CHECKED_OUT_SHA) no coincide con SOURCE_SHA ($SOURCE_SHA)."
+            exit 1
+          fi
+
+          echo "source_sha=$SOURCE_SHA" >> "$GITHUB_OUTPUT"
+
+      - name: Google Auth — WIF → Artifact Publisher SA
+        id: auth
+        uses: google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093
+        with:
+          project_id: ridepro-dbafe
+          workload_identity_provider: projects/731660820861/locations/global/workloadIdentityPools/github-actions-pool/providers/github-artifact-publisher
+          service_account: korixa-artifact-publisher@ridepro-dbafe.iam.gserviceaccount.com
+
+      - name: Setup gcloud
+        uses: google-github-actions/setup-gcloud@aa5489c8933f4cc7a4f7d45035b3b1440c9c10db
+
+      - name: Verificar projectId ANTES de cualquier acceso a Artifact Registry
+        shell: bash
+        run: |
+          set -euo pipefail
+          ACTUAL_PROJECT="$(gcloud config get-value project)"
+          if [ "$ACTUAL_PROJECT" != "ridepro-dbafe" ]; then
+            echo "::error::PROJECT MISMATCH: esperado ridepro-dbafe, obtenido '$ACTUAL_PROJECT'"
+            exit 1
+          fi
+          echo "PROJECT_ID_MATCH=YES"
+
+      - name: Precheck de colisión de immutable tag (fail-closed, antes de build y de push)
+        id: tag-precheck
+        shell: bash
+        env:
+          SOURCE_SHA: ${{ steps.source.outputs.source_sha }}
+        run: |
+          set -euo pipefail
+
+          IMAGE_TAG_REF="southamerica-east1-docker.pkg.dev/ridepro-dbafe/korixa-backend/api:${SOURCE_SHA}"
+
+          set +e
+          LOOKUP_OUTPUT="$(gcloud artifacts docker images describe "$IMAGE_TAG_REF" --project=ridepro-dbafe --format='value(image_summary.digest)' 2>&1)"
+          LOOKUP_EXIT=$?
+          set -e
+
+          if [ $LOOKUP_EXIT -eq 0 ]; then
+            echo "::error::IMMUTABLE_TAG_PRECHECK=TAG_ALREADY_EXISTS — el tag $SOURCE_SHA ya existe en korixa-backend; immutable tags impide sobrescribirlo. FAIL_CLOSED, sin reintento."
+            exit 1
+          fi
+
+          if echo "$LOOKUP_OUTPUT" | grep -qi "NOT_FOUND"; then
+            echo "IMMUTABLE_TAG_PRECHECK=TAG_NOT_FOUND"
+          else
+            echo "::error::IMMUTABLE_TAG_PRECHECK=UNEXPECTED_LOOKUP_ERROR — no se pudo confirmar inequívocamente la ausencia del tag. FAIL_CLOSED."
+            exit 1
+          fi
+
+          echo "image_tag_ref=$IMAGE_TAG_REF" >> "$GITHUB_OUTPUT"
+
+      - name: Configurar Docker exclusivamente para Artifact Registry southamerica-east1
+        shell: bash
+        run: gcloud auth configure-docker southamerica-east1-docker.pkg.dev --quiet
+
+      - name: Build, con label OCI de revisión
+        shell: bash
+        env:
+          SOURCE_SHA: ${{ steps.source.outputs.source_sha }}
+          IMAGE_TAG_REF: ${{ steps.tag-precheck.outputs.image_tag_ref }}
+        run: |
+          docker build --no-cache \
+            --label "org.opencontainers.image.revision=${SOURCE_SHA}" \
+            -t "${IMAGE_TAG_REF}" \
+            ./backend
+
+      - name: Verificar label OCI de revisión en la imagen local ANTES de publicar
+        shell: bash
+        env:
+          SOURCE_SHA: ${{ steps.source.outputs.source_sha }}
+          IMAGE_TAG_REF: ${{ steps.tag-precheck.outputs.image_tag_ref }}
+        run: |
+          set -euo pipefail
+          ACTUAL_LABEL="$(docker image inspect "$IMAGE_TAG_REF" --format '{{ index .Config.Labels "org.opencontainers.image.revision" }}')"
+          if [ "$ACTUAL_LABEL" != "$SOURCE_SHA" ]; then
+            echo "::error::org.opencontainers.image.revision de la imagen local ('$ACTUAL_LABEL') no coincide con SOURCE_SHA ('$SOURCE_SHA')."
+            exit 1
+          fi
+          echo "IMAGE_REVISION_LABEL_VERIFIED=YES"
+
+      - name: Push imagen etiquetada por commit SHA (referencia determinística, nunca latest)
+        shell: bash
+        env:
+          IMAGE_TAG_REF: ${{ steps.tag-precheck.outputs.image_tag_ref }}
+        run: docker push "${IMAGE_TAG_REF}"
+
+      - name: Resolver y validar digest publicado
+        id: digest
+        shell: bash
+        env:
+          SOURCE_SHA: ${{ steps.source.outputs.source_sha }}
+          IMAGE_TAG_REF: ${{ steps.tag-precheck.outputs.image_tag_ref }}
+        run: |
+          set -euo pipefail
+
+          ARTIFACT_DIGEST="$(gcloud artifacts docker images describe "$IMAGE_TAG_REF" --project=ridepro-dbafe --format='value(image_summary.digest)')"
+
+          if ! [[ "$ARTIFACT_DIGEST" =~ ^sha256:[0-9a-f]{64}$ ]]; then
+            echo "::error::ARTIFACT_DIGEST no tiene formato sha256 válido (esperado ^sha256:[0-9a-f]{64}$): '$ARTIFACT_DIGEST'"
+            exit 1
+          fi
+
+          IMMUTABLE_REF="southamerica-east1-docker.pkg.dev/ridepro-dbafe/korixa-backend/api@${ARTIFACT_DIGEST}"
+
+          echo "source_sha=$SOURCE_SHA" >> "$GITHUB_OUTPUT"
+          echo "image_tag_ref=$IMAGE_TAG_REF" >> "$GITHUB_OUTPUT"
+          echo "artifact_digest=$ARTIFACT_DIGEST" >> "$GITHUB_OUTPUT"
+          echo "immutable_ref=$IMMUTABLE_REF" >> "$GITHUB_OUTPUT"
+
+      - name: Reporte de publicación (sin datos sensibles)
+        shell: bash
+        run: |
+          {
+            echo "### Production artifact build & publish"
+            echo ""
+            echo "- PROJECT_ID = ridepro-dbafe"
+            echo "- SOURCE_SHA = ${{ steps.digest.outputs.source_sha }}"
+            echo "- IMAGE_TAG_REF = ${{ steps.digest.outputs.image_tag_ref }}"
+            echo "- ARTIFACT_DIGEST = ${{ steps.digest.outputs.artifact_digest }}"
+            echo "- IMMUTABLE_REF = ${{ steps.digest.outputs.immutable_ref }}"
+            echo "- WIF_AUTH = PASS"
+            echo "- ARTIFACT_PUSH = PASS"
+            echo ""
+            echo "No Cloud Run, no Cloud SQL, no Secret Manager, no migration occurred in this run."
+          } >> "$GITHUB_STEP_SUMMARY"
+    outputs:
+      source_sha: ${{ steps.digest.outputs.source_sha }}
+      image_tag_ref: ${{ steps.digest.outputs.image_tag_ref }}
+      artifact_digest: ${{ steps.digest.outputs.artifact_digest }}
+      immutable_ref: ${{ steps.digest.outputs.immutable_ref }}
