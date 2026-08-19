@@ -63,6 +63,21 @@ export function isRepoRelativePath(value) {
   if (/^[A-Za-z]:/.test(value)) return false; // drive-letter absolute
   if (value.startsWith('/')) return false; // POSIX absolute
   if (value.includes('..')) return false; // any traversal segment, conservatively
+  if (value.includes('*')) {
+    // Only the recognized glob shapes (see pathScope below) are accepted:
+    // the bare global wildcards, or a single trailing "/**"/"/*" segment
+    // with no further "*" elsewhere. Anything more complex (e.g.
+    // "backend/**/secret/*.json") cannot be proven disjoint from another
+    // scope by the conservative exact/prefix/global model in pathsOverlap,
+    // so it is rejected here rather than silently risking a false
+    // "no conflict" — a queue that needs a glob this complex fails
+    // validation instead.
+    const isGlobal = value === '*' || value === '**' || value === '**/*';
+    const isSimpleTrailingGlob =
+      (value.endsWith('/**') && !value.slice(0, -3).includes('*')) ||
+      (value.endsWith('/*') && !value.slice(0, -2).includes('*'));
+    if (!isGlobal && !isSimpleTrailingGlob) return false;
+  }
   return true;
 }
 
@@ -72,9 +87,14 @@ export function isRepoRelativePath(value) {
  * pathsOverlap to detect ancestor/glob containment, not just string
  * equality.
  * @param {string} value
- * @returns {{type: 'exact'|'prefix', value: string}}
+ * @returns {{type: 'exact'|'prefix'|'global', value?: string}}
  */
 function pathScope(value) {
+  // "*", "**", and "**/*" address every repo-relative path — treat them as
+  // a distinct GLOBAL scope rather than falling through to the prefix
+  // branch below, where they would otherwise reduce to an empty-string
+  // prefix that (incorrectly) overlaps nothing.
+  if (value === '*' || value === '**' || value === '**/*') return { type: 'global' };
   if (value.endsWith('/**')) return { type: 'prefix', value: value.slice(0, -3) };
   if (value.endsWith('/*')) return { type: 'prefix', value: value.slice(0, -2) };
   if (value.endsWith('/')) return { type: 'prefix', value: value.slice(0, -1) };
@@ -84,10 +104,14 @@ function pathScope(value) {
 
 /**
  * Conservatively decide whether two path/glob entries could ever address
- * the same file: exact equality, or one being an ancestor directory (via
- * glob or trailing slash) of the other. When two complex globs cannot be
- * proven disjoint, this errs toward reporting a conflict — false positive
- * (over-cautious) is acceptable here; false negative is not.
+ * the same file: exact equality, one being an ancestor directory (via glob
+ * or trailing slash) of the other, or either being a GLOBAL wildcard (a
+ * bare "*", "**", or "**" + "/*") that by definition overlaps every path. When two
+ * complex globs cannot be proven disjoint, this errs toward reporting a
+ * conflict — false positive (over-cautious) is acceptable here; false
+ * negative is not. Anything more complex than exact/prefix/global (e.g. a
+ * mid-string wildcard) is rejected earlier, at schema validation, by
+ * isRepoRelativePath — it never reaches this function.
  * @param {string} a
  * @param {string} b
  * @returns {boolean}
@@ -95,6 +119,8 @@ function pathScope(value) {
 export function pathsOverlap(a, b) {
   const sa = pathScope(a);
   const sb = pathScope(b);
+
+  if (sa.type === 'global' || sb.type === 'global') return true;
 
   if (sa.type === 'exact' && sb.type === 'exact') {
     return sa.value === sb.value;

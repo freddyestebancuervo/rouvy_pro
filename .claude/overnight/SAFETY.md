@@ -38,6 +38,39 @@ Auditor's job (see `tools/night-agent/README.md`), not this hook's, and it
 does not exist yet: `EXECUTION_ENGINE = DISABLED_IN_V1_A`. These primitives
 being guard-permitted is not the same as autonomous commits being enabled.
 
+## R2 closures: a bare `&`, `git add` expansion, commit-message expansion, global wildcards
+
+A second independent audit found four gaps in the R1 model, all closed here:
+
+- **A lone `&`** (POSIX background/sequence — `git add foo & git push origin
+  main` runs both) was not in R1's chain-operator check, which only matched
+  the two-character `&&`. The check is now a single character-class test
+  for `&`, `;`, `|`, or a newline anywhere in the raw command — a bare `&`
+  is exactly as disqualifying as `&&`.
+- **`git add`** path tokens are now restricted to a closed character grammar
+  (`[A-Za-z0-9._/-]` only, plus explicit rejection of the literal tokens
+  `.` and `..`) — no `*`, `?`, `[`, `]`, `{`, `}`, `$`, `!`, `~`, or any
+  other shell/glob metacharacter is accepted in a path token, and
+  `-A`/`--all`/`-u` (or any flag at all) are rejected outright. `git add .`
+  is deliberately denied: it stages far more than any task's declared
+  scope should ever need.
+- **`git commit -m`** now accepts only a **single-quoted** literal message
+  (`git commit -m 'fix: ...'`) — double-quoted messages are denied
+  unconditionally, regardless of content, because double quotes permit
+  shell variable/command expansion (`"$SECRET"`, `` "$(cat file)" ``,
+  `` "`whoami`" ``) in every shell this could plausibly run under. The
+  message content itself is further restricted to a narrow safe character
+  set (letters, digits, spaces, and `: - _ . / ( ) [ ]`), so even a
+  single-quoted message containing `${SECRET}`-style text is still denied.
+- **`pathsOverlap` global wildcards**: `tools/night-agent/queue.mjs`'s
+  `pathsOverlap` now treats a bare `*`, `**`, or `**/*` as a distinct
+  `GLOBAL` scope that overlaps every repo-relative path — R1's prefix-based
+  model reduced these to an empty-string prefix, which incorrectly reported
+  `pathsOverlap('*', 'foo.js')` as non-overlapping. A glob shape more
+  complex than exact/prefix/global (e.g. a mid-string wildcard like
+  `backend/**/secret/*.json`) is rejected at schema validation instead,
+  since the conservative model cannot prove it disjoint from another scope.
+
 ## Denied by default (RED)
 
 **Git / GitHub**
@@ -91,12 +124,12 @@ being guard-permitted is not the same as autonomous commits being enabled.
   permission-bypass flags by construction rather than enumerating them.
 
 **Guard evasion**
-- Any command chaining or piping (`&&`, `||`, `;`, `|`, or a literal
-  newline) — denied unconditionally in V1. The guard supports only one
-  simple command per Bash tool call; this single rule closes the entire
-  "hide a dangerous command behind a benign one" bypass class, including
-  `curl ... | sh` / `wget ... | bash`, without needing a pipe-to-shell
-  special case.
+- Any command chaining, piping, or backgrounding (`&`, `&&`, `||`, `;`,
+  `|`, or a literal newline) — denied unconditionally in V1. The guard
+  supports only one simple command per Bash tool call; this single rule
+  closes the entire "hide a dangerous command behind a benign one" bypass
+  class, including `curl ... | sh` / `wget ... | bash` and `git add foo &
+  git push`, without needing a pipe-to-shell or ampersand special case.
 - Shell indirection (`bash -c "..."`, `sh -c "..."`, `eval ...`,
   `powershell -Command`/`-EncodedCommand`, `cmd /c`), command substitution
   (`` $(...) ``, backticks), redirection (`<`, `>`), and any backslash

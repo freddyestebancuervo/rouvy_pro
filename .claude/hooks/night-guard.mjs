@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 import { pathToFileURL } from 'node:url';
 
-// Korixa Night Agent — PreToolUse guard (NIGHT-V1-A-R1 hardened model).
+// Korixa Night Agent — PreToolUse guard (NIGHT-V1-A-R2 hardened model).
 //
 // Dormant (no-op, exit 0, no output) unless KORIXA_NIGHT_MODE=1 in the
 // environment of the process that launched Claude Code — see CLAUDE.md and
@@ -104,7 +104,7 @@ export function normalize(command) {
  * real shells merge into one token but that no simple scan can reliably
  * distinguish from something more anodyne).
  * @param {string} command
- * @returns {{raw: string, quoted: boolean, content?: string}[]|null}
+ * @returns {{raw: string, quoted: boolean, quoteChar?: string, content?: string}[]|null}
  */
 export function tokenize(command) {
   const tokens = [];
@@ -130,7 +130,7 @@ export function tokenize(command) {
       }
       if (!closed) return null; // unbalanced quote
       if (j < n && !/\s/.test(command[j])) return null; // quote-concatenation trick
-      tokens.push({ raw: command.slice(i, j), quoted: true, content });
+      tokens.push({ raw: command.slice(i, j), quoted: true, quoteChar: quote, content });
       i = j;
     } else {
       let j = i;
@@ -167,9 +167,32 @@ function isSafeTestPath(value) {
   );
 }
 
+// A conservative closed grammar for `git add` path tokens (R2): only
+// [A-Za-z0-9._/-] is permitted, at all — no wildcard/glob/brace/bracket
+// characters, no shell metacharacters, no environment-variable sigils, no
+// home-directory tilde. This one character-class check is what actually
+// rejects the entire family the audit flagged (*, ?, [, ], {, }, $, !, ~,
+// and friends) rather than trying to enumerate each one. "." and ".." are
+// rejected explicitly even though both are technically in that charset,
+// since either would stage far more than a task's declared scope.
+const SAFE_ADD_PATH_CHARSET = /^[A-Za-z0-9._/-]+$/;
+
 function isSafeAddPath(value) {
-  return isRepoRelativePathToken(value) && !value.startsWith('-');
+  if (typeof value !== 'string' || value.length === 0) return false;
+  if (value === '.' || value === '..') return false;
+  if (value.startsWith('-')) return false; // no flags: -A/--all/-u/-f are all out of scope for V1
+  if (!SAFE_ADD_PATH_CHARSET.test(value)) return false;
+  return isRepoRelativePathToken(value);
 }
+
+// A conservative closed grammar for a `git commit -m` message's literal
+// content (R2): letters, digits, spaces, and a small, deliberately narrow
+// set of punctuation common in Conventional Commits-style messages. No `$`,
+// backtick, `&`, `;`, `|`, `<`, `>`, or backslash — this is what actually
+// closes the "commit message as an environment-variable/command-
+// substitution exfiltration channel" finding, rather than trying to detect
+// each dangerous construct individually.
+const SAFE_COMMIT_MESSAGE_CHARSET = /^[A-Za-z0-9 :\-_./()[\]]*$/;
 
 const GIT_REF_FLAG_TOKENS = new Set(['-1', '--oneline', '--stat', '--short', '--check', '--name-only']);
 const GIT_REF_TOKEN_PATTERN = /^[A-Za-z0-9._/^~-]{1,200}$/;
@@ -241,14 +264,24 @@ const SAFE_MATCHERS = [
   },
   {
     id: 'GIT_COMMIT_M',
+    // Single-quoted ONLY (R2) — double-quoted messages are never allowed,
+    // regardless of content, because double quotes permit shell
+    // variable/command expansion in every shell this could plausibly run
+    // under (`"$SECRET"`, `"$(cat file)"`, `` "`whoami`" ``). Restricting
+    // to single quotes is a categorical fix, not a per-pattern denylist —
+    // combined with the content charset below (belt-and-suspenders even
+    // though single quotes already block shell expansion), it closes the
+    // whole "commit message as an exfiltration channel" finding.
     test: (t) =>
       t.length === 4 &&
       t[0].raw === 'git' &&
       t[1].raw === 'commit' &&
       t[2].raw === '-m' &&
       t[3].quoted &&
+      t[3].quoteChar === "'" &&
       typeof t[3].content === 'string' &&
-      t[3].content.length > 0,
+      t[3].content.length > 0 &&
+      SAFE_COMMIT_MESSAGE_CHARSET.test(t[3].content),
   },
 ];
 
@@ -264,15 +297,21 @@ export function classifyCommand(command) {
     return { decision: 'deny', reason: 'UNCLASSIFIABLE_COMMAND: empty or non-string command', family: 'UNCLASSIFIABLE_COMMAND' };
   }
 
-  // Chaining/piping/newlines are checked on the RAW string, before any
-  // whitespace collapsing, so a literal newline (a second command on its
-  // own line) is never lost. V1 supports only a single simple command per
-  // Bash tool call — this closes the entire "hide a second command behind
-  // a benign first one" bypass class in one conservative rule.
-  if (/\n|&&|\|\||;|\|/.test(command)) {
+  // Chaining/piping/backgrounding/newlines are checked on the RAW string,
+  // before any whitespace collapsing, so a literal newline (a second
+  // command on its own line) is never lost. V1 supports only a single
+  // simple command per Bash tool call — this closes the entire "hide a
+  // second command behind a benign first one" bypass class in one
+  // conservative rule. This is a single character-class test, not a list
+  // of two-character operator strings: a lone `&` (background/sequence in
+  // POSIX shells — "git add foo & git push origin main" runs both) is just
+  // as much a chain operator as `&&`, and checking for the character alone
+  // catches both without needing separate cases (R2: the original `&&`-only
+  // pattern let a bare `&` through — see SAFETY.md).
+  if (/[\n&;|]/.test(command)) {
     return {
       decision: 'deny',
-      reason: 'UNCLASSIFIABLE_COMMAND: command chaining/piping (&&, ||, ;, |, or a newline) is not supported by the Night Guard in V1 — one simple command per call only',
+      reason: 'UNCLASSIFIABLE_COMMAND: command chaining/piping/backgrounding (&, &&, ||, ;, |, or a newline) is not supported by the Night Guard in V1 — one simple command per call only',
       family: 'UNCLASSIFIABLE_COMMAND',
     };
   }
@@ -391,10 +430,18 @@ async function readStdin() {
 }
 
 function denyAndExit(reason) {
-  // Exit code 2 is the documented unconditional PreToolUse block — it
-  // overrides any JSON "allow" and is the most robust of the supported
-  // mechanisms (code.claude.com/docs/en/hooks.md). The JSON on stdout is
-  // additional structured detail for auditability, not the sole signal.
+  // Exit code 2 is the documented unconditional PreToolUse block (R1/R2
+  // re-confirmed against code.claude.com/docs/en/hooks.md): it blocks
+  // regardless of any JSON "allow", and the reason shown is read from the
+  // JSON stdout "reason" first, falling back to stderr if JSON is absent —
+  // both channels are written here so the reason surfaces either way,
+  // rather than depending on exactly one of them.
+  //
+  // `reason` is ALWAYS a fixed, generic, pre-written string identifying the
+  // decision family (e.g. "UNCLASSIFIABLE_COMMAND: ...") — never the raw
+  // command text. The command itself may contain a secret (a token in an
+  // env var reference, a connection string, a credential path); this
+  // function has no caller that passes it one, and must never be given one.
   process.stdout.write(
     JSON.stringify({
       hookSpecificOutput: {
@@ -404,6 +451,7 @@ function denyAndExit(reason) {
       },
     }),
   );
+  process.stderr.write(`NIGHT_GUARD_DENY: ${reason}\n`);
   process.exit(2);
 }
 

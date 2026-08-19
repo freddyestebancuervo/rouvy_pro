@@ -1,6 +1,10 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { spawnSync } from 'node:child_process';
+import { fileURLToPath } from 'node:url';
 import { evaluate, classifyCommand, tokenize, normalize } from '../../../.claude/hooks/night-guard.mjs';
+
+const GUARD_PATH = fileURLToPath(new URL('../../../.claude/hooks/night-guard.mjs', import.meta.url));
 
 // NOTE: these tests import the guard's pure classification/evaluation
 // functions and pass command STRINGS as data. They never execute any of
@@ -190,12 +194,91 @@ const DENY_COMMANDS = [
   'npm run anything-else',
   'npm install',
   'npm audit fix',
+
+  // --- R2: single-ampersand bypass (independent audit finding A) ---
+  // The R1 chain-operator check only matched `&&`, not a lone `&` — a
+  // POSIX background/sequence operator that runs both sides just like
+  // `;`. All of these ran (or could have run) a second, dangerous command.
+  'git add foo & git push origin main',
+  'git status & git push',
+  'pwd & gcloud run deploy x',
+  'git add foo&git push origin main', // no spaces around & — still an operator
+  'git add foo & echo bar', // second half harmless, but chaining itself is denied
+
+  // --- R2: git add shell-expansion / scope-widening (finding B) ---
+  'git add .',
+  'git add ..',
+  'git add *',
+  'git add **',
+  'git add foo*',
+  'git add foo?bar',
+  'git add [abc]*',
+  'git add {foo,bar}',
+  'git add $PWD/foo',
+  'git add ${HOME}/foo',
+  'git add ~/foo',
+  'git add foo;bar', // caught by the raw chain check before path grammar
+  'git add foo>bar', // caught by REDIRECTION
+  'git add -A',
+  'git add --all',
+  'git add -u',
+  'git add ../foo',
+  'git add /tmp/foo',
+  'git add C:\\foo',
+  'git add "foo"', // quoted path tokens are never accepted for git add
+  "git add 'foo'",
+  'git add $PWD/.github/workflows/x.yml',
+
+  // --- R2: commit-message shell-expansion (finding C) ---
+  'git commit -m "$SECRET"',
+  'git commit -m "${TOKEN}"',
+  'git commit -m "$(cat secret)"',
+  'git commit -m "`whoami`"',
+  "git commit -m 'ok' & git push",
+  'git commit --amend',
+  "git commit -a -m 'x'",
+  "git commit -am 'x'",
+  'git commit',
+  'git commit -m ""',
+  "git commit -m ''", // empty literal message — still rejected (length > 0 required)
+  "git commit -m '${SECRET}'", // single-quoted but content charset still rejects $ { }
+
+  // --- R2: git branch special case must stay narrow (section 22) ---
+  'git branch -d x',
+  'git branch foo',
+  'git branch --move x y',
+  'git branch --delete x',
 ];
 
 for (const command of DENY_COMMANDS) {
   test(`DENY: ${command}`, () => {
     const result = classifyCommand(command);
     assert.equal(result.decision, 'deny', `expected deny for: ${command}`);
+  });
+}
+
+// ---------------------------------------------------------------------------
+// R2 property-style matrices: deterministic permutations, not one-off
+// literals, per section 26/27. No fuzz package, no execution.
+// ---------------------------------------------------------------------------
+
+const AMPERSAND_SPACING_VARIANTS = [
+  'git status & git push',
+  'git status&git push',
+  'git status  &  git push',
+  'git status\t&\tgit push',
+];
+for (const command of AMPERSAND_SPACING_VARIANTS) {
+  test(`a lone "&" denies regardless of surrounding whitespace style: ${JSON.stringify(command)}`, () => {
+    assert.equal(classifyCommand(command).decision, 'deny');
+  });
+}
+
+const GIT_ADD_METACHARACTERS = ['*', '?', '$', '&', ';', '|', '>', '<', '`', '{', '}', '[', ']', '~'];
+for (const ch of GIT_ADD_METACHARACTERS) {
+  test(`git add path token containing metacharacter "${ch}" is denied`, () => {
+    const command = `git add foo${ch}bar`;
+    assert.equal(classifyCommand(command).decision, 'deny', command);
   });
 }
 
@@ -228,7 +311,10 @@ const ALLOW_COMMANDS = [
   'npm run build',
   'git add tools/night-agent/queue.mjs',
   'git add .claude/overnight/POLICY.md tools/night-agent/queue.mjs',
-  'git commit -m "chore(agent): bootstrap Korixa Night Agent v1"',
+  'git add backend/src/main.ts',
+  'git add tools/night-agent/test/foo.test.mjs',
+  "git commit -m 'fix: safe local change'",
+  "git commit -m 'chore(agent): bootstrap Korixa Night Agent v1'",
 ];
 
 for (const command of ALLOW_COMMANDS) {
@@ -299,6 +385,81 @@ test('a quote character appearing mid-bare-token is treated as ambiguous and den
 });
 
 // ---------------------------------------------------------------------------
+// R2 quoting regression (section 28): quoted git-add tokens and
+// double-quoted / metacharacter-bearing commit messages must all still deny.
+// ---------------------------------------------------------------------------
+
+test('quoting regression: git add with a double-quoted path token is denied', () => {
+  assert.equal(classifyCommand('git add "$PWD/foo"').decision, 'deny');
+});
+
+test('quoting regression: git add with a single-quoted path token is denied (quoted tokens are never accepted for git add)', () => {
+  assert.equal(classifyCommand(`git add '\${HOME}/foo'`).decision, 'deny');
+  assert.equal(classifyCommand('git add "foo*"').decision, 'deny');
+  assert.equal(classifyCommand(`git add 'foo*'`).decision, 'deny');
+});
+
+test('quoting regression: commit messages remain denied whether the dangerous content is double- or single-quoted', () => {
+  assert.equal(classifyCommand('git commit -m "$SECRET"').decision, 'deny');
+  assert.equal(classifyCommand(`git commit -m '\${SECRET}'`).decision, 'deny');
+});
+
+// ---------------------------------------------------------------------------
+// R2 secret-safe error output (section 19/35): a denial must never echo the
+// raw command back — only a generic, fixed reason/family string.
+// ---------------------------------------------------------------------------
+
+test('denial reason for a synthetic secret-bearing commit message never reproduces the secret text', () => {
+  const secretFixture = 'SUPER_SECRET_TOKEN_abc123XYZ';
+  const command = `git commit -m "$${secretFixture}"`;
+  const result = classifyCommand(command);
+  assert.equal(result.decision, 'deny');
+  assert.ok(!result.reason.includes(secretFixture), 'reason must not contain the fixture secret token');
+  assert.ok(!result.reason.includes(command), 'reason must not contain the raw command');
+});
+
+test('denial reason for any denied command never contains the literal command string', () => {
+  const commands = [
+    'git push origin main',
+    'git add foo & git push origin main',
+    'git commit -m "$SECRET"',
+    'psql postgres://user:pass@host/db',
+  ];
+  for (const command of commands) {
+    const result = classifyCommand(command);
+    assert.equal(result.decision, 'deny');
+    assert.ok(!result.reason.includes(command), `reason leaked the raw command for: ${command}`);
+  }
+});
+
+// ---------------------------------------------------------------------------
+// R2 section 39 manual classifier proof — the exact lettered cases from the
+// NIGHT-V1-A-R2 contract, named for direct audit traceability.
+// ---------------------------------------------------------------------------
+
+test('section 39 (A): git add foo & git push origin main -> DENY', () => {
+  assert.equal(classifyCommand('git add foo & git push origin main').decision, 'deny');
+});
+test('section 39 (B): git add * -> DENY', () => {
+  assert.equal(classifyCommand('git add *').decision, 'deny');
+});
+test('section 39 (C): git add . -> DENY', () => {
+  assert.equal(classifyCommand('git add .').decision, 'deny');
+});
+test('section 39 (D): git add $PWD/.github/workflows/x.yml -> DENY', () => {
+  assert.equal(classifyCommand('git add $PWD/.github/workflows/x.yml').decision, 'deny');
+});
+test('section 39 (E): git commit -m "$SECRET" -> DENY', () => {
+  assert.equal(classifyCommand('git commit -m "$SECRET"').decision, 'deny');
+});
+test('section 39 (F): git add tools/night-agent/queue.mjs -> ALLOW', () => {
+  assert.equal(classifyCommand('git add tools/night-agent/queue.mjs').decision, 'allow');
+});
+test("section 39 (G): git commit -m 'fix: safe local change' -> ALLOW", () => {
+  assert.equal(classifyCommand("git commit -m 'fix: safe local change'").decision, 'allow');
+});
+
+// ---------------------------------------------------------------------------
 // tokenize() / normalize() unit behavior.
 // ---------------------------------------------------------------------------
 
@@ -345,4 +506,120 @@ test('evaluate never throws on pathological hookInput shapes', () => {
     assert.doesNotThrow(() => evaluate(input, true));
     assert.equal(evaluate(input, true).decision, 'deny');
   }
+});
+
+// ---------------------------------------------------------------------------
+// R2 hook subprocess regression suite (section 33-35). These invoke the
+// REAL script as a child process, with KORIXA_NIGHT_MODE=1 and a JSON hook
+// fixture on stdin — proving the actual exit-code/stdout/stderr contract,
+// not just the in-process pure functions. The fixture's "command" field is
+// passed as inert JSON data; none of these commands is ever executed by a
+// real shell anywhere in this test.
+// ---------------------------------------------------------------------------
+
+function runGuard(command) {
+  const input = JSON.stringify({
+    session_id: 'subprocess-test',
+    cwd: '/repo',
+    hook_event_name: 'PreToolUse',
+    tool_name: 'Bash',
+    tool_input: { command },
+  });
+  return spawnSync(process.execPath, [GUARD_PATH], {
+    input,
+    encoding: 'utf8',
+    env: { ...process.env, KORIXA_NIGHT_MODE: '1' },
+  });
+}
+
+test('hook subprocess: a SAFE command exits 0', () => {
+  const result = runGuard('git status --short');
+  assert.equal(result.status, 0);
+});
+
+test('hook subprocess: a DENY command exits 2', () => {
+  const result = runGuard('git push origin main');
+  assert.equal(result.status, 2);
+});
+
+test('hook subprocess: the single-ampersand bypass exits 2', () => {
+  const result = runGuard('git add foo & git push origin main');
+  assert.equal(result.status, 2);
+});
+
+test('hook subprocess: a git add wildcard exits 2', () => {
+  const result = runGuard('git add *');
+  assert.equal(result.status, 2);
+});
+
+test('hook subprocess: a commit-message env expansion attempt exits 2', () => {
+  const result = runGuard('git commit -m "$SECRET"');
+  assert.equal(result.status, 2);
+});
+
+test('hook subprocess: malformed JSON on stdin exits 2', () => {
+  const result = spawnSync(process.execPath, [GUARD_PATH], {
+    input: 'not-json{{{',
+    encoding: 'utf8',
+    env: { ...process.env, KORIXA_NIGHT_MODE: '1' },
+  });
+  assert.equal(result.status, 2);
+});
+
+// ---------------------------------------------------------------------------
+// R2 stdout/stderr contract (section 34): on a deny (exit 2), the reason is
+// carried in the documented JSON-on-stdout "reason" field AND, redundantly,
+// as plain text on stderr — both confirmed current per
+// code.claude.com/docs/en/hooks.md. On allow (exit 0), no decision is
+// emitted on either channel.
+// ---------------------------------------------------------------------------
+
+test('hook subprocess: deny output carries structured JSON on stdout with a deny decision', () => {
+  const result = runGuard('git push origin main');
+  assert.equal(result.status, 2);
+  const parsed = JSON.parse(result.stdout);
+  assert.equal(parsed.hookSpecificOutput.hookEventName, 'PreToolUse');
+  assert.equal(parsed.hookSpecificOutput.permissionDecision, 'deny');
+  assert.ok(parsed.hookSpecificOutput.permissionDecisionReason.length > 0);
+});
+
+test('hook subprocess: deny output also carries a generic reason on stderr', () => {
+  const result = runGuard('git push origin main');
+  assert.equal(result.status, 2);
+  assert.ok(result.stderr.includes('NIGHT_GUARD_DENY:'));
+});
+
+test('hook subprocess: allow produces no stdout and no stderr output', () => {
+  const result = runGuard('git status --short');
+  assert.equal(result.status, 0);
+  assert.equal(result.stdout, '');
+  assert.equal(result.stderr, '');
+});
+
+test('hook subprocess: dormant mode (no KORIXA_NIGHT_MODE) produces no output regardless of command', () => {
+  const input = JSON.stringify({
+    session_id: 's',
+    cwd: '/repo',
+    hook_event_name: 'PreToolUse',
+    tool_name: 'Bash',
+    tool_input: { command: 'git push origin main' },
+  });
+  const dormantEnv = { ...process.env };
+  delete dormantEnv.KORIXA_NIGHT_MODE;
+  const result = spawnSync(process.execPath, [GUARD_PATH], { input, encoding: 'utf8', env: dormantEnv });
+  assert.equal(result.status, 0);
+  assert.equal(result.stdout, '');
+});
+
+// ---------------------------------------------------------------------------
+// R2 secret redaction, at the real subprocess boundary (section 35): the
+// synthetic secret fixture must not appear anywhere in stdout or stderr.
+// ---------------------------------------------------------------------------
+
+test('hook subprocess: a synthetic secret-bearing command never appears in stdout or stderr', () => {
+  const secretFixture = 'SUPER_SECRET_TOKEN_abc123XYZ';
+  const result = runGuard(`git commit -m "$${secretFixture}"`);
+  assert.equal(result.status, 2);
+  assert.ok(!result.stdout.includes(secretFixture), 'stdout must not contain the fixture secret token');
+  assert.ok(!result.stderr.includes(secretFixture), 'stderr must not contain the fixture secret token');
 });

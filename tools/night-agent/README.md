@@ -44,7 +44,7 @@ node tools/night-agent/runner.mjs --queue .claude/overnight/TASK_QUEUE.example.j
 node --test tools/night-agent/test/*.test.mjs
 ```
 
-## Relationship to the guard (R1: default-deny allowlist)
+## Relationship to the guard (R2: default-deny allowlist, shell/path hardened)
 
 `.claude/hooks/night-guard.mjs` is registered as a `PreToolUse` hook in
 `.claude/settings.json` (referenced via the official `${CLAUDE_PROJECT_DIR}`
@@ -52,12 +52,16 @@ placeholder, so it resolves the same regardless of the shell's current
 working directory) and is dormant unless `KORIXA_NIGHT_MODE=1` is set in the
 environment that launched Claude Code.
 
-As of R1, the guard is a **default-deny allowlist**, not a deny-pattern
-blocklist: a Bash command is allowed only if it matches one of a small,
-closed set of known-safe shapes (read-only Git, local test/static-analysis
-commands, and `git add`/`git commit -m "<message>"`); everything else is
-denied as `UNCLASSIFIABLE_COMMAND`. See `.claude/overnight/SAFETY.md`'s
-"Guard model" section for the full rationale.
+The guard is a **default-deny allowlist**, not a deny-pattern blocklist: a
+Bash command is allowed only if it matches one of a small, closed set of
+known-safe shapes (read-only Git, local test/static-analysis commands, and
+`git add <literal-path>`/`git commit -m '<literal-message>'`); everything
+else is denied as `UNCLASSIFIABLE_COMMAND`. See `.claude/overnight/
+SAFETY.md`'s "Guard model" and "R2 closures" sections for the full
+rationale, including why a bare `&` is treated as a chain operator, why
+`git add` path tokens and `git commit -m` messages are each restricted to a
+narrow closed character grammar, and why `pathsOverlap` treats `*`/`**`/
+`**/*` as a global scope.
 
 `git add`/`git commit` are allowed by the guard globally, as primitives —
 the guard has no notion of any individual task's `allowed_paths`/

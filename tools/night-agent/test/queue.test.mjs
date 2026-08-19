@@ -410,6 +410,64 @@ test('findPathConflicts is empty for genuinely disjoint scopes', () => {
 });
 
 // ---------------------------------------------------------------------------
+// R2 global wildcard semantics (section 13-15, 29-30): "*", "**", and
+// "**/*" overlap every repo-relative path — independently confirmed audit
+// finding that pathsOverlap('*', 'foo.js') was incorrectly false in R1.
+// ---------------------------------------------------------------------------
+
+test("pathsOverlap: a bare '*' overlaps any exact path", () => {
+  assert.equal(pathsOverlap('*', 'foo.js'), true);
+});
+
+test("pathsOverlap: '**' overlaps any exact path", () => {
+  assert.equal(pathsOverlap('**', 'foo.js'), true);
+});
+
+test("pathsOverlap: '**/*' overlaps any exact path", () => {
+  assert.equal(pathsOverlap('**/*', 'foo.js'), true);
+});
+
+test("pathsOverlap: a bare '*' overlaps a nested exact path", () => {
+  assert.equal(pathsOverlap('*', 'backend/src/a.ts'), true);
+});
+
+test("pathsOverlap: a global wildcard on either side overlaps a prefix scope", () => {
+  assert.equal(pathsOverlap('backend/**', '*'), true);
+});
+
+test("pathsOverlap: two global wildcards overlap each other", () => {
+  assert.equal(pathsOverlap('*', '**'), true);
+});
+
+test('pathsOverlap: two genuinely disjoint prefix scopes remain non-overlapping (global fix does not make everything conflict)', () => {
+  assert.equal(pathsOverlap('backend/**', 'frontend/**'), false);
+});
+
+// ---------------------------------------------------------------------------
+// R2 complex-glob fail-closed (section 30): a glob shape beyond
+// exact/prefix/global (e.g. a mid-string wildcard) must be rejected at
+// schema validation rather than silently treated as a literal exact path
+// that could produce a false "no conflict".
+// ---------------------------------------------------------------------------
+
+test('isRepoRelativePath rejects a complex mid-string glob it cannot prove disjoint from another scope', () => {
+  assert.equal(isRepoRelativePath('backend/**/secret/*.json'), false);
+});
+
+test('isRepoRelativePath accepts the recognized simple glob shapes', () => {
+  assert.equal(isRepoRelativePath('backend/**'), true);
+  assert.equal(isRepoRelativePath('backend/*'), true);
+  assert.equal(isRepoRelativePath('*'), true);
+  assert.equal(isRepoRelativePath('**'), true);
+  assert.equal(isRepoRelativePath('**/*'), true);
+});
+
+test('validateSchema rejects an allowed_paths entry using an unrecognized complex glob', () => {
+  const queue = minimalQueue([{ allowed_paths: ['backend/**/secret/*.json'] }]);
+  assert.equal(validateSchema(queue).valid, false);
+});
+
+// ---------------------------------------------------------------------------
 // allowed_paths / forbidden_paths self-conflict within one task (section 28)
 // ---------------------------------------------------------------------------
 
@@ -427,6 +485,26 @@ test('validateSchema accepts disjoint allowed_paths and forbidden_paths on the s
     { allowed_paths: ['backend/src/**'], forbidden_paths: ['backend/secrets/**'] },
   ]);
   assert.equal(validateSchema(queue).valid, true);
+});
+
+// R2 section 16: a global wildcard in forbidden_paths overlaps every
+// allowed_paths entry, no matter how narrow — these must all fail
+// validation, not just the literal-equality case from R1.
+test('validateSchema rejects allowed_paths=["foo.js"] vs forbidden_paths=["*"]', () => {
+  const queue = minimalQueue([{ allowed_paths: ['foo.js'], forbidden_paths: ['*'] }]);
+  const result = validateSchema(queue);
+  assert.equal(result.valid, false);
+  assert.ok(result.errors.some((e) => e.includes('overlaps its own forbidden_paths')));
+});
+
+test('validateSchema rejects allowed_paths=["backend/src/main.ts"] vs forbidden_paths=["**"]', () => {
+  const queue = minimalQueue([{ allowed_paths: ['backend/src/main.ts'], forbidden_paths: ['**'] }]);
+  assert.equal(validateSchema(queue).valid, false);
+});
+
+test('validateSchema rejects allowed_paths=["backend/**"] vs forbidden_paths=["**/*"]', () => {
+  const queue = minimalQueue([{ allowed_paths: ['backend/**'], forbidden_paths: ['**/*'] }]);
+  assert.equal(validateSchema(queue).valid, false);
 });
 
 // ---------------------------------------------------------------------------
