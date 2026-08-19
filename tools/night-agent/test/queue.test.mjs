@@ -352,6 +352,148 @@ test('isRepoRelativePath rejects a NUL byte', () => {
   assert.equal(isRepoRelativePath('foo\0bar'), false);
 });
 
+// ---------------------------------------------------------------------------
+// R4 path canonicalization (independent audit finding B/C, sections 15-20,
+// 22): reject every non-canonical alias for the same scope rather than
+// silently normalizing it — a future controlled writer must never see a
+// different (unvalidated) spelling than the one policy was checked
+// against. Trailing slash ("backend/") is the one deliberate exception,
+// kept because TASK_QUEUE.example.json (outside R4's file scope) already
+// relies on it in forbidden_paths — see SAFETY.md.
+// ---------------------------------------------------------------------------
+
+test('isRepoRelativePath rejects a leading "./" alias', () => {
+  assert.equal(isRepoRelativePath('./backend'), false);
+});
+
+test('isRepoRelativePath rejects a double-slash alias', () => {
+  assert.equal(isRepoRelativePath('backend//src'), false);
+});
+
+test('isRepoRelativePath rejects a "/./ " dot-segment alias', () => {
+  assert.equal(isRepoRelativePath('backend/./src'), false);
+});
+
+test('isRepoRelativePath rejects a "/../ " traversal alias mid-path', () => {
+  assert.equal(isRepoRelativePath('backend/../src'), false);
+});
+
+test('isRepoRelativePath still accepts the deliberate trailing-slash exception', () => {
+  // TASK_QUEUE.example.json (out of R4's authorized file scope) uses this
+  // form in forbidden_paths — rejecting it would require migrating that
+  // fixture, which is not authorized here. See SAFETY.md "R4: path
+  // canonicalization" for the explicit scope reasoning.
+  assert.equal(isRepoRelativePath('backend/'), true);
+});
+
+test('isRepoRelativePath rejects a Windows backslash separator', () => {
+  assert.equal(isRepoRelativePath('backend\\src'), false);
+});
+
+test('isRepoRelativePath rejects leading whitespace', () => {
+  assert.equal(isRepoRelativePath(' backend'), false);
+});
+
+test('isRepoRelativePath rejects trailing whitespace', () => {
+  assert.equal(isRepoRelativePath('backend '), false);
+});
+
+test('isRepoRelativePath rejects a trailing dot in a segment (Windows alias risk)', () => {
+  assert.equal(isRepoRelativePath('backend.'), false);
+});
+
+test('isRepoRelativePath rejects a colon anywhere (Windows drive-letter/ADS alias risk)', () => {
+  assert.equal(isRepoRelativePath('backend:stream'), false);
+});
+
+test('isRepoRelativePath rejects an ASCII control character', () => {
+  assert.equal(isRepoRelativePath('backend\x01src'), false);
+});
+
+test('isRepoRelativePath rejects the exact strings "." and ".."', () => {
+  assert.equal(isRepoRelativePath('.'), false);
+  assert.equal(isRepoRelativePath('..'), false);
+});
+
+// Deterministic matrix form (section 20), each row independently named.
+const PATH_CANONICALIZATION_MATRIX = [
+  { path: './backend', expected: false },
+  { path: 'backend//src', expected: false },
+  { path: 'backend/./src', expected: false },
+  { path: 'backend/../src', expected: false },
+  { path: 'backend\\src', expected: false },
+  { path: 'backend ', expected: false },
+  { path: 'backend.', expected: false },
+  { path: 'backend', expected: true },
+  { path: 'backend/src/main.ts', expected: true },
+  { path: '.claude/settings.json', expected: true },
+  { path: 'tools/night-agent/**', expected: true },
+  { path: 'tools/night-agent/*', expected: true },
+  { path: '*', expected: true },
+  { path: '**', expected: true },
+  { path: '**/*', expected: true },
+];
+for (const { path, expected } of PATH_CANONICALIZATION_MATRIX) {
+  test(`isRepoRelativePath(${JSON.stringify(path)}) === ${expected}`, () => {
+    assert.equal(isRepoRelativePath(path), expected);
+  });
+}
+
+test('validateSchema rejects a non-canonical "./backend" allowed_paths entry', () => {
+  const queue = minimalQueue([{ allowed_paths: ['./backend'] }]);
+  assert.equal(validateSchema(queue).valid, false);
+});
+
+test('validateSchema rejects a non-canonical "backend//src" allowed_paths entry', () => {
+  const queue = minimalQueue([{ allowed_paths: ['backend//src'] }]);
+  assert.equal(validateSchema(queue).valid, false);
+});
+
+test('validateSchema rejects a non-canonical "backend/./src" allowed_paths entry', () => {
+  const queue = minimalQueue([{ allowed_paths: ['backend/./src'] }]);
+  assert.equal(validateSchema(queue).valid, false);
+});
+
+// ---------------------------------------------------------------------------
+// R4 Windows case-folding (independent audit finding C, sections 18, 21,
+// 23): the project runs on Windows, a case-insensitive filesystem — two
+// scopes differing only in case must be treated as potentially the same
+// path for conflict detection. False positive across platforms is
+// acceptable; a false negative on Windows is not.
+// ---------------------------------------------------------------------------
+
+test('pathsOverlap: differing case is treated as a potential conflict (Windows case-insensitivity)', () => {
+  assert.equal(pathsOverlap('Backend', 'backend/src/main.ts'), true);
+});
+
+test('pathsOverlap: differing case with an uppercase ancestor segment', () => {
+  assert.equal(pathsOverlap('TOOLS/NIGHT-AGENT', 'tools/night-agent/x.mjs'), true);
+});
+
+test('pathsOverlap: differing case combined with a glob prefix', () => {
+  assert.equal(pathsOverlap('backend/**', 'BACKEND/src/main.ts'), true);
+});
+
+test('pathsOverlap: case-folding does not create a false conflict between genuinely distinct names', () => {
+  assert.equal(pathsOverlap('backend', 'backend2/src/main.ts'), false);
+  assert.equal(pathsOverlap('foo.js', 'foo.js.map'), false);
+});
+
+test('findPathConflicts detects a cross-task Windows case alias conflict', () => {
+  const tasks = [
+    minimalTask({ id: 'a', allowed_paths: ['Backend'] }),
+    minimalTask({ id: 'b', allowed_paths: ['backend/src/main.ts'] }),
+  ];
+  const conflicts = findPathConflicts(tasks);
+  assert.equal(conflicts.length, 1);
+  assert.equal(conflicts[0].a, 'a');
+  assert.equal(conflicts[0].b, 'b');
+  // Original casing is preserved in the report — case-folding is internal
+  // to the comparison only, never applied to what gets reported.
+  assert.equal(conflicts[0].pathA, 'Backend');
+  assert.equal(conflicts[0].pathB, 'backend/src/main.ts');
+});
+
 test('validateSchema rejects an unsafe allowed_paths entry', () => {
   const queue = minimalQueue([{ allowed_paths: ['/etc/passwd'] }]);
   assert.equal(validateSchema(queue).valid, false);

@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
+import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { evaluate, classifyCommand, tokenize, normalize } from '../../../.claude/hooks/night-guard.mjs';
 
@@ -40,10 +41,15 @@ test('active mode fails closed on malformed hook input', () => {
   assert.equal(result.family, 'UNCLASSIFIABLE_COMMAND');
 });
 
-test('active mode fails closed on unexpected tool_name', () => {
+// R4 SECURITY TIGHTENING: previously expected family UNCLASSIFIABLE_COMMAND;
+// R4's catch-all tool-surface policy gives any non-Bash tool_name its own
+// dedicated family (NIGHT_TOOL_NOT_YET_SCOPED) rather than folding it into
+// the Bash-command-classification family — same decision (deny), clearer
+// reason. Renamed/rewritten, not deleted, per section 39.
+test('active mode fails closed on unexpected tool_name (R4: NIGHT_TOOL_NOT_YET_SCOPED family)', () => {
   const result = evaluate(hookInput('git status', 'SomeUnknownFutureTool'), true);
   assert.equal(result.decision, 'deny');
-  assert.equal(result.family, 'UNCLASSIFIABLE_COMMAND');
+  assert.equal(result.family, 'NIGHT_TOOL_NOT_YET_SCOPED');
 });
 
 test('active mode fails closed on missing/non-string command', () => {
@@ -367,8 +373,8 @@ for (const ch of GIT_ADD_METACHARACTERS) {
 // ---------------------------------------------------------------------------
 // ALLOW matrix — the entire allowlist, exactly (R3: shrunk to 3 matchers —
 // see SAFE_MATCHERS in night-guard.mjs for the full per-command audit).
-// Security > convenience is an explicit, intentional R3 policy choice, not
-// a regression: a smaller allowlist is strictly safer, never less safe.
+// Security > convenience is an explicit, intentional R3/R4 policy choice,
+// not a regression: a smaller allowlist is strictly safer, never less safe.
 // ---------------------------------------------------------------------------
 
 const ALLOW_COMMANDS = [
@@ -376,8 +382,37 @@ const ALLOW_COMMANDS = [
   'node --version',
   'git rev-parse HEAD',
   'git rev-parse HEAD^',
-  'git rev-parse origin/main',
+  'git rev-parse HEAD^^^^',
+  'git rev-parse 69a92e3855217840d29592e1fbe4a798983f0bd2',
+  'git rev-parse 69a92e3',
 ];
+
+// R4 SECURITY TIGHTENING: "git rev-parse origin/main" (a branch/remote-ref
+// name) was ALLOW through R1-R3's generic ref-token regex. R4 replaced that
+// regex with an explicit closed grammar (HEAD with 0-4 carets, or a 7-40
+// hex SHA only — see GIT_REV_PARSE_SAFE_REF/SAFE_SHA in night-guard.mjs) so
+// no doubt remains about a "-"-prefixed option slipping through a generic
+// character class. Branch-name refs are intentionally no longer matched.
+// Renamed/rewritten, not deleted, per section 39.
+test('R4 SECURITY TIGHTENING: git rev-parse origin/main is now denied (branch-name refs are outside the R4 closed grammar)', () => {
+  assert.equal(classifyCommand('git rev-parse origin/main').decision, 'deny');
+});
+
+// R4 section 14: git rev-parse option-injection matrix.
+const GIT_REV_PARSE_OPTION_INJECTION_DENY = [
+  'git rev-parse --dangerous-or-unknown-option',
+  'git rev-parse --local-env-vars',
+  'git rev-parse ../../x',
+  'git rev-parse -1',
+  'git rev-parse --oneline',
+  'git rev-parse --short HEAD', // R4: flags are gone entirely, even ones R1-R3 allowed
+  'git rev-parse HEAD^^^^^', // 5 carets — outside the 0-4 grammar
+];
+for (const command of GIT_REV_PARSE_OPTION_INJECTION_DENY) {
+  test(`R4 git rev-parse option-injection DENY: ${command}`, () => {
+    assert.equal(classifyCommand(command).decision, 'deny', command);
+  });
+}
 
 for (const command of ALLOW_COMMANDS) {
   test(`ALLOW: ${command}`, () => {
@@ -445,6 +480,62 @@ test('dormant mode: Write/Edit/NotebookEdit remain unevaluated (no decision) whe
     assert.equal(result.active, false);
     assert.equal(result.decision, null);
   }
+});
+
+// ---------------------------------------------------------------------------
+// R4: tool-surface catch-all (sections 7-12, 31-33). Verified current
+// command-execution-capable tools (PowerShell, Monitor, Agent — per
+// code.claude.com/docs/en/tools-reference.md, checked 2026-08-19) and an
+// entirely made-up future tool name all deny the same way: R4's policy is
+// ANY_NON_BASH_TOOL_DENIED, not a list of specifically-recognized dangerous
+// names — a tool this file has never heard of is denied by construction.
+// ---------------------------------------------------------------------------
+
+// CURRENT_BUILTIN_TOOL_NAMES relevant to this security boundary, verified
+// 2026-08-19 against code.claude.com/docs/en/tools-reference.md (fetched
+// directly, not from memory) — hardcoded here only for the security-
+// relevant subset (command-execution-capable and file-mutating tools), not
+// the full tool inventory, and only to name explicit regression tests.
+// Guard correctness does NOT depend on this list being exhaustive or
+// staying current: evaluate()'s catch-all denies any tool_name !== 'Bash'
+// unconditionally, named here or not.
+const CURRENT_COMMAND_EXECUTION_TOOL_NAMES = ['PowerShell', 'Monitor', 'Agent'];
+const CURRENT_FILE_MUTATION_TOOL_NAMES = ['Write', 'Edit', 'NotebookEdit'];
+
+for (const toolName of CURRENT_COMMAND_EXECUTION_TOOL_NAMES) {
+  test(`evaluate() denies the current command-execution-capable tool "${toolName}" in Night Mode`, () => {
+    const input = hookInput(undefined, toolName);
+    input.tool_input = { command: 'irrelevant — never read' };
+    const result = evaluate(input, true);
+    assert.equal(result.decision, 'deny');
+    assert.equal(result.family, 'NIGHT_TOOL_NOT_YET_SCOPED');
+  });
+}
+
+for (const toolName of CURRENT_FILE_MUTATION_TOOL_NAMES) {
+  test(`evaluate() denies the current file-mutation tool "${toolName}" in Night Mode`, () => {
+    const input = hookInput(undefined, toolName);
+    input.tool_input = { file_path: 'irrelevant' };
+    const result = evaluate(input, true);
+    assert.equal(result.decision, 'deny');
+    assert.equal(result.family, 'NIGHT_FILE_MUTATION_NOT_YET_SCOPED');
+  });
+}
+
+test('evaluate() denies a wholly invented future tool name in Night Mode, via the catch-all — not a list membership check', () => {
+  const input = hookInput(undefined, 'FutureToolXYZ_123');
+  input.tool_input = { anything: 'irrelevant — never read' };
+  const result = evaluate(input, true);
+  assert.equal(result.decision, 'deny');
+  assert.equal(result.family, 'NIGHT_TOOL_NOT_YET_SCOPED');
+});
+
+test('dormant mode: an invented future tool name also remains unevaluated (no decision) when Night Mode is inactive', () => {
+  const input = hookInput(undefined, 'FutureToolXYZ_123');
+  input.tool_input = { anything: 'x' };
+  const result = evaluate(input, false);
+  assert.equal(result.active, false);
+  assert.equal(result.decision, null);
 });
 
 // ---------------------------------------------------------------------------
@@ -830,4 +921,74 @@ test('hook subprocess: a synthetic secret-bearing Write fixture never appears in
   assert.equal(result.status, 2);
   assert.ok(!result.stdout.includes(secretFixture), 'stdout must not contain the fixture secret token');
   assert.ok(!result.stderr.includes(secretFixture), 'stderr must not contain the fixture secret token');
+});
+
+// ---------------------------------------------------------------------------
+// R4 GUARD_PROCESS_TEST (section 30B): an arbitrary/never-named tool_name,
+// delivered to the real guard subprocess, must exit 2 — proving the
+// catch-all policy at the actual process boundary, not just in-process.
+// ---------------------------------------------------------------------------
+
+test('hook subprocess: an arbitrary future tool_name exits 2 with a generic reason, no payload leak', () => {
+  const result = runGuard({ some_field: 'SUPER_SECRET_TOKEN_abc123XYZ' }, 'FutureToolXYZ_123');
+  assert.equal(result.status, 2);
+  assert.ok(result.stderr.includes('NIGHT_TOOL_NOT_YET_SCOPED'));
+  assert.ok(!result.stdout.includes('SUPER_SECRET_TOKEN_abc123XYZ'));
+  assert.ok(!result.stderr.includes('SUPER_SECRET_TOKEN_abc123XYZ'));
+});
+
+test('hook subprocess: PowerShell and Monitor (current command-execution-capable tools) exit 2', () => {
+  for (const toolName of ['PowerShell', 'Monitor', 'Agent']) {
+    const result = runGuard({ command: 'irrelevant' }, toolName);
+    assert.equal(result.status, 2, toolName);
+    assert.ok(result.stderr.includes('NIGHT_TOOL_NOT_YET_SCOPED'), toolName);
+  }
+});
+
+test('hook subprocess: an arbitrary future tool_name remains dormant (exit 0, no output) without KORIXA_NIGHT_MODE', () => {
+  const input = JSON.stringify({
+    session_id: 's',
+    cwd: '/repo',
+    hook_event_name: 'PreToolUse',
+    tool_name: 'FutureToolXYZ_123',
+    tool_input: { anything: 'x' },
+  });
+  const dormantEnv = { ...process.env };
+  delete dormantEnv.KORIXA_NIGHT_MODE;
+  const result = spawnSync(process.execPath, [GUARD_PATH], { input, encoding: 'utf8', env: dormantEnv });
+  assert.equal(result.status, 0);
+  assert.equal(result.stdout, '');
+  assert.equal(result.stderr, '');
+});
+
+// ---------------------------------------------------------------------------
+// R4 SETTINGS_CONTRACT_TEST (section 29-30A, 43): .claude/settings.json
+// registers the Night Guard as a single catch-all PreToolUse entry, using
+// the current officially-documented catch-all matcher form ("*"), not two
+// overlapping tool-specific entries. This test only reads the JSON file —
+// it cannot prove Claude Code's own matcher engine behavior (that's
+// OFFICIAL_DOC_GATE, established via research and recorded in the final
+// report, not testable from Node), but it does prove the configuration
+// itself is exactly the intended shape and appears exactly once.
+// ---------------------------------------------------------------------------
+
+test('settings.json: PreToolUse Night Guard registration is a single catch-all entry ("matcher": "*")', () => {
+  const settingsPath = fileURLToPath(new URL('../../../.claude/settings.json', import.meta.url));
+  const settings = JSON.parse(readFileSync(settingsPath, 'utf8'));
+  const preToolUse = settings.hooks.PreToolUse;
+  assert.equal(Array.isArray(preToolUse), true);
+  assert.equal(preToolUse.length, 1, 'expected exactly one PreToolUse entry (no overlapping Bash + Write|Edit|NotebookEdit registrations)');
+  assert.equal(preToolUse[0].matcher, '*');
+  assert.equal(preToolUse[0].hooks.length, 1);
+  assert.equal(preToolUse[0].hooks[0].type, 'command');
+  assert.equal(preToolUse[0].hooks[0].command, 'node');
+  assert.deepEqual(preToolUse[0].hooks[0].args, ['${CLAUDE_PROJECT_DIR}/.claude/hooks/night-guard.mjs']);
+});
+
+test('settings.json: no dangerous global permission grants were introduced', () => {
+  const settingsPath = fileURLToPath(new URL('../../../.claude/settings.json', import.meta.url));
+  const raw = readFileSync(settingsPath, 'utf8');
+  assert.ok(!raw.includes('dangerously-skip-permissions'));
+  assert.ok(!raw.includes('bypassPermissions'));
+  assert.ok(!/"acceptEdits"\s*:\s*true/.test(raw));
 });

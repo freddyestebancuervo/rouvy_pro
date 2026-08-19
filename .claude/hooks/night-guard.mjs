@@ -177,8 +177,18 @@ export function tokenize(command) {
   return tokens;
 }
 
-const GIT_REF_FLAG_TOKENS = new Set(['-1', '--oneline', '--stat', '--short', '--check', '--name-only']);
-const GIT_REF_TOKEN_PATTERN = /^[A-Za-z0-9._/^~-]{1,200}$/;
+// R4: GIT_REV_PARSE's ref grammar, re-audited per section 14 — a closed,
+// explicit shape rather than a generic character-class regex. "HEAD" with
+// 0-4 carets, or a 7-40 char hex SHA, are the only refs this project
+// actually needs (git rev-parse HEAD / HEAD^ / a commit's own SHA — see
+// this repo's own audit workflow in earlier NIGHT-V1-A blocks). No flags
+// at all: R1-R3's flag allowlist (-1, --oneline, --stat, --short, --check,
+// --name-only) was inherited from a matcher that used to also cover
+// log/show, and none of it is needed for rev-parse specifically — removing
+// it, rather than auditing each flag for rev-parse relevance, closes any
+// doubt about a "-"-prefixed token slipping through a generic pattern.
+const GIT_REV_PARSE_SAFE_REF = /^HEAD(\^{1,4})?$/;
+const GIT_REV_PARSE_SAFE_SHA = /^[0-9a-f]{7,40}$/i;
 
 // ---------------------------------------------------------------------------
 // Known-SAFE command shapes — the entire allowlist. A command is ALLOWed if
@@ -215,6 +225,14 @@ const GIT_REF_TOKEN_PATTERN = /^[A-Za-z0-9._/^~-]{1,200}$/;
 //     the only two commands taking a repo/programmatic input that survive,
 //     specifically because official docs describe no hook/filter/pager/
 //     credential-helper involvement for either.
+//
+// R4: GIT_REV_PARSE's own grammar was additionally hardened — no flags,
+// only "HEAD" with 0-4 carets or a 7-40 char hex SHA (see the
+// GIT_REV_PARSE_SAFE_REF/SAFE_SHA constants below) — and evaluate() now
+// registers via a single settings.json catch-all matcher ("*") rather than
+// naming Bash/Write/Edit/NotebookEdit individually, so any tool this guard
+// has never heard of is denied by the same ANY_NON_BASH_TOOL_DENIED rule,
+// not merely the ones enumerated so far.
 // ---------------------------------------------------------------------------
 
 const SAFE_MATCHERS = [
@@ -225,14 +243,16 @@ const SAFE_MATCHERS = [
     // Plumbing only: parses/resolves a revision locally. No documented
     // pager, hook, filter, textconv, or credential-helper involvement,
     // unlike log/show/status/diff/branch/ls-remote (all removed above).
+    // R4: exactly one ref argument, matched against the closed grammar
+    // above — no flags, no branch/remote-ref names (e.g. "origin/main",
+    // allowed through R1-R3, is now denied: intentional tightening, not a
+    // bug — see SAFETY.md's "R4: git rev-parse hardening" section).
     test: (t) => {
+      if (t.length !== 3) return false;
       if (t[0]?.raw !== 'git' || t[1]?.raw !== 'rev-parse') return false;
-      if (t.length < 3) return false; // bare "git rev-parse" with no ref is ambiguous scope — require an explicit arg
-      return t.slice(2).every(
-        (tok) =>
-          !tok.quoted &&
-          (GIT_REF_FLAG_TOKENS.has(tok.raw) || (!tok.raw.startsWith('-') && GIT_REF_TOKEN_PATTERN.test(tok.raw))),
-      );
+      const ref = t[2];
+      if (ref.quoted) return false;
+      return GIT_REV_PARSE_SAFE_REF.test(ref.raw) || GIT_REV_PARSE_SAFE_SHA.test(ref.raw);
     },
   },
 ];
@@ -326,9 +346,14 @@ export function classifyCommand(command) {
   };
 }
 
-// Current built-in file-mutating tool names (R3), confirmed against
-// code.claude.com/docs/en/tools-reference.md — not invented. All three are
-// always denied in Night Mode: see evaluate() below.
+// Current built-in file-mutating tool names (R3, reconfirmed R4), per
+// code.claude.com/docs/en/tools-reference.md — not invented. Denied in
+// Night Mode with a more specific reason than the generic catch-all below,
+// purely for a clearer audit message. Removing this Set would not weaken
+// security: evaluate()'s R4 catch-all denies any non-Bash tool_name
+// regardless, so Write/Edit/NotebookEdit are already covered by that
+// policy even without being named here — see ANY_NON_BASH_TOOL_DENIED
+// below and SAFETY.md's "R4: tool-surface catch-all" section.
 const FILE_MUTATING_TOOLS = new Set(['Write', 'Edit', 'NotebookEdit']);
 
 /**
@@ -376,14 +401,21 @@ export function evaluate(hookInput, nightModeActive) {
   }
 
   if (hookInput.tool_name !== 'Bash') {
-    // Any tool_name that is neither Bash nor a known file-mutating tool is
-    // unexpected for this guard's registered matchers; fail closed rather
-    // than silently allow an unrecognized tool through.
+    // R4 ANY_NON_BASH_TOOL_DENIED: the settings.json registration is now a
+    // single catch-all matcher ("*") covering every tool Claude Code can
+    // invoke — command-execution-capable ones (PowerShell, Monitor, Agent
+    // spawning a subagent that inherits Bash/PowerShell), file-mutating
+    // ones (Write, Edit, NotebookEdit), and anything not yet named or not
+    // invented yet. This is a closed policy, not an open enumeration: it
+    // denies by tool_name NOT being "Bash", never by matching a specific
+    // dangerous name. A brand-new future tool the guard has never heard of
+    // is denied by the same rule, with no code change required — see
+    // SAFETY.md's "R4: tool-surface catch-all" section.
     return {
       active: true,
       decision: 'deny',
-      reason: `UNCLASSIFIABLE_COMMAND: unexpected tool_name "${String(hookInput.tool_name)}" for this hook`,
-      family: 'UNCLASSIFIABLE_COMMAND',
+      reason: 'NIGHT_TOOL_NOT_YET_SCOPED: only Bash (with its own narrow allowlist) is evaluated for possible allow in Night Mode; every other tool is denied',
+      family: 'NIGHT_TOOL_NOT_YET_SCOPED',
     };
   }
 

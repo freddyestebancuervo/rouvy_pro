@@ -30,11 +30,84 @@ list of "which subcommands are dangerous." The same applies to `docker`,
 total absence from the allowlist *is* the safety boundary, not an attempt to
 distinguish a safe invocation from a dangerous one.
 
-**As of R3, the allowlist is exactly three command shapes**: `pwd`,
-`node --version`, and `git rev-parse <ref>`. `git add`/`git commit` (R1/R2
-primitives) are gone entirely — see "R3: delegated execution" below. There
-is no controlled Git writer yet, autonomous or otherwise:
+**As of R4, the allowlist is exactly three command shapes**: `pwd`,
+`node --version`, and `git rev-parse <ref>` (`<ref>` restricted to `HEAD`
+with 0-4 carets, or a 7-40 char hex SHA — see "R4: tool-surface and path
+canonicalization" below). `git add`/`git commit` (R1/R2 primitives) are
+gone entirely — see "R3: delegated execution" below. There is no
+controlled Git writer yet, autonomous or otherwise:
 `EXECUTION_ENGINE = DISABLED_IN_V1_A`.
+
+## R4: tool-surface catch-all and path canonicalization
+
+A fourth independent audit found the guard's *reach* was incomplete even
+though its Bash logic was sound: `.claude/settings.json` only registered
+the guard for `Bash` and `Write|Edit|NotebookEdit` — any other tool
+(`PowerShell`, `Monitor`, `Agent`, or a name that doesn't exist yet) would
+never invoke the hook at all, so `evaluate()`'s fail-closed handling for an
+"unexpected" `tool_name` was unreachable dead code for those tools, not a
+real protection.
+
+**Tool-surface catch-all.** Current official docs (`code.claude.com/docs/
+en/hooks.md`) confirm a `matcher` of `"*"` (also `""` or an omitted field)
+matches every tool. `.claude/settings.json` now registers exactly **one**
+`PreToolUse` entry with `"matcher": "*"`, invoking the guard for anything
+Claude Code can call. `evaluate()`'s policy for a non-Bash `tool_name` is a
+closed rule, not an enumeration: **any tool that isn't `"Bash"` is denied**
+(`NIGHT_TOOL_NOT_YET_SCOPED`), whether or not the guard has ever heard its
+name. `Write`/`Edit`/`NotebookEdit` keep a more specific reason
+(`NIGHT_FILE_MUTATION_NOT_YET_SCOPED`) purely for a clearer audit message —
+removing that naming would not change the security outcome, since the
+catch-all denies them regardless. Current command-execution-capable tools
+beyond Bash — `PowerShell` (executes PowerShell commands), `Monitor` (runs
+a script and streams its output), `Agent` (spawns a subagent that inherits
+tool access, including Bash/PowerShell) — were confirmed present in
+current docs and are denied by this same rule.
+
+**Hook invocation form.** `.claude/settings.json` now uses the confirmed
+current split `command`+`args` exec form (`"command": "node", "args":
+["${CLAUDE_PROJECT_DIR}/.claude/hooks/night-guard.mjs"]`) rather than a
+single shell-string command — per current docs, this spawns the executable
+directly with no shell involved, so `${CLAUDE_PROJECT_DIR}` is substituted
+as a plain string argument rather than being subject to any shell
+re-interpretation.
+
+**Exit-2 contract remains channel-redundant, not JSON-dependent.** R4 does
+not change `denyAndExit`: it already writes both a structured JSON reason
+to stdout and a generic reason to stderr on every deny, and blocking itself
+is driven by the exit code alone (`2`), never by whether JSON was written
+or parsed successfully. This already satisfies "blocking must not depend
+on JSON stdout" — removing the JSON channel would only make the *reason*
+(not the block) potentially less informative in one specific fallback path
+documented for malformed JSON, so it was kept rather than stripped.
+
+**`git rev-parse` hardening.** R1-R3 accepted any ref-shaped token matching
+a broad character class (letters, digits, `._/^~-`), which — while not
+independently found to be exploitable, since a leading `-` was already
+excluded from that branch — was more permissive than the project actually
+needs. R4 replaced it with a closed grammar: `HEAD` with 0-4 carets, or a
+7-40 character hex SHA, no flags at all. Branch/remote-ref names (e.g.
+`origin/main`, previously allowed) are intentionally no longer matched —
+tightening, not a regression.
+
+**Path canonicalization.** `isRepoRelativePath` (`tools/night-agent/
+queue.mjs`) now rejects every non-canonical alias for a scope: a leading
+`./`, an internal `//`, a `/./` segment, embedded whitespace, a trailing
+dot in a segment, a colon, ASCII control characters, and the bare strings
+`.`/`..`. The one deliberate exception is a trailing slash (`backend/`):
+`TASK_QUEUE.example.json` (outside R4's authorized file scope) already
+uses this form in `forbidden_paths`, and migrating that fixture is not
+authorized in this block — rejecting it here would have required
+`HOLD_SCOPE_EXPANSION` on the whole block for one cosmetic form, so it
+remains an accepted directory-prefix form pending a future block that is
+authorized to touch the fixture.
+
+**Windows case-insensitive conflict detection.** `pathsOverlap` now
+lowercases both sides before comparing (internal to the comparison only —
+`findPathConflicts` still reports the original, unmodified casing), so
+`"Backend"` and `"backend/src/main.ts"` are treated as a potential
+conflict. False positive across platforms is acceptable; a false negative
+on the Windows filesystem this project actually runs on is not.
 
 ## R3: delegated execution — a third independent audit's core finding
 

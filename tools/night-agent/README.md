@@ -46,32 +46,42 @@ node tools/night-agent/runner.mjs --queue .claude/overnight/TASK_QUEUE.example.j
 node --test tools/night-agent/test/*.test.mjs
 ```
 
-## Relationship to the guard (R3: default-deny allowlist, delegated-execution hardened)
+## Relationship to the guard (R4: catch-all tool surface, path-canonical)
 
-`.claude/hooks/night-guard.mjs` is registered as a `PreToolUse` hook in
-`.claude/settings.json` for two matchers — `Bash` and (as of R3)
-`Write|Edit|NotebookEdit` — both referenced via the official
-`${CLAUDE_PROJECT_DIR}` placeholder, so the guard resolves the same
-regardless of the shell's current working directory. The guard is dormant
-for both matchers unless `KORIXA_NIGHT_MODE=1` is set in the environment
-that launched Claude Code.
+`.claude/hooks/night-guard.mjs` is registered as a **single catch-all**
+`PreToolUse` hook entry in `.claude/settings.json` — `"matcher": "*"`,
+confirmed current official syntax for "every tool" — invoked via the exec
+form (`"command": "node", "args": ["${CLAUDE_PROJECT_DIR}/.claude/hooks/
+night-guard.mjs"]`, no shell involved). Before R4 the guard was registered
+per-tool (`Bash`, then separately `Write|Edit|NotebookEdit`); any tool not
+named in one of those two matchers — `PowerShell`, `Monitor`, `Agent`, or
+anything not yet named — would never have invoked the hook at all. The
+guard is dormant for every tool unless `KORIXA_NIGHT_MODE=1` is set in the
+environment that launched Claude Code.
 
-The guard is a **default-deny allowlist**, not a deny-pattern blocklist. For
-Bash: a command is allowed only if it matches one of a small, closed set of
-known-safe shapes — as of R3, exactly three: `pwd`, `node --version`, and
-`git rev-parse <ref>`. Everything else is denied as `UNCLASSIFIABLE_COMMAND`.
-For `Write`/`Edit`/`NotebookEdit`: always denied, with the fixed reason
-`NIGHT_FILE_MUTATION_NOT_YET_SCOPED`. See `.claude/overnight/SAFETY.md`'s
-"Guard model" and "R3: delegated execution" sections for the full
-rationale — R1/R2's allowlist (read-only Git, test runners, `git add`/
-`git commit`) shrank sharply in R3 because each of those commands can
-delegate execution to something the guard cannot see (a Git hook, a
-`.gitattributes` filter, a pager/textconv/fsmonitor/credential-helper
-program, or repository-controlled test/build script code) — R3's shorthand
-for this is `SAFE_OUTER_COMMAND != SAFE_EXECUTION_TREE`.
+The guard is a **default-deny allowlist**, not a deny-pattern blocklist.
+For Bash: a command is allowed only if it matches one of a small, closed
+set of known-safe shapes — as of R4, exactly three: `pwd`, `node --version`,
+and `git rev-parse <ref>` (`<ref>` itself further restricted to `HEAD` with
+0-4 carets or a 7-40 char hex SHA — no flags). Everything else is denied as
+`UNCLASSIFIABLE_COMMAND`. For any tool that isn't `"Bash"` — not an
+enumerated list, a closed rule — the guard denies with
+`NIGHT_TOOL_NOT_YET_SCOPED` (or the more specific
+`NIGHT_FILE_MUTATION_NOT_YET_SCOPED` for `Write`/`Edit`/`NotebookEdit`,
+kept only for a clearer audit message; the security outcome doesn't depend
+on that naming). See `.claude/overnight/SAFETY.md`'s "Guard model", "R3:
+delegated execution", and "R4: tool-surface catch-all and path
+canonicalization" sections for the full rationale — R1/R2's allowlist
+(read-only Git, test runners, `git add`/`git commit`) shrank sharply in R3
+because each of those commands can delegate execution to something the
+guard cannot see (`SAFE_OUTER_COMMAND != SAFE_EXECUTION_TREE`), and R4
+closed the remaining gaps: tools the guard was never registered for, and
+non-canonical path aliases (`./backend`, `backend//src`, `backend/./src`,
+Windows case aliases) that could let one written policy and one actually-
+enforced scope silently diverge once a controlled writer exists.
 
 There is no controlled Git writer and no controlled execution sandbox as of
-R3 — `git add`/`git commit` are denied entirely in Night Mode, not merely
+R4 — `git add`/`git commit` are denied entirely in Night Mode, not merely
 path-scoped, and no task-scoped enforcement exists for file-mutating tools
 either. Enforcing per-task path scope, and building a safe way to actually
 run tests/builds or make commits, are both distinct, future,

@@ -58,26 +58,56 @@ function isValidBaseSha(value) {
  */
 export function isRepoRelativePath(value) {
   if (typeof value !== 'string' || value.length === 0) return false;
+  if (value !== value.trim()) return false; // R4: leading/trailing whitespace rejected
   if (value.includes('\\')) return false; // no Windows separators
   if (value.includes('\0')) return false; // NUL-like
-  if (/^[A-Za-z]:/.test(value)) return false; // drive-letter absolute
+  // eslint-disable-next-line no-control-regex
+  if (/[\x00-\x1f\x7f]/.test(value)) return false; // R4: ASCII control characters
+  if (value.includes(':')) return false; // R4: colon — Windows drive-letter/ADS alias risk
   if (value.startsWith('/')) return false; // POSIX absolute
-  if (value.includes('..')) return false; // any traversal segment, conservatively
+  if (value.includes('..')) return false; // any traversal segment, conservatively (also rejects a bare "..")
+  if (value === '.') return false; // R4: exact "." is not a valid scope
+
+  // Recognized global wildcards short-circuit here — no segments to validate.
+  if (value === '*' || value === '**' || value === '**/*') return true;
+
   if (value.includes('*')) {
-    // Only the recognized glob shapes (see pathScope below) are accepted:
-    // the bare global wildcards, or a single trailing "/**"/"/*" segment
-    // with no further "*" elsewhere. Anything more complex (e.g.
+    // Only a single recognized trailing "/**"/"/*" glob suffix is accepted
+    // (with no further "*" elsewhere) — anything more complex (e.g.
     // "backend/**/secret/*.json") cannot be proven disjoint from another
     // scope by the conservative exact/prefix/global model in pathsOverlap,
     // so it is rejected here rather than silently risking a false
     // "no conflict" — a queue that needs a glob this complex fails
     // validation instead.
-    const isGlobal = value === '*' || value === '**' || value === '**/*';
     const isSimpleTrailingGlob =
       (value.endsWith('/**') && !value.slice(0, -3).includes('*')) ||
       (value.endsWith('/*') && !value.slice(0, -2).includes('*'));
-    if (!isGlobal && !isSimpleTrailingGlob) return false;
+    if (!isSimpleTrailingGlob) return false;
   }
+
+  // R4: reject non-canonical path forms — a scope should have exactly one
+  // string representation, so a future controlled writer can never see a
+  // different (unvalidated) spelling than the one policy was checked
+  // against. Trailing slash ("backend/") is the one deliberate exception:
+  // TASK_QUEUE.example.json (outside R4's authorized file scope) already
+  // uses it in forbidden_paths, and migrating the fixture is not
+  // authorized in this block — see SAFETY.md's "R4: path canonicalization"
+  // section for the explicit HOLD_SCOPE_EXPANSION reasoning.
+  let body = value;
+  if (body.endsWith('/**')) body = body.slice(0, -3);
+  else if (body.endsWith('/*')) body = body.slice(0, -2);
+  else if (body.endsWith('/')) body = body.slice(0, -1);
+
+  if (body.length === 0) return false; // e.g. "/", "/**", "/*" alone
+
+  for (const segment of body.split('/')) {
+    if (segment === '') return false; // R4: double slash ("backend//src")
+    if (segment === '.') return false; // R4: "." segment ("./backend", "backend/./src")
+    if (segment === '..') return false; // redundant with the substring check above, explicit for clarity
+    if (/\s$/.test(segment)) return false; // R4: Windows trailing-space alias risk
+    if (/\.$/.test(segment)) return false; // R4: Windows trailing-dot alias risk
+  }
+
   return true;
 }
 
@@ -86,10 +116,19 @@ export function isRepoRelativePath(value) {
  * directory prefix (from a trailing `/**`, `/*`, `/`, or bare `*`). Used by
  * pathsOverlap to detect ancestor/glob containment, not just string
  * equality.
- * @param {string} value
+ * @param {string} rawValue
  * @returns {{type: 'exact'|'prefix'|'global', value?: string}}
  */
-function pathScope(value) {
+function pathScope(rawValue) {
+  // R4: Windows runs a case-insensitive filesystem — "Backend" and
+  // "backend/src/main.ts" must be treated as potentially the same path for
+  // conflict-detection purposes, even though the repo's own convention is
+  // lowercase. Comparison is lowercased here (internal to pathScope, never
+  // exposed) so a case-differing pair still overlaps; the ORIGINAL casing
+  // is preserved everywhere else (findPathConflicts reports pathA/pathB as
+  // given, never the lowercased form) — this function only ever returns a
+  // boolean via pathsOverlap, so lowercasing here cannot leak into reports.
+  const value = rawValue.toLowerCase();
   // "*", "**", and "**/*" address every repo-relative path — treat them as
   // a distinct GLOBAL scope rather than falling through to the prefix
   // branch below, where they would otherwise reduce to an empty-string
