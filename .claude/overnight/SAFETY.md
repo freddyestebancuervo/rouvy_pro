@@ -12,14 +12,14 @@ Night V1 must **fail closed**: when in doubt, deny.
 
 `night-guard.mjs` does not try to enumerate every possible dangerous
 command — that list is infinite. Instead it enumerates a small, closed set
-of known-**safe** command shapes (read-only Git, local test/static-analysis
-commands, and the local commit primitives `git add`/`git commit -m`); a
-command is allowed **only** if it matches one of those shapes exactly.
-Everything else — unknown commands, ambiguous quoting, shell indirection,
-chaining, redirection — is denied as `UNCLASSIFIABLE_COMMAND`. There is no
-code path in the guard that returns "allow" because "no deny pattern
-matched"; see `.claude/hooks/night-guard.mjs`'s header comment for the exact
-decision order.
+of known-**safe** command shapes; a command is allowed **only** if it
+matches one of those shapes exactly. Everything else — unknown commands,
+ambiguous quoting, shell indirection, chaining, redirection, or (as of R3)
+a command that delegates execution to something the guard cannot see — is
+denied as `UNCLASSIFIABLE_COMMAND`. There is no code path in the guard that
+returns "allow" because "no deny pattern matched"; see
+`.claude/hooks/night-guard.mjs`'s header comment for the exact decision
+order.
 
 A practical consequence: `gcloud`, `firebase`, and `gh` are denied
 **entirely** in V1 — including harmless-looking read-only invocations like
@@ -30,13 +30,61 @@ list of "which subcommands are dangerous." The same applies to `docker`,
 total absence from the allowlist *is* the safety boundary, not an attempt to
 distinguish a safe invocation from a dangerous one.
 
-`git add`/`git commit -m "<message>"` are permitted by the guard as global
-primitives, but the guard has **no concept of a task's `allowed_paths`** —
-it cannot tell "a commit inside this task's declared scope" from "a commit
-anywhere in the repo." That fine-grained enforcement is the runner/queue/
-Auditor's job (see `tools/night-agent/README.md`), not this hook's, and it
-does not exist yet: `EXECUTION_ENGINE = DISABLED_IN_V1_A`. These primitives
-being guard-permitted is not the same as autonomous commits being enabled.
+**As of R3, the allowlist is exactly three command shapes**: `pwd`,
+`node --version`, and `git rev-parse <ref>`. `git add`/`git commit` (R1/R2
+primitives) are gone entirely — see "R3: delegated execution" below. There
+is no controlled Git writer yet, autonomous or otherwise:
+`EXECUTION_ENGINE = DISABLED_IN_V1_A`.
+
+## R3: delegated execution — a third independent audit's core finding
+
+A third audit identified a deeper boundary than R1/R2 addressed:
+**SAFE_OUTER_COMMAND != SAFE_EXECUTION_TREE**. A Bash command can look
+completely inert to the guard while the program it invokes runs something
+else entirely — a Git hook, a `.gitattributes` filter, a pager/textconv/
+fsmonitor/credential-helper program, or repository-controlled script code.
+Official documentation was consulted directly for every claim below (not
+memory); citations are the exact mechanism names so they can be
+independently re-checked.
+
+- **`git commit`**: can invoke `pre-commit`, `commit-msg`, and
+  `prepare-commit-msg` hooks (per `git-scm.com/docs/githooks`). The first
+  two are skipped by `--no-verify`; `prepare-commit-msg` explicitly is
+  **not** — R3 does not implement a controlled Git writer around this, so
+  `git commit` is denied entirely rather than relying on a flag that
+  doesn't cover every hook.
+- **`git add`**: can invoke a `.gitattributes`-declared `filter.<driver>.
+  clean` (or `.process`) command during check-in (per
+  `git-scm.com/docs/gitattributes`) — R2's path-token character grammar
+  made the *path* safe, but never addressed that the file's *content* can
+  still be piped through an external filter program. `git add` is denied
+  entirely.
+- **`git status`**: can invoke an external `core.fsmonitor=<hook-command>`
+  program.
+- **`git diff` / `git log` / `git show`**: `git log`/`show` (and `diff`) are
+  explicitly named by Git's attribute docs as running `textconv` external
+  converters; `git diff` additionally honors `GIT_EXTERNAL_DIFF`. All three
+  also route through `core.pager`.
+- **`git branch --show-current`**: pager involvement could not be confirmed
+  *excluded* from official docs within this audit's time budget —
+  unconfirmed safety is treated as `DENY` per this project's explicit bias
+  (`.claude/hooks/night-guard.mjs`'s R3 header comment has the full
+  per-matcher accounting).
+- **`git ls-remote`**: contacts a remote and can invoke an external
+  `credential.helper` program.
+- **`node --test`, `npm test`, `npm run <script>`, `flutter analyze`,
+  `flutter test`, `dart test`/`run`**: each executes repository-controlled
+  code (a test file's own JavaScript/Dart, or an npm `scripts` entry —
+  which `docs.npmjs.com` describes plainly as an arbitrary shell command)
+  with no sandbox around it. None of these are shell-structural problems;
+  each is a delegated-execution problem R3 has no answer for yet.
+
+**What survived**: `git rev-parse <ref>` (pure local plumbing — no
+documented hook/filter/pager/textconv/credential-helper involvement) and
+`node --version` (prints a version string, no repository-controlled input).
+Both plus `pwd` are the entire R3 allowlist. A future version may reinstate
+a narrower form of some of the above once a real controlled-execution
+sandbox or controlled Git writer exists — neither does today.
 
 ## R2 closures: a bare `&`, `git add` expansion, commit-message expansion, global wildcards
 
@@ -86,6 +134,30 @@ A second independent audit found four gaps in the R1 model, all closed here:
 **Repository integrity**
 - Mutating the original (dirty) Windows root.
 - `rm -rf` and equivalents outside an explicitly scoped, authorized path.
+
+**Claude built-in file-mutating tools (R3)**
+- `Write`, `Edit`, `NotebookEdit` — the current built-in tool names per
+  `code.claude.com/docs/en/tools-reference.md` — are denied unconditionally
+  in Night Mode, with the fixed generic reason
+  `NIGHT_FILE_MUTATION_NOT_YET_SCOPED`. The guard is registered for these
+  tools via a `Write|Edit|NotebookEdit` matcher in `.claude/settings.json`
+  (current supported pipe-separated multi-tool matcher syntax), alongside
+  the existing `Bash` matcher. Neither the file_path nor the content/edit
+  payload is ever read or echoed in the denial reason. This exists because
+  a Bash-only guard leaves these tools completely unguarded — until a
+  task's `allowed_paths` can actually be enforced against a real edit,
+  Night Mode has no basis to allow any file mutation at all.
+
+**Future control-plane sensitive paths (documented, not yet enforced)**
+- `.claude/**`, Git hook/`core.hooksPath` configuration, `.gitattributes`,
+  `.gitmodules`, `package.json`/`package-lock.json`,
+  `pubspec.yaml`/`pubspec.lock`, and any workflow/config file capable of
+  changing execution behavior are flagged here as paths a future task-scope
+  engine must treat specially. R3 does not build that engine. The policy
+  requirement going forward: any task whose `allowed_paths` would touch one
+  of these must `HOLD` until an explicit future gate defines how such tasks
+  are reviewed — this is not automatically enforced by any code yet, only
+  documented as a requirement.
 
 **Production / GCP / external services — denied wholesale, not by subcommand**
 - `gcloud` — every invocation, including read-only ones. This covers (not

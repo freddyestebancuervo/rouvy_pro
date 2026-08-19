@@ -122,8 +122,19 @@ export function pathsOverlap(a, b) {
 
   if (sa.type === 'global' || sb.type === 'global') return true;
 
+  // R3 fix: two EXACT-looking entries still need the same segment-boundary
+  // ancestor check as prefix/prefix below — "backend" and
+  // "backend/src/main.ts" are both `exact` scopes (neither ends in a glob
+  // suffix or trailing slash), so the R1/R2 code path here only checked
+  // literal equality and missed the ancestor relationship entirely. An
+  // exact path is always also a potential ancestor DIRECTORY of a deeper
+  // exact path — this is exactly the independently-audited bare-directory
+  // false negative. The `+ '/'` boundary is what correctly keeps
+  // "backend" from overlapping "backend2/file.ts" or "foo.js" from
+  // overlapping "foo.js.map": a bare startsWith without the slash would
+  // wrongly conflate string-prefix with path-ancestor.
   if (sa.type === 'exact' && sb.type === 'exact') {
-    return sa.value === sb.value;
+    return sa.value === sb.value || sa.value.startsWith(`${sb.value}/`) || sb.value.startsWith(`${sa.value}/`);
   }
   if (sa.type === 'prefix' && sb.type === 'prefix') {
     return (

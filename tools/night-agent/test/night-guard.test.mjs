@@ -7,8 +7,9 @@ import { evaluate, classifyCommand, tokenize, normalize } from '../../../.claude
 const GUARD_PATH = fileURLToPath(new URL('../../../.claude/hooks/night-guard.mjs', import.meta.url));
 
 // NOTE: these tests import the guard's pure classification/evaluation
-// functions and pass command STRINGS as data. They never execute any of
-// the dangerous commands under test — this file spawns nothing.
+// functions and pass command STRINGS (or inert JSON hook fixtures) as data.
+// They never execute any of the commands under test — this file spawns
+// only the guard script itself, never a fixture's command.
 
 function hookInput(command, toolName = 'Bash') {
   return {
@@ -40,7 +41,7 @@ test('active mode fails closed on malformed hook input', () => {
 });
 
 test('active mode fails closed on unexpected tool_name', () => {
-  const result = evaluate(hookInput('git status', 'Write'), true);
+  const result = evaluate(hookInput('git status', 'SomeUnknownFutureTool'), true);
   assert.equal(result.decision, 'deny');
   assert.equal(result.family, 'UNCLASSIFIABLE_COMMAND');
 });
@@ -67,12 +68,19 @@ test('CLASSIFY_UNKNOWN_COMMAND -> DENY: echo is not on the allowlist', () => {
   assert.equal(classifyCommand('echo hello').decision, 'deny');
 });
 
-test('CLASSIFY_SAFE_GIT_STATUS -> ALLOW', () => {
-  assert.equal(classifyCommand('git status --short').decision, 'allow');
+// R3: git status is no longer safe (see "R3: delegated execution DENY
+// matrix" below for the full reclassification and reasons) — renamed from
+// "CLASSIFY_SAFE_GIT_STATUS -> ALLOW" rather than deleted, per section 11's
+// explicit "change expectation, do not delete" instruction.
+test('CLASSIFY_GIT_STATUS -> DENY (R3: core.fsmonitor can invoke an external hook command)', () => {
+  assert.equal(classifyCommand('git status --short').decision, 'deny');
 });
 
-test('CLASSIFY_SAFE_TEST -> ALLOW', () => {
-  assert.equal(classifyCommand('npm test').decision, 'allow');
+// R3: npm test is no longer safe — npm's own docs describe `scripts` as
+// arbitrary shell commands with no sandbox. Renamed from
+// "CLASSIFY_SAFE_TEST -> ALLOW".
+test('CLASSIFY_NPM_TEST -> DENY (R3: delegates to an arbitrary package.json script)', () => {
+  assert.equal(classifyCommand('npm test').decision, 'deny');
 });
 
 // ---------------------------------------------------------------------------
@@ -174,8 +182,6 @@ const DENY_COMMANDS = [
   'echo "$(git push origin main)"',
   'echo `git push origin main`',
   'git log > out.txt',
-  'node --test tools/night-agent/test/queue.test.mjs > out.txt',
-  'node --test tools/night-agent/test/queue.test.mjs < in.txt',
   'echo hi \\ntest',
   // Chained bypass variants (single-command-only rule)
   'echo ok && git push origin main',
@@ -189,7 +195,7 @@ const DENY_COMMANDS = [
   // Arbitrary/off-allowlist node & npm invocations (section 12)
   'node -e "console.log(1)"',
   'node some/other/script.js',
-  'node tools/night-agent/runner.mjs --queue x --dry-run', // not the exact NODE_TEST/NODE_VERSION shape
+  'node tools/night-agent/runner.mjs --queue x --dry-run', // not the exact NODE_VERSION shape
   'npm run deploy',
   'npm run anything-else',
   'npm install',
@@ -206,6 +212,11 @@ const DENY_COMMANDS = [
   'git add foo & echo bar', // second half harmless, but chaining itself is denied
 
   // --- R2: git add shell-expansion / scope-widening (finding B) ---
+  // R3 note: git add is now denied ENTIRELY regardless of path grammar
+  // (see the "R3: delegated execution" matrix below) — these remain here
+  // as regression coverage for the R2-era path-grammar reasoning, which
+  // still independently denies every one of them even without the R3
+  // blanket revocation.
   'git add .',
   'git add ..',
   'git add *',
@@ -230,6 +241,10 @@ const DENY_COMMANDS = [
   'git add $PWD/.github/workflows/x.yml',
 
   // --- R2: commit-message shell-expansion (finding C) ---
+  // R3 note: git commit is now denied ENTIRELY regardless of message
+  // grammar (Git hooks — pre-commit/commit-msg/prepare-commit-msg — can
+  // run on any commit); these remain as regression coverage for the R2
+  // message-grammar reasoning, which still independently denies each one.
   'git commit -m "$SECRET"',
   'git commit -m "${TOKEN}"',
   'git commit -m "$(cat secret)"',
@@ -244,6 +259,9 @@ const DENY_COMMANDS = [
   "git commit -m '${SECRET}'", // single-quoted but content charset still rejects $ { }
 
   // --- R2: git branch special case must stay narrow (section 22) ---
+  // R3 note: "git branch --show-current" itself is now ALSO denied (see
+  // below) — these non-show-current forms were already denied in R2 and
+  // remain denied in R3 for the same ref/branch-mutation reasons.
   'git branch -d x',
   'git branch foo',
   'git branch --move x y',
@@ -256,6 +274,70 @@ for (const command of DENY_COMMANDS) {
     assert.equal(result.decision, 'deny', `expected deny for: ${command}`);
   });
 }
+
+// ---------------------------------------------------------------------------
+// R3: DELEGATED EXECUTION — every command R1/R2 previously allowed and R3's
+// per-matcher audit reclassified as DENY (section 10-19, 30). None of these
+// is a shell-structural problem (no chaining/indirection) — each is denied
+// because the outer command can delegate execution to something the guard
+// cannot see: a Git hook, a `.gitattributes` filter, a pager/textconv/
+// fsmonitor/credential-helper program, or repository-controlled script code
+// (a test file, an npm `scripts` entry, a build/lint tool). Kept as its own
+// named matrix (not folded into DENY_COMMANDS above) specifically so the
+// R1/R2 -> R3 reclassification is auditable at a glance — see SAFETY.md's
+// "R3: delegated execution" section for the citation behind each line.
+// ---------------------------------------------------------------------------
+
+const DELEGATED_EXECUTION_DENY_COMMANDS = [
+  // git add / git commit — revoked entirely (sections 12-13)
+  'git add tools/night-agent/queue.mjs',
+  'git add .claude/overnight/POLICY.md tools/night-agent/queue.mjs',
+  'git add backend/src/main.ts',
+  'git add tools/night-agent/test/foo.test.mjs',
+  "git commit -m 'fix: safe local change'",
+  "git commit -m 'chore(agent): bootstrap Korixa Night Agent v1'",
+  // node --test — revoked (section 15): the test file is repository-
+  // controlled JavaScript, executed with no sandbox.
+  'node --test tools/night-agent/test/queue.test.mjs',
+  'node --test tools/night-agent/test/*.test.mjs',
+  'node --test tools/night-agent/test/foo.test.mjs',
+  // npm test / npm run build — revoked (section 16): package.json
+  // `scripts` entries are, per npm's own docs, arbitrary shell commands.
+  'npm run build',
+  // flutter / dart — revoked (section 17): no sandbox exists yet for
+  // repo-controlled analyze/test execution.
+  'flutter analyze',
+  'flutter test',
+  'dart test',
+  'dart run',
+  // git status / diff / log / show / branch --show-current / ls-remote —
+  // revoked (section 19): each was individually re-audited against
+  // official Git docs and found to be able to invoke an external program
+  // under plausible local configuration (fsmonitor, GIT_EXTERNAL_DIFF,
+  // textconv, pager, credential.helper respectively) — see SAFETY.md.
+  'git status',
+  'git status --short',
+  'git diff',
+  'git diff --check',
+  'git diff --stat',
+  'git diff --name-only',
+  'git log -1 --oneline',
+  'git show --stat --oneline 98ff0d6',
+  'git branch --show-current',
+  'git ls-remote origin refs/heads/main',
+];
+
+for (const command of DELEGATED_EXECUTION_DENY_COMMANDS) {
+  test(`R3 DELEGATED EXECUTION DENY: ${command}`, () => {
+    const result = classifyCommand(command);
+    assert.equal(result.decision, 'deny', `expected deny for: ${command}`);
+  });
+}
+
+test('git branch --show-current is now denied in R3 (R1/R2 kept it allowed; R3 could not confirm pager exclusion from official docs, so unconfirmed safety is treated as deny)', () => {
+  assert.equal(classifyCommand('git branch --show-current').decision, 'deny');
+  assert.equal(classifyCommand('git branch -D feature/x').decision, 'deny');
+});
 
 // ---------------------------------------------------------------------------
 // R2 property-style matrices: deterministic permutations, not one-off
@@ -283,38 +365,18 @@ for (const ch of GIT_ADD_METACHARACTERS) {
 }
 
 // ---------------------------------------------------------------------------
-// ALLOW matrix — the entire allowlist, exactly.
+// ALLOW matrix — the entire allowlist, exactly (R3: shrunk to 3 matchers —
+// see SAFE_MATCHERS in night-guard.mjs for the full per-command audit).
+// Security > convenience is an explicit, intentional R3 policy choice, not
+// a regression: a smaller allowlist is strictly safer, never less safe.
 // ---------------------------------------------------------------------------
 
 const ALLOW_COMMANDS = [
   'pwd',
-  'git status',
-  'git status --short',
-  'git diff',
-  'git diff --check',
-  'git diff --stat',
-  'git diff --name-only',
-  'git log -1 --oneline',
-  'git show --stat --oneline 98ff0d6',
+  'node --version',
   'git rev-parse HEAD',
   'git rev-parse HEAD^',
   'git rev-parse origin/main',
-  'git branch --show-current',
-  'git ls-remote origin refs/heads/main',
-  'git ls-remote origin refs/heads/feat/night-v1-a-bootstrap-20260819',
-  'node --version',
-  'node --test tools/night-agent/test/queue.test.mjs',
-  'node --test tools/night-agent/test/*.test.mjs',
-  'flutter analyze',
-  'flutter test',
-  'npm test',
-  'npm run build',
-  'git add tools/night-agent/queue.mjs',
-  'git add .claude/overnight/POLICY.md tools/night-agent/queue.mjs',
-  'git add backend/src/main.ts',
-  'git add tools/night-agent/test/foo.test.mjs',
-  "git commit -m 'fix: safe local change'",
-  "git commit -m 'chore(agent): bootstrap Korixa Night Agent v1'",
 ];
 
 for (const command of ALLOW_COMMANDS) {
@@ -323,11 +385,6 @@ for (const command of ALLOW_COMMANDS) {
     assert.equal(result.decision, 'allow', `expected allow for: ${command}`);
   });
 }
-
-test('git branch --show-current is allowed even though "branch" is a dangerous git subcommand in general (git branch -D)', () => {
-  assert.equal(classifyCommand('git branch --show-current').decision, 'allow');
-  assert.equal(classifyCommand('git branch -D feature/x').decision, 'deny');
-});
 
 // ---------------------------------------------------------------------------
 // evaluate() end-to-end, through the full hook input shape.
@@ -338,7 +395,56 @@ test('evaluate() denies a dangerous command through the full hook input shape', 
 });
 
 test('evaluate() allows a safe command through the full hook input shape', () => {
-  assert.equal(evaluate(hookInput('git status --short'), true).decision, 'allow');
+  assert.equal(evaluate(hookInput('git rev-parse HEAD'), true).decision, 'allow');
+});
+
+// ---------------------------------------------------------------------------
+// R3: file-mutating tools (Write, Edit, NotebookEdit) — always denied in
+// Night Mode, with a fixed generic family reason, until path-scoped
+// enforcement exists (sections 22-25).
+// ---------------------------------------------------------------------------
+
+test('evaluate() denies Write in Night Mode with the NIGHT_FILE_MUTATION_NOT_YET_SCOPED family', () => {
+  const input = hookInput(undefined, 'Write');
+  input.tool_input = { file_path: 'tools/night-agent/example.txt', content: 'synthetic' };
+  const result = evaluate(input, true);
+  assert.equal(result.decision, 'deny');
+  assert.equal(result.family, 'NIGHT_FILE_MUTATION_NOT_YET_SCOPED');
+});
+
+test('evaluate() denies Edit in Night Mode with the NIGHT_FILE_MUTATION_NOT_YET_SCOPED family', () => {
+  const input = hookInput(undefined, 'Edit');
+  input.tool_input = { file_path: 'tools/night-agent/example.txt', old_string: 'a', new_string: 'b' };
+  const result = evaluate(input, true);
+  assert.equal(result.decision, 'deny');
+  assert.equal(result.family, 'NIGHT_FILE_MUTATION_NOT_YET_SCOPED');
+});
+
+test('evaluate() denies NotebookEdit in Night Mode with the NIGHT_FILE_MUTATION_NOT_YET_SCOPED family', () => {
+  const input = hookInput(undefined, 'NotebookEdit');
+  input.tool_input = { file_path: 'notebook.ipynb', notebook_edit: { cells: [] } };
+  const result = evaluate(input, true);
+  assert.equal(result.decision, 'deny');
+  assert.equal(result.family, 'NIGHT_FILE_MUTATION_NOT_YET_SCOPED');
+});
+
+test('evaluate() denial for Write never echoes file_path or content', () => {
+  const secretFixture = 'SUPER_SECRET_TOKEN_abc123XYZ';
+  const input = hookInput(undefined, 'Write');
+  input.tool_input = { file_path: `tools/night-agent/${secretFixture}.txt`, content: secretFixture };
+  const result = evaluate(input, true);
+  assert.equal(result.decision, 'deny');
+  assert.ok(!result.reason.includes(secretFixture), 'reason must not contain file_path or content');
+});
+
+test('dormant mode: Write/Edit/NotebookEdit remain unevaluated (no decision) when Night Mode is inactive', () => {
+  for (const toolName of ['Write', 'Edit', 'NotebookEdit']) {
+    const input = hookInput(undefined, toolName);
+    input.tool_input = { file_path: 'x' };
+    const result = evaluate(input, false);
+    assert.equal(result.active, false);
+    assert.equal(result.decision, null);
+  }
 });
 
 // ---------------------------------------------------------------------------
@@ -365,9 +471,13 @@ test('backslash escaping anywhere in the command is denied', () => {
   assert.equal(classifyCommand('git commit -m "line1\\nline2"').decision, 'deny');
 });
 
+// R3: "git status --short" no longer classifies as allow (see the
+// delegated-execution matrix above) — this test now uses "git rev-parse
+// HEAD", the surviving matcher, to keep testing what it originally tested
+// (whitespace tolerance around a safe command), per section 11.
 test('extra whitespace/tabs around an otherwise-safe command still classifies correctly', () => {
-  assert.equal(classifyCommand('  git   status   --short  ').decision, 'allow');
-  assert.equal(classifyCommand('\tgit\tstatus\t--short\t').decision, 'allow');
+  assert.equal(classifyCommand('  git   rev-parse   HEAD  ').decision, 'allow');
+  assert.equal(classifyCommand('\tgit\trev-parse\tHEAD\t').decision, 'allow');
 });
 
 test('extra whitespace does not launder a dangerous command into the allowlist', () => {
@@ -387,6 +497,8 @@ test('a quote character appearing mid-bare-token is treated as ambiguous and den
 // ---------------------------------------------------------------------------
 // R2 quoting regression (section 28): quoted git-add tokens and
 // double-quoted / metacharacter-bearing commit messages must all still deny.
+// Retained under R3 as regression coverage of the underlying grammar, even
+// though git add/commit are now denied outright regardless.
 // ---------------------------------------------------------------------------
 
 test('quoting regression: git add with a double-quoted path token is denied', () => {
@@ -434,7 +546,9 @@ test('denial reason for any denied command never contains the literal command st
 
 // ---------------------------------------------------------------------------
 // R2 section 39 manual classifier proof — the exact lettered cases from the
-// NIGHT-V1-A-R2 contract, named for direct audit traceability.
+// NIGHT-V1-A-R2 contract, named for direct audit traceability. F and G
+// changed expectation under R3 (git add/commit revoked entirely) — kept,
+// not deleted, per section 11's explicit instruction.
 // ---------------------------------------------------------------------------
 
 test('section 39 (A): git add foo & git push origin main -> DENY', () => {
@@ -452,11 +566,28 @@ test('section 39 (D): git add $PWD/.github/workflows/x.yml -> DENY', () => {
 test('section 39 (E): git commit -m "$SECRET" -> DENY', () => {
   assert.equal(classifyCommand('git commit -m "$SECRET"').decision, 'deny');
 });
-test('section 39 (F): git add tools/night-agent/queue.mjs -> ALLOW', () => {
-  assert.equal(classifyCommand('git add tools/night-agent/queue.mjs').decision, 'allow');
+test('section 39 (F, R3 REVISED): git add tools/night-agent/queue.mjs -> now DENY (git add revoked entirely in R3 — section 12)', () => {
+  assert.equal(classifyCommand('git add tools/night-agent/queue.mjs').decision, 'deny');
 });
-test("section 39 (G): git commit -m 'fix: safe local change' -> ALLOW", () => {
-  assert.equal(classifyCommand("git commit -m 'fix: safe local change'").decision, 'allow');
+test("section 39 (G, R3 REVISED): git commit -m 'fix: safe local change' -> now DENY (git commit revoked entirely in R3 — section 13)", () => {
+  assert.equal(classifyCommand("git commit -m 'fix: safe local change'").decision, 'deny');
+});
+
+// ---------------------------------------------------------------------------
+// R3 section 40 manual pure proofs — Night Mode classifier cases.
+// ---------------------------------------------------------------------------
+
+test('R3 section 40: npm run build -> DENY', () => {
+  assert.equal(classifyCommand('npm run build').decision, 'deny');
+});
+test('R3 section 40: flutter test -> DENY', () => {
+  assert.equal(classifyCommand('flutter test').decision, 'deny');
+});
+test('R3 section 40: pwd -> ALLOW', () => {
+  assert.equal(classifyCommand('pwd').decision, 'allow');
+});
+test('R3 section 40: node --version -> ALLOW', () => {
+  assert.equal(classifyCommand('node --version').decision, 'allow');
 });
 
 // ---------------------------------------------------------------------------
@@ -509,21 +640,23 @@ test('evaluate never throws on pathological hookInput shapes', () => {
 });
 
 // ---------------------------------------------------------------------------
-// R2 hook subprocess regression suite (section 33-35). These invoke the
-// REAL script as a child process, with KORIXA_NIGHT_MODE=1 and a JSON hook
-// fixture on stdin — proving the actual exit-code/stdout/stderr contract,
-// not just the in-process pure functions. The fixture's "command" field is
-// passed as inert JSON data; none of these commands is ever executed by a
-// real shell anywhere in this test.
+// R2/R3 hook subprocess regression suite (section 33-35, re-verified for
+// R3). These invoke the REAL script as a child process, with
+// KORIXA_NIGHT_MODE=1 and a JSON hook fixture on stdin — proving the actual
+// exit-code/stdout/stderr contract, not just the in-process pure functions.
+// The fixture's "command"/tool_input fields are passed as inert JSON data;
+// none of these commands is ever executed by a real shell anywhere in this
+// test, and no real file is ever touched by a Write/Edit/NotebookEdit
+// fixture.
 // ---------------------------------------------------------------------------
 
-function runGuard(command) {
+function runGuard(command, toolName = 'Bash') {
   const input = JSON.stringify({
     session_id: 'subprocess-test',
     cwd: '/repo',
     hook_event_name: 'PreToolUse',
-    tool_name: 'Bash',
-    tool_input: { command },
+    tool_name: toolName,
+    tool_input: toolName === 'Bash' ? { command } : command,
   });
   return spawnSync(process.execPath, [GUARD_PATH], {
     input,
@@ -533,7 +666,7 @@ function runGuard(command) {
 }
 
 test('hook subprocess: a SAFE command exits 0', () => {
-  const result = runGuard('git status --short');
+  const result = runGuard('git rev-parse HEAD');
   assert.equal(result.status, 0);
 });
 
@@ -557,6 +690,22 @@ test('hook subprocess: a commit-message env expansion attempt exits 2', () => {
   assert.equal(result.status, 2);
 });
 
+test('hook subprocess: R3 delegated-execution commands (git add, git commit, node --test, npm test, npm run build, flutter analyze, flutter test) all exit 2', () => {
+  const delegated = [
+    'git add tools/night-agent/queue.mjs',
+    "git commit -m 'fix: safe local change'",
+    'node --test tools/night-agent/test/foo.test.mjs',
+    'npm test',
+    'npm run build',
+    'flutter analyze',
+    'flutter test',
+  ];
+  for (const command of delegated) {
+    const result = runGuard(command);
+    assert.equal(result.status, 2, `expected exit 2 for: ${command}`);
+  }
+});
+
 test('hook subprocess: malformed JSON on stdin exits 2', () => {
   const result = spawnSync(process.execPath, [GUARD_PATH], {
     input: 'not-json{{{',
@@ -567,14 +716,65 @@ test('hook subprocess: malformed JSON on stdin exits 2', () => {
 });
 
 // ---------------------------------------------------------------------------
-// R2 stdout/stderr contract (section 34): on a deny (exit 2), the reason is
-// carried in the documented JSON-on-stdout "reason" field AND, redundantly,
-// as plain text on stderr — both confirmed current per
-// code.claude.com/docs/en/hooks.md. On allow (exit 0), no decision is
-// emitted on either channel.
+// R3: Write/Edit/NotebookEdit subprocess fixtures (section 31). Inert JSON
+// only — the fixture never causes any real file to be created, read, or
+// modified; the guard denies before any such thing could happen.
 // ---------------------------------------------------------------------------
 
-test('hook subprocess: deny output carries structured JSON on stdout with a deny decision', () => {
+test('hook subprocess: Write in Night Mode exits 2 with NIGHT_FILE_MUTATION_NOT_YET_SCOPED on stderr and structured JSON on stdout', () => {
+  const result = runGuard({ file_path: 'tools/night-agent/example.txt', content: 'synthetic' }, 'Write');
+  assert.equal(result.status, 2);
+  assert.ok(result.stderr.includes('NIGHT_FILE_MUTATION_NOT_YET_SCOPED'));
+  const parsed = JSON.parse(result.stdout);
+  assert.equal(parsed.hookSpecificOutput.permissionDecisionReason.includes('NIGHT_FILE_MUTATION_NOT_YET_SCOPED'), true);
+});
+
+test('hook subprocess: Edit in Night Mode exits 2 with NIGHT_FILE_MUTATION_NOT_YET_SCOPED', () => {
+  const result = runGuard({ file_path: 'tools/night-agent/example.txt', old_string: 'a', new_string: 'b' }, 'Edit');
+  assert.equal(result.status, 2);
+  assert.ok(result.stderr.includes('NIGHT_FILE_MUTATION_NOT_YET_SCOPED'));
+});
+
+test('hook subprocess: NotebookEdit in Night Mode exits 2 with NIGHT_FILE_MUTATION_NOT_YET_SCOPED', () => {
+  const result = runGuard({ file_path: 'notebook.ipynb', notebook_edit: { cells: [] } }, 'NotebookEdit');
+  assert.equal(result.status, 2);
+  assert.ok(result.stderr.includes('NIGHT_FILE_MUTATION_NOT_YET_SCOPED'));
+});
+
+test('hook subprocess: Write/Edit/NotebookEdit remain dormant (exit 0, no output) without KORIXA_NIGHT_MODE', () => {
+  for (const toolName of ['Write', 'Edit', 'NotebookEdit']) {
+    const input = JSON.stringify({
+      session_id: 's',
+      cwd: '/repo',
+      hook_event_name: 'PreToolUse',
+      tool_name: toolName,
+      tool_input: { file_path: 'x' },
+    });
+    const dormantEnv = { ...process.env };
+    delete dormantEnv.KORIXA_NIGHT_MODE;
+    const result = spawnSync(process.execPath, [GUARD_PATH], { input, encoding: 'utf8', env: dormantEnv });
+    assert.equal(result.status, 0, toolName);
+    assert.equal(result.stdout, '', toolName);
+    assert.equal(result.stderr, '', toolName);
+  }
+});
+
+// ---------------------------------------------------------------------------
+// R3 stdout/stderr contract (section 26-28, re-verified against current
+// official docs — see night-guard.mjs's denyAndExit comment for the exact
+// quoted text). IMPORTANT: the R3 instructions asserted that stdout/JSON is
+// ignored on exit 2 and only stderr matters. That assertion was checked
+// against the current official Claude Code hooks documentation as part of
+// this block's own mandatory research step (section 5) and found to be
+// INCORRECT: the docs explicitly state "Claude Code still reads any valid
+// JSON output on stdout" on exit 2, with the JSON reason taking priority
+// and stderr as the documented fallback. These tests were therefore NOT
+// rewritten to expect empty stdout — doing so would encode a disproven
+// claim as a regression test. Both channels are asserted, matching what
+// R2 already implemented correctly.
+// ---------------------------------------------------------------------------
+
+test('hook subprocess: deny output carries structured JSON on stdout with a deny decision (confirmed current: JSON IS read on exit 2)', () => {
   const result = runGuard('git push origin main');
   assert.equal(result.status, 2);
   const parsed = JSON.parse(result.stdout);
@@ -583,14 +783,14 @@ test('hook subprocess: deny output carries structured JSON on stdout with a deny
   assert.ok(parsed.hookSpecificOutput.permissionDecisionReason.length > 0);
 });
 
-test('hook subprocess: deny output also carries a generic reason on stderr', () => {
+test('hook subprocess: deny output also carries a generic reason on stderr (the documented fallback channel)', () => {
   const result = runGuard('git push origin main');
   assert.equal(result.status, 2);
   assert.ok(result.stderr.includes('NIGHT_GUARD_DENY:'));
 });
 
 test('hook subprocess: allow produces no stdout and no stderr output', () => {
-  const result = runGuard('git status --short');
+  const result = runGuard('git rev-parse HEAD');
   assert.equal(result.status, 0);
   assert.equal(result.stdout, '');
   assert.equal(result.stderr, '');
@@ -619,6 +819,14 @@ test('hook subprocess: dormant mode (no KORIXA_NIGHT_MODE) produces no output re
 test('hook subprocess: a synthetic secret-bearing command never appears in stdout or stderr', () => {
   const secretFixture = 'SUPER_SECRET_TOKEN_abc123XYZ';
   const result = runGuard(`git commit -m "$${secretFixture}"`);
+  assert.equal(result.status, 2);
+  assert.ok(!result.stdout.includes(secretFixture), 'stdout must not contain the fixture secret token');
+  assert.ok(!result.stderr.includes(secretFixture), 'stderr must not contain the fixture secret token');
+});
+
+test('hook subprocess: a synthetic secret-bearing Write fixture never appears in stdout or stderr', () => {
+  const secretFixture = 'SUPER_SECRET_TOKEN_abc123XYZ';
+  const result = runGuard({ file_path: `tools/night-agent/${secretFixture}.txt`, content: secretFixture }, 'Write');
   assert.equal(result.status, 2);
   assert.ok(!result.stdout.includes(secretFixture), 'stdout must not contain the fixture secret token');
   assert.ok(!result.stderr.includes(secretFixture), 'stderr must not contain the fixture secret token');

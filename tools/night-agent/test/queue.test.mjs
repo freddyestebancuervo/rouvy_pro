@@ -390,6 +390,83 @@ test('pathsOverlap: sibling directories with a shared string prefix do not confl
   assert.equal(pathsOverlap('foo/', 'foobar/baz.js'), false);
 });
 
+// ---------------------------------------------------------------------------
+// R3 bare-directory ancestor overlap (independent audit finding A, sections
+// 6-9): two EXACT-looking scopes ("backend" and "backend/src/main.ts") were
+// never checked for the ancestor relationship in R1/R2 — only the
+// prefix/prefix and exact/prefix branches were. pathsOverlap('backend',
+// 'backend/src/main.ts') incorrectly returned false. Fixed by giving the
+// exact/exact branch the same segment-boundary ancestor check as the other
+// branches (see pathsOverlap in queue.mjs).
+// ---------------------------------------------------------------------------
+
+test("pathsOverlap: bare directory 'backend' overlaps a file underneath it (the core R3 finding)", () => {
+  assert.equal(pathsOverlap('backend', 'backend/src/main.ts'), true);
+});
+
+test("pathsOverlap: bare directory 'tools/night-agent' overlaps a nested test file", () => {
+  assert.equal(pathsOverlap('tools/night-agent', 'tools/night-agent/test/x.test.mjs'), true);
+});
+
+test('pathsOverlap: single-segment bare directory overlaps its child', () => {
+  assert.equal(pathsOverlap('a', 'a/b'), true);
+});
+
+test('pathsOverlap: the ancestor check is symmetric (order does not matter)', () => {
+  assert.equal(pathsOverlap('a/b', 'a'), true);
+});
+
+test('pathsOverlap: a bare directory and its "/**" glob form overlap each other (already true, reconfirmed)', () => {
+  assert.equal(pathsOverlap('backend/**', 'backend'), true);
+  assert.equal(pathsOverlap('backend', 'backend/**'), true);
+});
+
+test('pathsOverlap: bare-directory ancestor check respects the "/" segment boundary — no false positive from a shared string prefix', () => {
+  assert.equal(pathsOverlap('backend', 'backend2/file.ts'), false);
+  assert.equal(pathsOverlap('foo.js', 'foo.js.map'), false);
+});
+
+// Deterministic matrix form of the same requirement (section 29), each row
+// independently named for audit traceability.
+const BARE_DIRECTORY_ANCESTOR_MATRIX = [
+  { a: 'backend', b: 'backend/src/main.ts', expected: true },
+  { a: 'backend', b: 'backend/test/x.ts', expected: true },
+  { a: 'tools', b: 'tools/night-agent/x.mjs', expected: true },
+  { a: 'a', b: 'a/b', expected: true },
+  { a: 'a/b', b: 'a', expected: true },
+  { a: 'foo', b: 'foobar/x', expected: false },
+  { a: 'foo.js', b: 'foo.js.map', expected: false },
+];
+for (const { a, b, expected } of BARE_DIRECTORY_ANCESTOR_MATRIX) {
+  test(`pathsOverlap('${a}', '${b}') === ${expected}`, () => {
+    assert.equal(pathsOverlap(a, b), expected);
+  });
+}
+
+test('findPathConflicts detects a bare-directory vs nested-file conflict across distinct tasks (section 9 cross-task requirement)', () => {
+  const tasks = [
+    minimalTask({ id: 'a', allowed_paths: ['backend'] }),
+    minimalTask({ id: 'b', allowed_paths: ['backend/src/main.ts'] }),
+  ];
+  const conflicts = findPathConflicts(tasks);
+  assert.equal(conflicts.length, 1);
+  assert.equal(conflicts[0].a, 'a');
+  assert.equal(conflicts[0].b, 'b');
+});
+
+test('validateSchema rejects a task whose bare-directory allowed_paths overlaps its own forbidden_paths (section 9 self-conflict requirement)', () => {
+  const queue = minimalQueue([{ allowed_paths: ['backend'], forbidden_paths: ['backend/secrets/key.json'] }]);
+  const result = validateSchema(queue);
+  assert.equal(result.valid, false);
+  assert.ok(result.errors.some((e) => e.includes('overlaps its own forbidden_paths')));
+});
+
+test('validateSchema rejects the same bare-directory self-conflict in reverse order (forbidden ancestor of allowed)', () => {
+  const queue = minimalQueue([{ allowed_paths: ['backend/secrets/key.json'], forbidden_paths: ['backend'] }]);
+  const result = validateSchema(queue);
+  assert.equal(result.valid, false);
+});
+
 test('findPathConflicts detects ancestor/glob containment across distinct tasks', () => {
   const tasks = [
     minimalTask({ id: 'a', allowed_paths: ['backend/**'] }),

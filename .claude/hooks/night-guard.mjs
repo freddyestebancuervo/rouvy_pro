@@ -1,41 +1,57 @@
 #!/usr/bin/env node
 import { pathToFileURL } from 'node:url';
 
-// Korixa Night Agent — PreToolUse guard (NIGHT-V1-A-R2 hardened model).
+// Korixa Night Agent — PreToolUse guard (NIGHT-V1-A-R3 hardened model).
 //
 // Dormant (no-op, exit 0, no output) unless KORIXA_NIGHT_MODE=1 in the
 // environment of the process that launched Claude Code — see CLAUDE.md and
 // .claude/overnight/SAFETY.md.
 //
-// SECURITY MODEL — DEFAULT_DENY ALLOWLIST (R1):
-// This guard does NOT try to enumerate every possible dangerous command. It
-// enumerates a small, closed set of KNOWN-SAFE command shapes; anything not
-// an exact match — unknown commands, ambiguous quoting, shell indirection,
-// chaining, redirection — is denied as UNCLASSIFIABLE_COMMAND. There is no
-// "no deny pattern matched -> allow" path anywhere in this file.
+// SECURITY MODEL — DEFAULT_DENY ALLOWLIST (R1), now covering DELEGATED
+// EXECUTION (R3): This guard does NOT try to enumerate every possible
+// dangerous command. It enumerates a small, closed set of KNOWN-SAFE
+// command shapes; anything not an exact match — unknown commands, ambiguous
+// quoting, shell indirection, chaining, redirection, or a Bash command that
+// itself delegates execution to a Git hook / attribute filter / npm-or-
+// build-tool script (SAFE_OUTER_COMMAND != SAFE_EXECUTION_TREE, see
+// SAFETY.md) — is denied. There is no "no deny pattern matched -> allow"
+// path anywhere in this file, for Bash or for file-mutating tools:
 //
-//   1. malformed/empty input                 -> DENY
-//   2. any command chaining/piping operator   -> DENY (V1 supports only a
-//                                                single simple command)
-//   3. shell indirection / substitution /
-//      redirection / backslash escaping       -> DENY (cannot be safely
-//                                                classified)
-//   4. quoting that cannot be tokenized
-//      unambiguously (unbalanced, or a quote
-//      concatenated against adjacent text)     -> DENY
-//   5. known-dangerous command family          -> DENY (explicit, for a
-//                                                clearer audit reason)
-//   6. matches a known-SAFE command shape      -> ALLOW
-//   7. anything else                           -> DENY (UNCLASSIFIABLE_COMMAND)
+//   for Bash (tool_name === "Bash"):
+//     1. malformed/empty input                 -> DENY
+//     2. any command chaining/piping/           -> DENY (one simple command
+//        backgrounding operator                    per call only)
+//     3. shell indirection / substitution /
+//        redirection / backslash escaping       -> DENY (cannot be safely
+//                                                  classified)
+//     4. quoting that cannot be tokenized
+//        unambiguously (unbalanced, or a quote
+//        concatenated against adjacent text)     -> DENY
+//     5. matches a known-SAFE command shape      -> ALLOW (a 3-entry
+//                                                  allowlist as of R3 — see
+//                                                  SAFE_MATCHERS below)
+//     6. known-dangerous command family          -> DENY (explicit, for a
+//                                                  clearer audit reason)
+//     7. anything else                           -> DENY (UNCLASSIFIABLE_COMMAND)
 //
-// Stdin/stdout contract follows the official Claude Code PreToolUse hook
-// schema (code.claude.com/docs/en/hooks.md): stdin is a JSON object with at
-// least {session_id, cwd, hook_event_name, tool_name, tool_input}; for Bash,
-// tool_input.command is the shell command string. To block, this hook exits
-// with code 2 (the documented unconditional-block exit code, which
-// overrides any JSON "allow") and also writes a structured JSON reason to
-// stdout for auditability. To allow, it exits 0 with no output, leaving the
-// normal permission flow untouched.
+//   for a file-mutating tool (Write, Edit, NotebookEdit — the current
+//   built-in tool names per code.claude.com/docs/en/tools-reference.md):
+//     always DENY (NIGHT_FILE_MUTATION_NOT_YET_SCOPED) — no task-scoped
+//     enforcement exists yet anywhere in this codebase.
+//
+//   for any other tool_name: DENY (UNCLASSIFIABLE_COMMAND) — an unexpected
+//   tool reaching this guard fails closed rather than passing through.
+//
+// Stdin/stdout/exit-code contract follows the official Claude Code
+// PreToolUse hook schema (code.claude.com/docs/en/hooks.md, re-verified for
+// R3): stdin is a JSON object with at least {session_id, cwd,
+// hook_event_name, tool_name, tool_input}. To block, this hook exits with
+// code 2 — the documented unconditional-block mechanism, which overrides
+// any JSON "allow" — and writes the reason to BOTH channels the docs
+// describe as read on exit 2: a structured JSON "reason" on stdout (read
+// first) and the same generic reason on stderr (the documented fallback if
+// the JSON is absent/invalid). To allow, it exits 0 with no output, leaving
+// the normal permission flow untouched.
 //
 // The classification logic is exported as pure functions so tests can
 // evaluate it directly as data, without spawning a subprocess or executing
@@ -50,7 +66,7 @@ import { pathToFileURL } from 'node:url';
 
 const DANGEROUS_FIRST_TOKENS = new Set([
   'rm', 'rmdir', 'del', 'remove-item',
-  'python', 'python3', 'perl', 'ruby', 'php',
+  'python', 'python3', 'perl', 'ruby', 'php', 'java',
   'ssh', 'scp', 'rsync',
   'docker', 'kubectl', 'terraform',
   'psql', 'mysql', 'mysqld', 'redis-cli',
@@ -58,12 +74,23 @@ const DANGEROUS_FIRST_TOKENS = new Set([
   'curl', 'wget',
   'claude',
   'powershell', 'cmd', 'bash', 'sh',
+  // R3: delegated/repo-controlled execution — reconfirmed DENY (section
+  // 15-18). Checked only after SAFE_MATCHERS (which still allows the exact
+  // shape "node --version"), so adding the bare program name here does not
+  // reintroduce the R2 "git branch" shadowing bug.
+  'node', 'npm', 'npx', 'flutter', 'dart', 'gradle', 'gradlew', 'mvn', 'make', 'cmake',
 ]);
 
 const GIT_DANGEROUS_SECOND_TOKENS = new Set([
   'push', 'reset', 'clean', 'checkout', 'switch', 'branch', 'tag',
   'update-ref', 'symbolic-ref', 'fetch', 'rm', 'merge', 'rebase',
   'cherry-pick', 'revert', 'stash',
+  // R3: git add/commit/status/diff/log/show/ls-remote were removed from
+  // SAFE_MATCHERS (delegated execution via hooks/filters/pager/textconv/
+  // credential-helper) — added here so their denial reason names the
+  // specific finding instead of falling through to the generic
+  // UNCLASSIFIABLE_COMMAND message.
+  'add', 'commit', 'status', 'diff', 'log', 'show', 'ls-remote',
 ]);
 
 // Constructs that make a command unsafe to reason about at all: shell
@@ -150,50 +177,6 @@ export function tokenize(command) {
   return tokens;
 }
 
-function isRepoRelativePathToken(value) {
-  if (typeof value !== 'string' || value.length === 0) return false;
-  if (value.includes('\\')) return false;
-  if (value.includes('\0')) return false;
-  if (/^[A-Za-z]:/.test(value)) return false;
-  if (value.startsWith('/')) return false;
-  if (value.includes('..')) return false;
-  return true;
-}
-
-function isSafeTestPath(value) {
-  return (
-    isRepoRelativePathToken(value) &&
-    /^tools\/night-agent\/test\/([A-Za-z0-9_-]+\.test\.mjs|\*\.test\.mjs)$/.test(value)
-  );
-}
-
-// A conservative closed grammar for `git add` path tokens (R2): only
-// [A-Za-z0-9._/-] is permitted, at all — no wildcard/glob/brace/bracket
-// characters, no shell metacharacters, no environment-variable sigils, no
-// home-directory tilde. This one character-class check is what actually
-// rejects the entire family the audit flagged (*, ?, [, ], {, }, $, !, ~,
-// and friends) rather than trying to enumerate each one. "." and ".." are
-// rejected explicitly even though both are technically in that charset,
-// since either would stage far more than a task's declared scope.
-const SAFE_ADD_PATH_CHARSET = /^[A-Za-z0-9._/-]+$/;
-
-function isSafeAddPath(value) {
-  if (typeof value !== 'string' || value.length === 0) return false;
-  if (value === '.' || value === '..') return false;
-  if (value.startsWith('-')) return false; // no flags: -A/--all/-u/-f are all out of scope for V1
-  if (!SAFE_ADD_PATH_CHARSET.test(value)) return false;
-  return isRepoRelativePathToken(value);
-}
-
-// A conservative closed grammar for a `git commit -m` message's literal
-// content (R2): letters, digits, spaces, and a small, deliberately narrow
-// set of punctuation common in Conventional Commits-style messages. No `$`,
-// backtick, `&`, `;`, `|`, `<`, `>`, or backslash — this is what actually
-// closes the "commit message as an environment-variable/command-
-// substitution exfiltration channel" finding, rather than trying to detect
-// each dangerous construct individually.
-const SAFE_COMMIT_MESSAGE_CHARSET = /^[A-Za-z0-9 :\-_./()[\]]*$/;
-
 const GIT_REF_FLAG_TOKENS = new Set(['-1', '--oneline', '--stat', '--short', '--check', '--name-only']);
 const GIT_REF_TOKEN_PATTERN = /^[A-Za-z0-9._/^~-]{1,200}$/;
 
@@ -201,87 +184,56 @@ const GIT_REF_TOKEN_PATTERN = /^[A-Za-z0-9._/^~-]{1,200}$/;
 // Known-SAFE command shapes — the entire allowlist. A command is ALLOWed if
 // and only if it matches one of these exactly. Nothing else is ever
 // allowed, regardless of how harmless it looks.
+//
+// R3: this list shrank sharply from R2. A third independent audit raised
+// DELEGATED_EXECUTION — a Bash command can look inert while the program it
+// invokes runs something else entirely (a Git hook, an attribute filter, an
+// npm/flutter/dart script, a test file's own code). SAFE_OUTER_COMMAND !=
+// SAFE_EXECUTION_TREE. Every matcher below was individually re-justified
+// against that standard (see SAFETY.md's "R3: delegated execution" section
+// for the officially-sourced verdict on each one); anything that couldn't
+// be shown safe was removed rather than kept on the strength of R1/R2's
+// weaker "it's just Git/just a test runner" reasoning:
+//   - GIT_ADD, GIT_COMMIT_M: removed — `git add` can invoke a
+//     `.gitattributes` clean/smudge/process filter; `git commit` can invoke
+//     pre-commit/commit-msg/prepare-commit-msg hooks (the last of which
+//     even survives `--no-verify`). No controlled Git writer exists yet.
+//   - NODE_TEST, FLUTTER_ANALYZE, FLUTTER_TEST, NPM_TEST, NPM_RUN_BUILD:
+//     removed — each one runs repository-controlled code (a test file, a
+//     build/lint script, or an npm `scripts` entry, which npm's own docs
+//     describe as an arbitrary shell command) with no sandbox around it.
+//   - GIT_STATUS, GIT_LS_REMOTE: removed — `git status` can invoke an
+//     external `core.fsmonitor` hook command; `git ls-remote` contacts a
+//     remote and can invoke an external `credential.helper` program.
+//   - "git log"/"git show" (previously bundled with rev-parse): removed —
+//     both are explicitly named by Git's own docs as running `textconv`
+//     attribute-driven external converters, plus `core.pager`.
+//   - GIT_BRANCH_SHOW_CURRENT: removed — pager involvement could not be
+//     confirmed excluded from official docs within this audit; unconfirmed
+//     safety is treated as DENY, per this block's explicit bias.
+//   - "git rev-parse" (kept, see GIT_REV_PARSE below) and NODE_VERSION are
+//     the only two commands taking a repo/programmatic input that survive,
+//     specifically because official docs describe no hook/filter/pager/
+//     credential-helper involvement for either.
 // ---------------------------------------------------------------------------
 
 const SAFE_MATCHERS = [
   { id: 'PWD', test: (t) => t.length === 1 && t[0].raw === 'pwd' },
+  { id: 'NODE_VERSION', test: (t) => t.length === 2 && t[0].raw === 'node' && t[1].raw === '--version' },
   {
-    id: 'GIT_STATUS',
-    test: (t) =>
-      (t.length === 2 && t[0].raw === 'git' && t[1].raw === 'status') ||
-      (t.length === 3 && t[0].raw === 'git' && t[1].raw === 'status' && t[2].raw === '--short'),
-  },
-  {
-    id: 'GIT_DIFF',
-    test: (t) =>
-      t[0]?.raw === 'git' &&
-      t[1]?.raw === 'diff' &&
-      (t.length === 2 || (t.length === 3 && ['--check', '--stat', '--name-only'].includes(t[2].raw))),
-  },
-  {
-    id: 'GIT_LOG_SHOW_REVPARSE',
+    id: 'GIT_REV_PARSE',
+    // Plumbing only: parses/resolves a revision locally. No documented
+    // pager, hook, filter, textconv, or credential-helper involvement,
+    // unlike log/show/status/diff/branch/ls-remote (all removed above).
     test: (t) => {
-      if (t[0]?.raw !== 'git') return false;
-      if (!['log', 'show', 'rev-parse'].includes(t[1]?.raw)) return false;
-      if (t.length < 3) return false; // bare "git log"/"git show" with no ref is ambiguous scope — require an explicit arg
+      if (t[0]?.raw !== 'git' || t[1]?.raw !== 'rev-parse') return false;
+      if (t.length < 3) return false; // bare "git rev-parse" with no ref is ambiguous scope — require an explicit arg
       return t.slice(2).every(
         (tok) =>
           !tok.quoted &&
           (GIT_REF_FLAG_TOKENS.has(tok.raw) || (!tok.raw.startsWith('-') && GIT_REF_TOKEN_PATTERN.test(tok.raw))),
       );
     },
-  },
-  {
-    id: 'GIT_BRANCH_SHOW_CURRENT',
-    test: (t) => t.length === 3 && t[0].raw === 'git' && t[1].raw === 'branch' && t[2].raw === '--show-current',
-  },
-  {
-    id: 'GIT_LS_REMOTE',
-    test: (t) =>
-      t.length === 4 &&
-      t[0].raw === 'git' &&
-      t[1].raw === 'ls-remote' &&
-      t[2].raw === 'origin' &&
-      !t[3].quoted &&
-      /^refs\/heads\/[A-Za-z0-9._/-]+$/.test(t[3].raw),
-  },
-  { id: 'NODE_VERSION', test: (t) => t.length === 2 && t[0].raw === 'node' && t[1].raw === '--version' },
-  {
-    id: 'NODE_TEST',
-    test: (t) => t.length === 3 && t[0].raw === 'node' && t[1].raw === '--test' && !t[2].quoted && isSafeTestPath(t[2].raw),
-  },
-  { id: 'FLUTTER_ANALYZE', test: (t) => t.length === 2 && t[0].raw === 'flutter' && t[1].raw === 'analyze' },
-  { id: 'FLUTTER_TEST', test: (t) => t.length === 2 && t[0].raw === 'flutter' && t[1].raw === 'test' },
-  { id: 'NPM_TEST', test: (t) => t.length === 2 && t[0].raw === 'npm' && t[1].raw === 'test' },
-  { id: 'NPM_RUN_BUILD', test: (t) => t.length === 3 && t[0].raw === 'npm' && t[1].raw === 'run' && t[2].raw === 'build' },
-  {
-    id: 'GIT_ADD',
-    // Global primitive only — the guard has no notion of a task's
-    // allowed_paths. Fine-grained path-scope enforcement is the
-    // runner/queue/auditor's job (see tools/night-agent/README.md), not
-    // this hook's. Autonomous execution remains DISABLED in V1 regardless.
-    test: (t) => t.length >= 3 && t[0].raw === 'git' && t[1].raw === 'add' && t.slice(2).every((tok) => !tok.quoted && isSafeAddPath(tok.raw)),
-  },
-  {
-    id: 'GIT_COMMIT_M',
-    // Single-quoted ONLY (R2) — double-quoted messages are never allowed,
-    // regardless of content, because double quotes permit shell
-    // variable/command expansion in every shell this could plausibly run
-    // under (`"$SECRET"`, `"$(cat file)"`, `` "`whoami`" ``). Restricting
-    // to single quotes is a categorical fix, not a per-pattern denylist —
-    // combined with the content charset below (belt-and-suspenders even
-    // though single quotes already block shell expansion), it closes the
-    // whole "commit message as an exfiltration channel" finding.
-    test: (t) =>
-      t.length === 4 &&
-      t[0].raw === 'git' &&
-      t[1].raw === 'commit' &&
-      t[2].raw === '-m' &&
-      t[3].quoted &&
-      t[3].quoteChar === "'" &&
-      typeof t[3].content === 'string' &&
-      t[3].content.length > 0 &&
-      SAFE_COMMIT_MESSAGE_CHARSET.test(t[3].content),
   },
 ];
 
@@ -337,14 +289,14 @@ export function classifyCommand(command) {
     };
   }
 
-  // The safe allowlist is checked FIRST and is authoritative: it is a
-  // small, precise, closed set of exact command shapes, so a match here is
-  // never in doubt. "Known-dangerous" below is only ever consulted for
-  // commands that did NOT match the allowlist, purely to produce a more
-  // specific denial reason than generic UNCLASSIFIABLE_COMMAND — e.g. so
-  // "git branch --show-current" (an explicit safe shape) is never shadowed
-  // by the broader "git branch ... is dangerous" family that exists to
-  // catch `git branch -D`.
+  // The safe allowlist is checked FIRST and is authoritative (section 21 of
+  // the NIGHT-V1-A-R3 contract): shell structural hazards (chaining,
+  // indirection, quoting ambiguity, all above) are eliminated before this
+  // point, so a SAFE_MATCHERS match here is never in doubt. "Known-
+  // dangerous" below is only ever consulted for commands that did NOT match
+  // the allowlist, purely to produce a more specific denial reason than
+  // generic UNCLASSIFIABLE_COMMAND — being a safe-matcher *candidate* never
+  // lets a command skip the structural gates above it.
   for (const { id, test } of SAFE_MATCHERS) {
     if (test(tokens)) {
       return { decision: 'allow', reason: `matched known-safe command family ${id}`, family: id };
@@ -374,6 +326,11 @@ export function classifyCommand(command) {
   };
 }
 
+// Current built-in file-mutating tool names (R3), confirmed against
+// code.claude.com/docs/en/tools-reference.md — not invented. All three are
+// always denied in Night Mode: see evaluate() below.
+const FILE_MUTATING_TOOLS = new Set(['Write', 'Edit', 'NotebookEdit']);
+
 /**
  * Evaluate a full PreToolUse hook input object per the official schema.
  * Pure function — no I/O, no process access — so it can be unit tested
@@ -402,13 +359,30 @@ export function evaluate(hookInput, nightModeActive) {
     };
   }
 
-  if (hookInput.tool_name !== 'Bash') {
-    // Only Bash is in scope for this guard (matcher: "Bash" in settings.json).
-    // Any other tool_name reaching this code is unexpected; fail closed.
+  // R3: file-mutating built-in tools (confirmed current names, per
+  // code.claude.com/docs/en/tools-reference.md) are always denied in Night
+  // Mode — path-scoped enforcement (a task's allowed_paths) does not exist
+  // yet anywhere in this codebase, so there is no way to tell "an edit
+  // inside this task's declared scope" from "an edit anywhere." The reason
+  // is a fixed, generic family string; tool_input (file_path, content,
+  // notebook cell data, etc.) is never read or echoed here.
+  if (FILE_MUTATING_TOOLS.has(hookInput.tool_name)) {
     return {
       active: true,
       decision: 'deny',
-      reason: `UNCLASSIFIABLE_COMMAND: unexpected tool_name "${String(hookInput.tool_name)}" for a Bash-matched hook`,
+      reason: 'NIGHT_FILE_MUTATION_NOT_YET_SCOPED: file-mutating tools are denied in Night Mode until path-scoped enforcement exists',
+      family: 'NIGHT_FILE_MUTATION_NOT_YET_SCOPED',
+    };
+  }
+
+  if (hookInput.tool_name !== 'Bash') {
+    // Any tool_name that is neither Bash nor a known file-mutating tool is
+    // unexpected for this guard's registered matchers; fail closed rather
+    // than silently allow an unrecognized tool through.
+    return {
+      active: true,
+      decision: 'deny',
+      reason: `UNCLASSIFIABLE_COMMAND: unexpected tool_name "${String(hookInput.tool_name)}" for this hook`,
       family: 'UNCLASSIFIABLE_COMMAND',
     };
   }
@@ -430,12 +404,17 @@ async function readStdin() {
 }
 
 function denyAndExit(reason) {
-  // Exit code 2 is the documented unconditional PreToolUse block (R1/R2
-  // re-confirmed against code.claude.com/docs/en/hooks.md): it blocks
-  // regardless of any JSON "allow", and the reason shown is read from the
-  // JSON stdout "reason" first, falling back to stderr if JSON is absent —
-  // both channels are written here so the reason surfaces either way,
-  // rather than depending on exactly one of them.
+  // Exit code 2 is the documented unconditional PreToolUse block. R3
+  // re-verified this directly against current code.claude.com/docs/en/
+  // hooks.md text (not memory): "exit 2 blocks whether or not you print
+  // JSON... Claude Code still reads any valid JSON output on stdout,"
+  // and "the blocking message is the reason from your JSON's blocking
+  // decision when it makes one, and your stderr text otherwise." So JSON
+  // stdout IS read on exit 2 (first priority) with stderr as the documented
+  // fallback — both channels are written here so the reason surfaces
+  // either way. (A later, unverified claim asserted the opposite — that
+  // stdout/JSON is ignored on exit 2 — but that contradicts the quoted
+  // current docs, so it was not implemented; see SAFETY.md.)
   //
   // `reason` is ALWAYS a fixed, generic, pre-written string identifying the
   // decision family (e.g. "UNCLASSIFIABLE_COMMAND: ...") — never the raw
