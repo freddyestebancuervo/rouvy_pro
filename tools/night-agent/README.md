@@ -1,0 +1,55 @@
+# tools/night-agent
+
+Local tooling for the Korixa Night Agent. See `CLAUDE.md` and
+`.claude/overnight/` (POLICY.md, SAFETY.md, GIT_POLICY.md) for the full
+contract this code implements. This directory has no npm dependencies —
+Node built-ins only.
+
+## Status
+
+```
+EXECUTION_ENGINE = DISABLED_IN_V1_A
+```
+
+Nothing in this directory spawns `claude`, pushes, opens a PR, or mutates
+any file outside of `git add`/`git commit` performed by a human or by an
+explicitly authorized block. `runner.mjs` is validate/dry-run only. A real
+execution engine is a distinct, future, separately-authorized change
+(`NIGHT-V1-B` and beyond) — its addition should not require rewriting
+`queue.mjs` or the shape of `runner.mjs`'s modes, only adding a new one.
+
+## Files
+
+- **`queue.mjs`** — pure functions over a parsed task-queue object (see
+  `.claude/overnight/TASK_QUEUE.example.json` for the schema): structural
+  validation, dependency-cycle detection, `allowed_paths` conflict
+  detection, GREEN-task selection, and per-task executability
+  classification. No file I/O, no `child_process`, no Claude invocation —
+  safe to unit test directly.
+- **`runner.mjs`** — the CLI entrypoint. Reads a queue file and runs one of:
+  - `--validate` — schema/cycle/path-conflict checks only.
+  - `--dry-run` (default) — validation, plus a printed execution plan
+    (which task would run next); nothing is executed or changed.
+  - `--self-test` — runs against a hardcoded in-memory fixture, touching no
+    files on disk at all.
+- **`test/`** — `node:test` suites for the guard, the queue library, and
+  the runner's CLI surface.
+
+## Usage
+
+```
+node tools/night-agent/runner.mjs --self-test
+node tools/night-agent/runner.mjs --queue .claude/overnight/TASK_QUEUE.example.json --validate
+node tools/night-agent/runner.mjs --queue .claude/overnight/TASK_QUEUE.example.json --dry-run
+node --test tools/night-agent/test/*.test.mjs
+```
+
+## Relationship to the guard
+
+`.claude/hooks/night-guard.mjs` is registered as a `PreToolUse` hook in
+`.claude/settings.json` and is dormant unless `KORIXA_NIGHT_MODE=1` is set
+in the environment that launched Claude Code. It is a global safety net
+against a fixed list of dangerous command families (push, force-reset,
+Production infra mutation, etc.) — it is not aware of any individual
+task's `allowed_paths`/`forbidden_paths`. Enforcing those belongs to the
+queue/runner layer (and, once it exists, the Auditor), not to the guard.

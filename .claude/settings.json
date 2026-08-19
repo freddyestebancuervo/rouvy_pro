@@ -3,5 +3,18 @@
     "allow": [
       "Bash(echo \"EXIT CODE: $?\")"
     ]
+  },
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node .claude/hooks/night-guard.mjs"
+          }
+        ]
+      }
+    ]
   }
 }
