@@ -121,7 +121,7 @@ jobs:
 
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
-          node-version: '20'
+          node-version: '24'
 
       - uses: actions/setup-java@b6effb05e454b25005698d916606bdc6ffcbf961 # v5.7.0
         with:
@@ -205,10 +205,63 @@ jobs:
 
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
-          node-version: '20'
+          node-version: '24'
 
-      - name: Instalar dependencias
-        run: npm install
+      - name: Instalar dependencias (reproducible, engine-strict)
+        env:
+          NPM_CONFIG_ENGINE_STRICT: "true"
+        run: npm ci
+
+      - name: Verificar runtime Node 24 (assertion estructurada, no confiar solo en setup-node)
+        run: |
+          ACTUAL_NODE_VERSION="$(node --version)"
+          echo "ACTUAL_NODE_VERSION=$ACTUAL_NODE_VERSION"
+          if [[ "$ACTUAL_NODE_VERSION" != v24.* ]]; then
+            echo "::error::Runtime Node no es major 24: $ACTUAL_NODE_VERSION"
+            exit 1
+          fi
+          echo "NODE24_RUNTIME_ASSERTION=PASS"
+
+      - name: Auditoría de seguridad runtime (npm audit --omit=dev, fail-closed en HIGH/CRITICAL)
+        run: |
+          set +e
+          npm audit --omit=dev --json > audit_output.json
+          set -e
+
+          node -e "
+            const fs = require('fs');
+            let data;
+            try {
+              data = JSON.parse(fs.readFileSync('audit_output.json', 'utf8'));
+            } catch (err) {
+              console.error('::error::npm audit no devolvió JSON válido: ' + err.message);
+              process.exit(1);
+            }
+
+            const vulns = data && data.metadata && data.metadata.vulnerabilities;
+            if (!vulns || typeof vulns.high !== 'number' || typeof vulns.critical !== 'number') {
+              console.error('::error::metadata.vulnerabilities ausente o con campos high/critical inválidos');
+              process.exit(1);
+            }
+
+            console.log('RUNTIME_AUDIT_TOTAL=' + vulns.total);
+            console.log('RUNTIME_AUDIT_LOW=' + vulns.low);
+            console.log('RUNTIME_AUDIT_MODERATE=' + vulns.moderate);
+            console.log('RUNTIME_AUDIT_HIGH=' + vulns.high);
+            console.log('RUNTIME_AUDIT_CRITICAL=' + vulns.critical);
+
+            if (vulns.critical > 0) {
+              console.error('::error::RUNTIME_SECURITY_GATE=FAIL — ' + vulns.critical + ' vulnerabilidad(es) CRITICAL en dependencias de producción.');
+              process.exit(1);
+            }
+            if (vulns.high > 0) {
+              console.error('::error::RUNTIME_SECURITY_GATE=FAIL — ' + vulns.high + ' vulnerabilidad(es) HIGH en dependencias de producción.');
+              process.exit(1);
+            }
+
+            console.log('RUNTIME_SECURITY_GATE=PASS');
+          "
+          rm -f audit_output.json
 
       - name: Generar par de claves JWT (efímero, solo para este job)
         run: |
