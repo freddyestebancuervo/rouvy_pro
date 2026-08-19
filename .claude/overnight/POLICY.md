@@ -87,12 +87,43 @@ Any state -> SESSION_HALT   (global safety/integrity problem only)
 
 ## GREEN operations (conceptual, future runner capability)
 
-Reading the repo, searching files, editing within a task's declared
-`allowed_paths`, creating/running bounded tests, running static analysis,
-building locally, inspecting `git diff`/`status`/`log`, creating local
-commits on the task's dedicated night branch, fixing failing tests within
-retry budget, generating local reports, and creating temporary files only
-under approved runtime/temp paths.
+Reading the repo within a task's declared `read_paths`, editing within its
+declared `allowed_paths`, fixing failing tests within retry budget,
+generating local reports, and creating temporary files only under approved
+runtime/temp paths.
 
 A task's `allowed_paths` is the only source of truth for what it may write —
-there is no generic "edit anything" permission, ever.
+there is no generic "edit anything" permission, ever. As of NIGHT-V1-B,
+autonomous Git writes (`git add`/`git commit`/`git push`) are explicitly
+NOT part of GREEN operations — see `SAFETY.md`'s "no autonomous Git writer"
+note. A controlled Git writer is a distinct, future, separately-authorized
+change.
+
+## NIGHT-V1-B: task schema additions
+
+A GREEN task's contract (`.claude/overnight/TASK_QUEUE.example.json`'s
+schema, enforced by `tools/night-agent/queue.mjs`) was extended with:
+
+- `enabled` (boolean, required on every task): an explicit per-task gate —
+  `risk: GREEN` and `status: READY` alone are no longer sufficient for a
+  task to be selected; `enabled` must also be `true`.
+- `read_paths` (array, required): the task's read-only scope, independent
+  of `allowed_paths` — a task may need to read more than it may write.
+- `verification_commands` (array, may be empty): a closed set of
+  verification "families" (`NODE_TEST`, `NODE_VERSION`, `PWD`) the
+  controller can map to safe argv — never a raw shell string.
+- `max_turns` (positive integer, ceiling 40): bounds a future Claude
+  child's own turn count.
+
+## Checkpoint states (a SEPARATE, execution-attempt-level state machine)
+
+`tools/night-agent/checkpoint.mjs` defines its own state set — `PENDING`,
+`RUNNING`, `VERIFYING`, `PASS`, `RETRY`, `HOLD` — for tracking a single
+execution *attempt* of a task. This is deliberately distinct from the
+task-level state machine above (which has `BLOCKED`/`SKIPPED`/
+`SESSION_HALT` instead of `PENDING`/`VERIFYING`): a task's queue state
+describes its place in the overall queue; a checkpoint describes the
+progress of one attempt at running it. A checkpoint claiming `RUNNING` is
+never assumed to still be running after a runner restart with no live
+reference to that process — it becomes `HOLD_STALE_SESSION` instead (see
+`resolveResumeState`). Neither state machine silently maps onto the other.

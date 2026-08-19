@@ -1,9 +1,11 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
-import { readFileSync } from 'node:fs';
+import { readFileSync, mkdtempSync, mkdirSync, writeFileSync, rmSync, symlinkSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { evaluate, classifyCommand, tokenize, normalize } from '../../../.claude/hooks/night-guard.mjs';
+import { evaluate, classifyCommand, tokenize, normalize, isValidActivePolicy } from '../../../.claude/hooks/night-guard.mjs';
 
 const GUARD_PATH = fileURLToPath(new URL('../../../.claude/hooks/night-guard.mjs', import.meta.url));
 
@@ -439,68 +441,268 @@ test('evaluate() allows a safe command through the full hook input shape', () =>
 // enforcement exists (sections 22-25).
 // ---------------------------------------------------------------------------
 
-test('evaluate() denies Write in Night Mode with the NIGHT_FILE_MUTATION_NOT_YET_SCOPED family', () => {
+// ---------------------------------------------------------------------------
+// NIGHT-V1-B: task-scoped Write/Edit/Read/Glob/Grep (sections 13-14).
+// Synthetic temp repos throughout (same pattern as path-safety.test.mjs) —
+// never the real repository. `makeSyntheticRepoWithPolicy` builds a
+// throwaway {tempRoot}/repo directory plus a matching, already-validated
+// active policy object; tests pass that policy directly as evaluate()'s
+// third argument (evaluate() itself stays pure/I/O-free — see its doc
+// comment).
+// ---------------------------------------------------------------------------
+
+function makeSyntheticRepoWithPolicy(t, { allowedPaths = [], readPaths = [], existingFiles = [] } = {}) {
+  const tempRoot = mkdtempSync(path.join(tmpdir(), 'korixa-night-guard-'));
+  const repoRoot = path.join(tempRoot, 'repo');
+  mkdirSync(repoRoot, { recursive: true });
+  for (const relFile of existingFiles) {
+    const abs = path.join(repoRoot, relFile);
+    mkdirSync(path.dirname(abs), { recursive: true });
+    writeFileSync(abs, 'x');
+  }
+  t.after(() => rmSync(tempRoot, { recursive: true, force: true }));
+  const policy = {
+    version: 1,
+    task_id: 'test-task',
+    repo_root: repoRoot,
+    base_sha: 'a'.repeat(40),
+    read_paths: readPaths,
+    allowed_paths: allowedPaths,
+    created_at: '2026-01-01T00:00:00.000Z',
+    nonce: 'test-nonce-value',
+  };
+  return { repoRoot, policy };
+}
+
+test('evaluate() denies Write with no active policy present (policy absent -> deny)', () => {
   const input = hookInput(undefined, 'Write');
-  input.tool_input = { file_path: 'tools/night-agent/example.txt', content: 'synthetic' };
-  const result = evaluate(input, true);
+  input.tool_input = { file_path: 'src/example.txt', content: 'synthetic' };
+  const result = evaluate(input, true, null);
   assert.equal(result.decision, 'deny');
   assert.equal(result.family, 'NIGHT_FILE_MUTATION_NOT_YET_SCOPED');
 });
 
-test('evaluate() denies Edit in Night Mode with the NIGHT_FILE_MUTATION_NOT_YET_SCOPED family', () => {
+test('evaluate() denies Edit with no active policy present', () => {
   const input = hookInput(undefined, 'Edit');
-  input.tool_input = { file_path: 'tools/night-agent/example.txt', old_string: 'a', new_string: 'b' };
-  const result = evaluate(input, true);
+  input.tool_input = { file_path: 'src/example.txt', old_string: 'a', new_string: 'b' };
+  const result = evaluate(input, true, null);
   assert.equal(result.decision, 'deny');
   assert.equal(result.family, 'NIGHT_FILE_MUTATION_NOT_YET_SCOPED');
 });
 
-test('evaluate() denies NotebookEdit in Night Mode with the NIGHT_FILE_MUTATION_NOT_YET_SCOPED family', () => {
-  const input = hookInput(undefined, 'NotebookEdit');
-  input.tool_input = { file_path: 'notebook.ipynb', notebook_edit: { cells: [] } };
-  const result = evaluate(input, true);
-  assert.equal(result.decision, 'deny');
-  assert.equal(result.family, 'NIGHT_FILE_MUTATION_NOT_YET_SCOPED');
-});
-
-test('evaluate() denial for Write never echoes file_path or content', () => {
-  const secretFixture = 'SUPER_SECRET_TOKEN_abc123XYZ';
+test('evaluate() allows Write when the target is inside the active policy allowed_paths', (t) => {
+  const { policy } = makeSyntheticRepoWithPolicy(t, { allowedPaths: ['src/**'] });
   const input = hookInput(undefined, 'Write');
-  input.tool_input = { file_path: `tools/night-agent/${secretFixture}.txt`, content: secretFixture };
-  const result = evaluate(input, true);
+  input.tool_input = { file_path: `${policy.repo_root}/src/example.ts`, content: 'x' };
+  const result = evaluate(input, true, policy);
+  assert.equal(result.decision, 'allow');
+  assert.equal(result.family, 'NIGHT_FILE_MUTATION_ALLOWED');
+});
+
+test('evaluate() denies Write when the target is outside the active policy allowed_paths', (t) => {
+  const { policy } = makeSyntheticRepoWithPolicy(t, { allowedPaths: ['src/**'] });
+  const input = hookInput(undefined, 'Write');
+  input.tool_input = { file_path: `${policy.repo_root}/other/example.ts`, content: 'x' };
+  const result = evaluate(input, true, policy);
+  assert.equal(result.decision, 'deny');
+  assert.equal(result.family, 'NIGHT_FILE_MUTATION_DENIED');
+});
+
+test('evaluate() allows Edit when the target is inside allowed_paths (same gate as Write)', (t) => {
+  const { policy } = makeSyntheticRepoWithPolicy(t, { allowedPaths: ['src/**'], existingFiles: ['src/example.ts'] });
+  const input = hookInput(undefined, 'Edit');
+  input.tool_input = { file_path: `${policy.repo_root}/src/example.ts`, old_string: 'a', new_string: 'b' };
+  const result = evaluate(input, true, policy);
+  assert.equal(result.decision, 'allow');
+});
+
+test('evaluate() denies Write to a critical control-plane path even when the policy allowed_paths would cover it', (t) => {
+  const { policy } = makeSyntheticRepoWithPolicy(t, { allowedPaths: ['.claude/**'] });
+  const input = hookInput(undefined, 'Write');
+  input.tool_input = { file_path: `${policy.repo_root}/.claude/settings.json`, content: 'x' };
+  const result = evaluate(input, true, policy);
+  assert.equal(result.decision, 'deny');
+  assert.ok(result.reason.includes('CRITICAL_CONTROL_PLANE_PATH'));
+});
+
+test('evaluate() denies Write with a missing file_path', (t) => {
+  const { policy } = makeSyntheticRepoWithPolicy(t, { allowedPaths: ['src/**'] });
+  const input = hookInput(undefined, 'Write');
+  input.tool_input = { content: 'x' };
+  const result = evaluate(input, true, policy);
+  assert.equal(result.decision, 'deny');
+});
+
+test('evaluate() denial for Write never echoes file_path or content', (t) => {
+  const secretFixture = 'SUPER_SECRET_TOKEN_abc123XYZ';
+  const { policy } = makeSyntheticRepoWithPolicy(t, { allowedPaths: ['src/**'] });
+  const input = hookInput(undefined, 'Write');
+  input.tool_input = { file_path: `${policy.repo_root}/other/${secretFixture}.txt`, content: secretFixture };
+  const result = evaluate(input, true, policy);
   assert.equal(result.decision, 'deny');
   assert.ok(!result.reason.includes(secretFixture), 'reason must not contain file_path or content');
 });
 
-test('dormant mode: Write/Edit/NotebookEdit remain unevaluated (no decision) when Night Mode is inactive', () => {
-  for (const toolName of ['Write', 'Edit', 'NotebookEdit']) {
+test('evaluate() denies Read with no active policy present', () => {
+  const input = hookInput(undefined, 'Read');
+  input.tool_input = { file_path: 'src/example.txt' };
+  const result = evaluate(input, true, null);
+  assert.equal(result.decision, 'deny');
+  assert.equal(result.family, 'NIGHT_READ_NOT_YET_SCOPED');
+});
+
+test('evaluate() allows Read when the target exists and is inside read_paths', (t) => {
+  const { policy } = makeSyntheticRepoWithPolicy(t, { readPaths: ['docs/**'], existingFiles: ['docs/readme.txt'] });
+  const input = hookInput(undefined, 'Read');
+  input.tool_input = { file_path: `${policy.repo_root}/docs/readme.txt` };
+  const result = evaluate(input, true, policy);
+  assert.equal(result.decision, 'allow');
+  assert.equal(result.family, 'NIGHT_READ_ALLOWED');
+});
+
+test('evaluate() denies Read when the target is outside read_paths, even though it exists', (t) => {
+  const { policy } = makeSyntheticRepoWithPolicy(t, { readPaths: ['docs/**'], existingFiles: ['public/file.txt'] });
+  const input = hookInput(undefined, 'Read');
+  input.tool_input = { file_path: `${policy.repo_root}/public/file.txt` };
+  const result = evaluate(input, true, policy);
+  assert.equal(result.decision, 'deny');
+  assert.equal(result.family, 'NIGHT_READ_DENIED');
+});
+
+test('evaluate() denies Read when the target does not exist', (t) => {
+  const { policy } = makeSyntheticRepoWithPolicy(t, { readPaths: ['docs/**'] });
+  const input = hookInput(undefined, 'Read');
+  input.tool_input = { file_path: `${policy.repo_root}/docs/does-not-exist.txt` };
+  const result = evaluate(input, true, policy);
+  assert.equal(result.decision, 'deny');
+});
+
+test('evaluate() denies Glob/Grep with no active policy present', () => {
+  for (const toolName of ['Glob', 'Grep']) {
     const input = hookInput(undefined, toolName);
-    input.tool_input = { file_path: 'x' };
-    const result = evaluate(input, false);
-    assert.equal(result.active, false);
-    assert.equal(result.decision, null);
+    input.tool_input = { path: 'src' };
+    const result = evaluate(input, true, null);
+    assert.equal(result.decision, 'deny', toolName);
+    assert.equal(result.family, 'NIGHT_READ_NOT_YET_SCOPED', toolName);
+  }
+});
+
+test('evaluate() denies Glob/Grep when the path is omitted, even with a valid policy', (t) => {
+  const { policy } = makeSyntheticRepoWithPolicy(t, { readPaths: ['src/**'], existingFiles: ['src/a.ts'] });
+  for (const toolName of ['Glob', 'Grep']) {
+    const input = hookInput(undefined, toolName);
+    input.tool_input = { pattern: '*.ts' }; // no "path" field
+    const result = evaluate(input, true, policy);
+    assert.equal(result.decision, 'deny', toolName);
+    assert.equal(result.family, 'NIGHT_GLOB_GREP_PATH_REQUIRED', toolName);
+  }
+});
+
+test('evaluate() allows Glob/Grep with an explicit path inside read_paths', (t) => {
+  const { policy } = makeSyntheticRepoWithPolicy(t, { readPaths: ['src/**'], existingFiles: ['src/a.ts'] });
+  for (const toolName of ['Glob', 'Grep']) {
+    const input = hookInput(undefined, toolName);
+    input.tool_input = { path: `${policy.repo_root}/src/a.ts` };
+    const result = evaluate(input, true, policy);
+    assert.equal(result.decision, 'allow', toolName);
+  }
+});
+
+test('evaluate() denies Glob/Grep with an explicit path outside read_paths', (t) => {
+  const { policy } = makeSyntheticRepoWithPolicy(t, { readPaths: ['src/**'], existingFiles: ['other/a.ts'] });
+  for (const toolName of ['Glob', 'Grep']) {
+    const input = hookInput(undefined, toolName);
+    input.tool_input = { path: `${policy.repo_root}/other/a.ts` };
+    const result = evaluate(input, true, policy);
+    assert.equal(result.decision, 'deny', toolName);
+  }
+});
+
+test('evaluate() denies NotebookEdit unconditionally, even with a valid policy that would cover the target', (t) => {
+  const { policy } = makeSyntheticRepoWithPolicy(t, { allowedPaths: ['**'] });
+  const input = hookInput(undefined, 'NotebookEdit');
+  input.tool_input = { file_path: `${policy.repo_root}/notebook.ipynb`, notebook_edit: { cells: [] } };
+  const result = evaluate(input, true, policy);
+  assert.equal(result.decision, 'deny');
+  assert.equal(result.family, 'NIGHT_NOTEBOOK_EDIT_NOT_SUPPORTED');
+});
+
+test('dormant mode: Write/Edit/Read/Glob/Grep/NotebookEdit remain unevaluated (no decision) when Night Mode is inactive, even with a policy passed', (t) => {
+  const { policy } = makeSyntheticRepoWithPolicy(t, { allowedPaths: ['src/**'], readPaths: ['src/**'] });
+  for (const toolName of ['Write', 'Edit', 'Read', 'Glob', 'Grep', 'NotebookEdit']) {
+    const input = hookInput(undefined, toolName);
+    input.tool_input = { file_path: 'x', path: 'x' };
+    const result = evaluate(input, false, policy);
+    assert.equal(result.active, false, toolName);
+    assert.equal(result.decision, null, toolName);
   }
 });
 
 // ---------------------------------------------------------------------------
-// R4: tool-surface catch-all (sections 7-12, 31-33). Verified current
-// command-execution-capable tools (PowerShell, Monitor, Agent — per
-// code.claude.com/docs/en/tools-reference.md, checked 2026-08-19) and an
-// entirely made-up future tool name all deny the same way: R4's policy is
-// ANY_NON_BASH_TOOL_DENIED, not a list of specifically-recognized dangerous
-// names — a tool this file has never heard of is denied by construction.
+// isValidActivePolicy — pure structural validation (section 13).
+// ---------------------------------------------------------------------------
+
+function validPolicyFixture(overrides = {}) {
+  return {
+    version: 1,
+    task_id: 'task-a',
+    repo_root: '/fake/repo',
+    base_sha: 'a'.repeat(40),
+    read_paths: ['src/**'],
+    allowed_paths: ['src/**'],
+    created_at: '2026-01-01T00:00:00.000Z',
+    nonce: 'abc123',
+    ...overrides,
+  };
+}
+
+test('isValidActivePolicy accepts a well-formed policy', () => {
+  assert.equal(isValidActivePolicy(validPolicyFixture()), true);
+});
+
+test('isValidActivePolicy rejects an extra/unexpected field (e.g. a smuggled secret)', () => {
+  assert.equal(isValidActivePolicy({ ...validPolicyFixture(), secret_token: 'x' }), false);
+});
+
+test('isValidActivePolicy rejects a missing required field', () => {
+  const { nonce, ...withoutNonce } = validPolicyFixture();
+  assert.equal(isValidActivePolicy(withoutNonce), false);
+});
+
+test('isValidActivePolicy rejects a non-1 version', () => {
+  assert.equal(isValidActivePolicy({ ...validPolicyFixture(), version: 2 }), false);
+});
+
+test('isValidActivePolicy rejects non-array read_paths/allowed_paths', () => {
+  assert.equal(isValidActivePolicy({ ...validPolicyFixture(), read_paths: 'src/**' }), false);
+  assert.equal(isValidActivePolicy({ ...validPolicyFixture(), allowed_paths: 'src/**' }), false);
+});
+
+test('isValidActivePolicy rejects null and non-object input', () => {
+  assert.equal(isValidActivePolicy(null), false);
+  assert.equal(isValidActivePolicy('not an object'), false);
+  assert.equal(isValidActivePolicy(42), false);
+});
+
+// ---------------------------------------------------------------------------
+// Tool-surface catch-all (sections 7-12, 31-33 of R4; reconfirmed B).
+// Verified current command-execution-capable tools (PowerShell, Monitor,
+// Agent — per code.claude.com/docs/en/tools-reference.md, checked
+// 2026-08-19) and an entirely made-up future tool name all deny the same
+// way: the policy is ANY_NON_BASH_TOOL_DENIED, not a list of specifically-
+// recognized dangerous names — a tool this file has never heard of is
+// denied by construction.
 // ---------------------------------------------------------------------------
 
 // CURRENT_BUILTIN_TOOL_NAMES relevant to this security boundary, verified
 // 2026-08-19 against code.claude.com/docs/en/tools-reference.md (fetched
 // directly, not from memory) — hardcoded here only for the security-
-// relevant subset (command-execution-capable and file-mutating tools), not
-// the full tool inventory, and only to name explicit regression tests.
-// Guard correctness does NOT depend on this list being exhaustive or
-// staying current: evaluate()'s catch-all denies any tool_name !== 'Bash'
-// unconditionally, named here or not.
+// relevant subset (command-execution-capable tools), not the full tool
+// inventory, and only to name explicit regression tests. Guard correctness
+// does NOT depend on this list being exhaustive or staying current:
+// evaluate()'s catch-all denies any unrecognized tool_name unconditionally,
+// named here or not.
 const CURRENT_COMMAND_EXECUTION_TOOL_NAMES = ['PowerShell', 'Monitor', 'Agent'];
-const CURRENT_FILE_MUTATION_TOOL_NAMES = ['Write', 'Edit', 'NotebookEdit'];
 
 for (const toolName of CURRENT_COMMAND_EXECUTION_TOOL_NAMES) {
   test(`evaluate() denies the current command-execution-capable tool "${toolName}" in Night Mode`, () => {
@@ -509,16 +711,6 @@ for (const toolName of CURRENT_COMMAND_EXECUTION_TOOL_NAMES) {
     const result = evaluate(input, true);
     assert.equal(result.decision, 'deny');
     assert.equal(result.family, 'NIGHT_TOOL_NOT_YET_SCOPED');
-  });
-}
-
-for (const toolName of CURRENT_FILE_MUTATION_TOOL_NAMES) {
-  test(`evaluate() denies the current file-mutation tool "${toolName}" in Night Mode`, () => {
-    const input = hookInput(undefined, toolName);
-    input.tool_input = { file_path: 'irrelevant' };
-    const result = evaluate(input, true);
-    assert.equal(result.decision, 'deny');
-    assert.equal(result.family, 'NIGHT_FILE_MUTATION_NOT_YET_SCOPED');
   });
 }
 
@@ -756,6 +948,137 @@ function runGuard(command, toolName = 'Bash') {
   });
 }
 
+// ---------------------------------------------------------------------------
+// NIGHT-V1-B: real end-to-end policy subprocess tests. A REAL policy JSON
+// file is written to a synthetic temp repo and pointed to via
+// KORIXA_NIGHT_POLICY_FILE — proving the actual loadActivePolicy() I/O path
+// (env var -> file read -> JSON.parse -> isValidActivePolicy), not just the
+// in-process evaluate() tests above which take an already-parsed policy.
+// ---------------------------------------------------------------------------
+
+function runGuardWithPolicy(toolInput, toolName, policyFileOrNull) {
+  const input = JSON.stringify({
+    session_id: 'subprocess-policy-test',
+    cwd: '/repo',
+    hook_event_name: 'PreToolUse',
+    tool_name: toolName,
+    tool_input: toolInput,
+  });
+  const env = { ...process.env, KORIXA_NIGHT_MODE: '1' };
+  if (policyFileOrNull) env.KORIXA_NIGHT_POLICY_FILE = policyFileOrNull;
+  else delete env.KORIXA_NIGHT_POLICY_FILE;
+  return spawnSync(process.execPath, [GUARD_PATH], { input, encoding: 'utf8', env });
+}
+
+function writeSyntheticPolicyRepo(t, { allowedPaths = [], readPaths = [], existingFiles = [] } = {}) {
+  const tempRoot = mkdtempSync(path.join(tmpdir(), 'korixa-night-guard-policy-'));
+  const repoRoot = path.join(tempRoot, 'repo');
+  mkdirSync(repoRoot, { recursive: true });
+  for (const relFile of existingFiles) {
+    const abs = path.join(repoRoot, relFile);
+    mkdirSync(path.dirname(abs), { recursive: true });
+    writeFileSync(abs, 'x');
+  }
+  const policy = {
+    version: 1,
+    task_id: 'subprocess-test-task',
+    repo_root: repoRoot,
+    base_sha: 'a'.repeat(40),
+    read_paths: readPaths,
+    allowed_paths: allowedPaths,
+    created_at: '2026-01-01T00:00:00.000Z',
+    nonce: 'subprocess-test-nonce',
+  };
+  const policyFile = path.join(tempRoot, 'policy.json');
+  writeFileSync(policyFile, JSON.stringify(policy));
+  t.after(() => rmSync(tempRoot, { recursive: true, force: true }));
+  return { repoRoot, policyFile };
+}
+
+test('hook subprocess: policy env var absent -> Write denies (real loadActivePolicy path)', () => {
+  const result = runGuardWithPolicy({ file_path: 'src/example.txt', content: 'x' }, 'Write', null);
+  assert.equal(result.status, 2);
+  assert.ok(result.stderr.includes('NIGHT_FILE_MUTATION_NOT_YET_SCOPED'));
+});
+
+test('hook subprocess: policy file malformed JSON -> Write denies', (t) => {
+  const tempRoot = mkdtempSync(path.join(tmpdir(), 'korixa-night-guard-policy-'));
+  t.after(() => rmSync(tempRoot, { recursive: true, force: true }));
+  const policyFile = path.join(tempRoot, 'policy.json');
+  writeFileSync(policyFile, 'not-json{{{');
+  const result = runGuardWithPolicy({ file_path: 'src/example.txt', content: 'x' }, 'Write', policyFile);
+  assert.equal(result.status, 2);
+  assert.ok(result.stderr.includes('NIGHT_FILE_MUTATION_NOT_YET_SCOPED'));
+});
+
+test('hook subprocess: policy file with an extra field fails validation -> Write denies', (t) => {
+  const tempRoot = mkdtempSync(path.join(tmpdir(), 'korixa-night-guard-policy-'));
+  const repoRoot = path.join(tempRoot, 'repo');
+  mkdirSync(repoRoot, { recursive: true });
+  t.after(() => rmSync(tempRoot, { recursive: true, force: true }));
+  const policyFile = path.join(tempRoot, 'policy.json');
+  writeFileSync(policyFile, JSON.stringify({
+    version: 1, task_id: 't', repo_root: repoRoot, base_sha: 'a'.repeat(40),
+    read_paths: [], allowed_paths: ['src/**'], created_at: 'x', nonce: 'n',
+    secret_token: 'SHOULD_NOT_BE_HERE',
+  }));
+  const result = runGuardWithPolicy({ file_path: `${repoRoot}/src/example.txt`, content: 'x' }, 'Write', policyFile);
+  assert.equal(result.status, 2);
+});
+
+test('hook subprocess: policy file missing on disk (env var points nowhere) -> Write denies', () => {
+  const result = runGuardWithPolicy({ file_path: 'src/example.txt', content: 'x' }, 'Write', 'C:/definitely/does/not/exist/policy.json');
+  assert.equal(result.status, 2);
+  assert.ok(result.stderr.includes('NIGHT_FILE_MUTATION_NOT_YET_SCOPED'));
+});
+
+test('hook subprocess: valid policy + target inside allowed_paths -> Write allows (exit 0)', (t) => {
+  const { repoRoot, policyFile } = writeSyntheticPolicyRepo(t, { allowedPaths: ['src/**'] });
+  const result = runGuardWithPolicy({ file_path: `${repoRoot}/src/example.ts`, content: 'x' }, 'Write', policyFile);
+  assert.equal(result.status, 0);
+  assert.equal(result.stdout, '');
+  assert.equal(result.stderr, '');
+});
+
+test('hook subprocess: valid policy + target outside allowed_paths -> Write denies (exit 2)', (t) => {
+  const { repoRoot, policyFile } = writeSyntheticPolicyRepo(t, { allowedPaths: ['src/**'] });
+  const result = runGuardWithPolicy({ file_path: `${repoRoot}/other/example.ts`, content: 'x' }, 'Write', policyFile);
+  assert.equal(result.status, 2);
+  assert.ok(result.stderr.includes('NIGHT_FILE_MUTATION_DENIED'));
+});
+
+test('hook subprocess: valid policy + existing target inside read_paths -> Read allows (exit 0)', (t) => {
+  const { repoRoot, policyFile } = writeSyntheticPolicyRepo(t, { readPaths: ['docs/**'], existingFiles: ['docs/readme.txt'] });
+  const result = runGuardWithPolicy({ file_path: `${repoRoot}/docs/readme.txt` }, 'Read', policyFile);
+  assert.equal(result.status, 0);
+});
+
+test('hook subprocess: valid policy + a symlink/junction escape target -> Write denies (exit 2), real filesystem proof', (t) => {
+  const { repoRoot, policyFile } = writeSyntheticPolicyRepo(t, { allowedPaths: ['backend/**'] });
+  const outsideDir = mkdtempSync(path.join(tmpdir(), 'korixa-night-guard-outside-'));
+  t.after(() => rmSync(outsideDir, { recursive: true, force: true }));
+  mkdirSync(path.join(repoRoot, 'backend'), { recursive: true });
+  const linkPath = path.join(repoRoot, 'backend', 'link');
+  let created = true;
+  try {
+    symlinkSync(outsideDir, linkPath, 'junction');
+  } catch {
+    created = false;
+  }
+  if (!created) return; // SKIP_PLATFORM_CAPABILITY — junction creation denied by this platform/session
+  const result = runGuardWithPolicy({ file_path: `${repoRoot}/backend/link/escaped.txt`, content: 'x' }, 'Write', policyFile);
+  assert.equal(result.status, 2);
+});
+
+test('hook subprocess: a synthetic secret-bearing file_path never appears in stdout or stderr, even when denied for being outside scope', (t) => {
+  const secretFixture = 'SUPER_SECRET_TOKEN_abc123XYZ';
+  const { repoRoot, policyFile } = writeSyntheticPolicyRepo(t, { allowedPaths: ['src/**'] });
+  const result = runGuardWithPolicy({ file_path: `${repoRoot}/other/${secretFixture}.txt`, content: secretFixture }, 'Write', policyFile);
+  assert.equal(result.status, 2);
+  assert.ok(!result.stdout.includes(secretFixture));
+  assert.ok(!result.stderr.includes(secretFixture));
+});
+
 test('hook subprocess: a SAFE command exits 0', () => {
   const result = runGuard('git rev-parse HEAD');
   assert.equal(result.status, 0);
@@ -812,24 +1135,30 @@ test('hook subprocess: malformed JSON on stdin exits 2', () => {
 // modified; the guard denies before any such thing could happen.
 // ---------------------------------------------------------------------------
 
-test('hook subprocess: Write in Night Mode exits 2 with NIGHT_FILE_MUTATION_NOT_YET_SCOPED on stderr and structured JSON on stdout', () => {
-  const result = runGuard({ file_path: 'tools/night-agent/example.txt', content: 'synthetic' }, 'Write');
+// NIGHT-V1-B SECURITY TIGHTENING (section 27): stdout is now empty on
+// deny — see denyAndExit's comment in night-guard.mjs. Renamed/rewritten,
+// not deleted, per section 39.
+test('hook subprocess: Write with no active policy exits 2 with NIGHT_FILE_MUTATION_NOT_YET_SCOPED on stderr, empty stdout', () => {
+  const result = runGuard({ file_path: 'src/example.txt', content: 'synthetic' }, 'Write');
   assert.equal(result.status, 2);
   assert.ok(result.stderr.includes('NIGHT_FILE_MUTATION_NOT_YET_SCOPED'));
-  const parsed = JSON.parse(result.stdout);
-  assert.equal(parsed.hookSpecificOutput.permissionDecisionReason.includes('NIGHT_FILE_MUTATION_NOT_YET_SCOPED'), true);
+  assert.equal(result.stdout, '');
 });
 
-test('hook subprocess: Edit in Night Mode exits 2 with NIGHT_FILE_MUTATION_NOT_YET_SCOPED', () => {
-  const result = runGuard({ file_path: 'tools/night-agent/example.txt', old_string: 'a', new_string: 'b' }, 'Edit');
+test('hook subprocess: Edit with no active policy exits 2 with NIGHT_FILE_MUTATION_NOT_YET_SCOPED', () => {
+  const result = runGuard({ file_path: 'src/example.txt', old_string: 'a', new_string: 'b' }, 'Edit');
   assert.equal(result.status, 2);
   assert.ok(result.stderr.includes('NIGHT_FILE_MUTATION_NOT_YET_SCOPED'));
 });
 
-test('hook subprocess: NotebookEdit in Night Mode exits 2 with NIGHT_FILE_MUTATION_NOT_YET_SCOPED', () => {
+// NIGHT-V1-B SECURITY TIGHTENING (section 14): NotebookEdit now gets its
+// own dedicated family (NIGHT_NOTEBOOK_EDIT_NOT_SUPPORTED) rather than
+// being folded into the generic file-mutation family — same decision
+// (deny), clearer reason. Renamed, not deleted, per section 39.
+test('hook subprocess: NotebookEdit in Night Mode exits 2 with NIGHT_NOTEBOOK_EDIT_NOT_SUPPORTED', () => {
   const result = runGuard({ file_path: 'notebook.ipynb', notebook_edit: { cells: [] } }, 'NotebookEdit');
   assert.equal(result.status, 2);
-  assert.ok(result.stderr.includes('NIGHT_FILE_MUTATION_NOT_YET_SCOPED'));
+  assert.ok(result.stderr.includes('NIGHT_NOTEBOOK_EDIT_NOT_SUPPORTED'));
 });
 
 test('hook subprocess: Write/Edit/NotebookEdit remain dormant (exit 0, no output) without KORIXA_NIGHT_MODE', () => {
@@ -851,32 +1180,23 @@ test('hook subprocess: Write/Edit/NotebookEdit remain dormant (exit 0, no output
 });
 
 // ---------------------------------------------------------------------------
-// R3 stdout/stderr contract (section 26-28, re-verified against current
-// official docs — see night-guard.mjs's denyAndExit comment for the exact
-// quoted text). IMPORTANT: the R3 instructions asserted that stdout/JSON is
-// ignored on exit 2 and only stderr matters. That assertion was checked
-// against the current official Claude Code hooks documentation as part of
-// this block's own mandatory research step (section 5) and found to be
-// INCORRECT: the docs explicitly state "Claude Code still reads any valid
-// JSON output on stdout" on exit 2, with the JSON reason taking priority
-// and stderr as the documented fallback. These tests were therefore NOT
-// rewritten to expect empty stdout — doing so would encode a disproven
-// claim as a regression test. Both channels are asserted, matching what
-// R2 already implemented correctly.
+// NIGHT-V1-B stdout/stderr contract (section 27, "deferred exit-2 fix").
+// R1-R4 wrote both a structured JSON reason to stdout AND a generic reason
+// to stderr on deny — both are documented, valid channels per current
+// official docs (confirmed via two independent research passes: JSON on
+// stdout IS read and takes priority when present; stderr is the documented
+// fallback). B deliberately drops the JSON-stdout channel anyway: not
+// because it was wrong, but so the security-relevant contract
+// (EXIT_CODE_2 + STDERR) never has ANY dependency on stdout content,
+// matching the exact pattern shown in the official docs' own exit-2
+// example. Rewritten (not deleted) to assert the new, narrower contract —
+// see section 39.
 // ---------------------------------------------------------------------------
 
-test('hook subprocess: deny output carries structured JSON on stdout with a deny decision (confirmed current: JSON IS read on exit 2)', () => {
+test('hook subprocess: deny output has EMPTY stdout and a generic reason on stderr (B: stdout dropped from the deny path)', () => {
   const result = runGuard('git push origin main');
   assert.equal(result.status, 2);
-  const parsed = JSON.parse(result.stdout);
-  assert.equal(parsed.hookSpecificOutput.hookEventName, 'PreToolUse');
-  assert.equal(parsed.hookSpecificOutput.permissionDecision, 'deny');
-  assert.ok(parsed.hookSpecificOutput.permissionDecisionReason.length > 0);
-});
-
-test('hook subprocess: deny output also carries a generic reason on stderr (the documented fallback channel)', () => {
-  const result = runGuard('git push origin main');
-  assert.equal(result.status, 2);
+  assert.equal(result.stdout, '');
   assert.ok(result.stderr.includes('NIGHT_GUARD_DENY:'));
 });
 

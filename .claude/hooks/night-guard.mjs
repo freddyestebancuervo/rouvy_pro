@@ -1,21 +1,21 @@
 #!/usr/bin/env node
 import { pathToFileURL } from 'node:url';
+import { readFileSync } from 'node:fs';
+import { isSafeWriteTarget, isSafeReadTarget, toRepoRelativePath } from '../../tools/night-agent/path-safety.mjs';
 
-// Korixa Night Agent — PreToolUse guard (NIGHT-V1-A-R3 hardened model).
+// Korixa Night Agent — PreToolUse guard (NIGHT-V1-B task-scoped model).
 //
 // Dormant (no-op, exit 0, no output) unless KORIXA_NIGHT_MODE=1 in the
 // environment of the process that launched Claude Code — see CLAUDE.md and
 // .claude/overnight/SAFETY.md.
 //
-// SECURITY MODEL — DEFAULT_DENY ALLOWLIST (R1), now covering DELEGATED
-// EXECUTION (R3): This guard does NOT try to enumerate every possible
-// dangerous command. It enumerates a small, closed set of KNOWN-SAFE
-// command shapes; anything not an exact match — unknown commands, ambiguous
-// quoting, shell indirection, chaining, redirection, or a Bash command that
-// itself delegates execution to a Git hook / attribute filter / npm-or-
-// build-tool script (SAFE_OUTER_COMMAND != SAFE_EXECUTION_TREE, see
-// SAFETY.md) — is denied. There is no "no deny pattern matched -> allow"
-// path anywhere in this file, for Bash or for file-mutating tools:
+// SECURITY MODEL — DEFAULT_DENY ALLOWLIST (R1), covering DELEGATED
+// EXECUTION (R3) and now TASK-SCOPED FILE ACCESS (B): This guard does NOT
+// try to enumerate every possible dangerous command. For Bash it enumerates
+// a small, closed set of KNOWN-SAFE command shapes; for file-touching tools
+// it enforces a per-task ACTIVE POLICY (allowed_paths/read_paths) rather
+// than a fixed allowlist. There is no "no deny condition matched -> allow"
+// path anywhere in this file:
 //
 //   for Bash (tool_name === "Bash"):
 //     1. malformed/empty input                 -> DENY
@@ -28,34 +28,47 @@ import { pathToFileURL } from 'node:url';
 //        unambiguously (unbalanced, or a quote
 //        concatenated against adjacent text)     -> DENY
 //     5. matches a known-SAFE command shape      -> ALLOW (a 3-entry
-//                                                  allowlist as of R3 — see
+//                                                  allowlist — see
 //                                                  SAFE_MATCHERS below)
 //     6. known-dangerous command family          -> DENY (explicit, for a
 //                                                  clearer audit reason)
 //     7. anything else                           -> DENY (UNCLASSIFIABLE_COMMAND)
 //
-//   for a file-mutating tool (Write, Edit, NotebookEdit — the current
-//   built-in tool names per code.claude.com/docs/en/tools-reference.md):
-//     always DENY (NIGHT_FILE_MUTATION_NOT_YET_SCOPED) — no task-scoped
-//     enforcement exists yet anywhere in this codebase.
+//   for Write / Edit (B): DENY unless a valid ACTIVE POLICY is present
+//     (see loadActivePolicy below) AND the target path resolves inside the
+//     repo, is not a critical control-plane path, is within the policy's
+//     allowed_paths, has no symlink/junction escape, and passes realpath
+//     containment (tools/night-agent/path-safety.mjs's isSafeWriteTarget).
 //
-//   for any other tool_name: DENY (UNCLASSIFIABLE_COMMAND) — an unexpected
-//   tool reaching this guard fails closed rather than passing through.
+//   for Read (B): same shape, checked against the policy's read_paths via
+//     isSafeReadTarget — the target must also already exist.
 //
-// Stdin/stdout/exit-code contract follows the official Claude Code
-// PreToolUse hook schema (code.claude.com/docs/en/hooks.md, re-verified for
-// R3): stdin is a JSON object with at least {session_id, cwd,
-// hook_event_name, tool_name, tool_input}. To block, this hook exits with
-// code 2 — the documented unconditional-block mechanism, which overrides
-// any JSON "allow" — and writes the reason to BOTH channels the docs
-// describe as read on exit 2: a structured JSON "reason" on stdout (read
-// first) and the same generic reason on stderr (the documented fallback if
-// the JSON is absent/invalid). To allow, it exits 0 with no output, leaving
-// the normal permission flow untouched.
+//   for Glob / Grep (B): DENY unless a valid active policy is present AND
+//     an explicit path is given (an omitted path is always denied) AND
+//     that path is within read_paths via isSafeReadTarget.
+//
+//   for NotebookEdit: always DENY (NIGHT_NOTEBOOK_EDIT_NOT_SUPPORTED) —
+//     out of scope for V1-B regardless of any policy.
+//
+//   for any other tool_name (PowerShell, Monitor, Agent, MCP tools, or
+//   anything not yet named): DENY (NIGHT_TOOL_NOT_YET_SCOPED) — a closed
+//   policy, not an enumeration; a brand-new future tool is denied by the
+//   same rule with no code change required.
+//
+// Stdin/exit-code contract follows the official Claude Code PreToolUse hook
+// schema (code.claude.com/docs/en/hooks.md): stdin is a JSON object with at
+// least {session_id, cwd, hook_event_name, tool_name, tool_input}. To
+// block, this hook exits with code 2 — the documented unconditional-block
+// mechanism — and writes ONLY a generic, fixed reason to stderr (B: the
+// JSON-stdout channel used in R1-R4 is dropped; see denyAndExit below for
+// the reasoning — blocking has never depended on it, and this matches the
+// exact pattern shown in the official docs' own exit-2 example). To allow,
+// it exits 0 with no output, leaving the normal permission flow untouched.
 //
 // The classification logic is exported as pure functions so tests can
-// evaluate it directly as data, without spawning a subprocess or executing
-// any real command.
+// evaluate it directly as data, without spawning a subprocess, touching the
+// filesystem beyond what a caller explicitly passes in, or executing any
+// real command.
 
 // ---------------------------------------------------------------------------
 // Known-dangerous command families — checked before the safe allowlist
@@ -346,27 +359,153 @@ export function classifyCommand(command) {
   };
 }
 
-// Current built-in file-mutating tool names (R3, reconfirmed R4), per
-// code.claude.com/docs/en/tools-reference.md — not invented. Denied in
-// Night Mode with a more specific reason than the generic catch-all below,
-// purely for a clearer audit message. Removing this Set would not weaken
-// security: evaluate()'s R4 catch-all denies any non-Bash tool_name
-// regardless, so Write/Edit/NotebookEdit are already covered by that
-// policy even without being named here — see ANY_NON_BASH_TOOL_DENIED
-// below and SAFETY.md's "R4: tool-surface catch-all" section.
-const FILE_MUTATING_TOOLS = new Set(['Write', 'Edit', 'NotebookEdit']);
+// NIGHT-V1-B: the ACTIVE POLICY field set (section 13). Exactly these
+// fields, nothing else — a policy file with a stray field (e.g. a
+// smuggled-in credential) fails validation outright. Loaded from
+// KORIXA_NIGHT_POLICY_FILE (an absolute path, set by the controller — see
+// tools/night-agent/runner.mjs), never from a hardcoded location.
+const POLICY_ALLOWED_FIELDS = new Set([
+  'version', 'task_id', 'repo_root', 'base_sha', 'read_paths', 'allowed_paths', 'created_at', 'nonce',
+]);
+
+/**
+ * Validate an active-policy object's structural shape. Pure — takes an
+ * already-parsed object, never touches the filesystem.
+ * @param {any} policy
+ * @returns {boolean}
+ */
+export function isValidActivePolicy(policy) {
+  if (policy === null || typeof policy !== 'object') return false;
+  const keys = Object.keys(policy);
+  if (keys.length !== POLICY_ALLOWED_FIELDS.size) return false;
+  if (!keys.every((k) => POLICY_ALLOWED_FIELDS.has(k))) return false;
+  if (policy.version !== 1) return false;
+  if (typeof policy.task_id !== 'string' || policy.task_id.length === 0) return false;
+  if (typeof policy.repo_root !== 'string' || policy.repo_root.length === 0) return false;
+  if (typeof policy.base_sha !== 'string' || policy.base_sha.length === 0) return false;
+  if (!Array.isArray(policy.read_paths) || !policy.read_paths.every((p) => typeof p === 'string')) return false;
+  if (!Array.isArray(policy.allowed_paths) || !policy.allowed_paths.every((p) => typeof p === 'string')) return false;
+  if (typeof policy.created_at !== 'string' || policy.created_at.length === 0) return false;
+  if (typeof policy.nonce !== 'string' || policy.nonce.length === 0) return false;
+  return true;
+}
+
+// NotebookEdit is out of scope entirely in V1-B (section 14) — denied with
+// its own reason for a clearer audit message, distinct from the generic
+// catch-all. Kept as its own check (not folded into the catch-all) purely
+// for that clarity; the security outcome is identical either way.
+const NOTEBOOK_EDIT_TOOL_NAME = 'NotebookEdit';
+
+function denyResult(family, detail) {
+  return { active: true, decision: 'deny', reason: `${family}: ${detail}`, family };
+}
+
+function allowResult(family, detail) {
+  return { active: true, decision: 'allow', reason: `${family}: ${detail}`, family };
+}
+
+/**
+ * Task-scoped Write/Edit evaluation (section 13-14): denies unless a valid
+ * active policy is present and the resolved target passes every
+ * path-safety.mjs gate (canonical form, not critical, within
+ * allowed_paths, no symlink escape, realpath-contained).
+ * @param {any} hookInput
+ * @param {object|null} policy
+ * @returns {{decision: 'allow'|'deny', reason: string, family: string}}
+ */
+function evaluateFileMutation(hookInput, policy) {
+  if (!policy) {
+    return denyResult('NIGHT_FILE_MUTATION_NOT_YET_SCOPED', 'no valid active policy present for this Night Mode session');
+  }
+  const filePath = hookInput.tool_input && hookInput.tool_input.file_path;
+  if (typeof filePath !== 'string' || filePath.length === 0) {
+    return denyResult('NIGHT_FILE_MUTATION_DENIED', 'missing or invalid file_path');
+  }
+  const relPath = toRepoRelativePath(policy.repo_root, filePath);
+  if (relPath === null || relPath.length === 0) {
+    return denyResult('NIGHT_FILE_MUTATION_DENIED', 'target does not resolve to a path inside the repo root');
+  }
+  const result = isSafeWriteTarget({ repoRoot: policy.repo_root, targetRelPath: relPath, allowedPaths: policy.allowed_paths });
+  if (!result.safe) {
+    return denyResult('NIGHT_FILE_MUTATION_DENIED', result.reason);
+  }
+  return allowResult('NIGHT_FILE_MUTATION_ALLOWED', 'target is within the active policy allowed_paths and passed every path-safety gate');
+}
+
+/**
+ * Task-scoped Read evaluation (section 14): same shape as file mutation,
+ * checked against read_paths via isSafeReadTarget (which also requires the
+ * target to already exist).
+ * @param {any} hookInput
+ * @param {object|null} policy
+ * @returns {{decision: 'allow'|'deny', reason: string, family: string}}
+ */
+function evaluateRead(hookInput, policy) {
+  if (!policy) {
+    return denyResult('NIGHT_READ_NOT_YET_SCOPED', 'no valid active policy present for this Night Mode session');
+  }
+  const filePath = hookInput.tool_input && hookInput.tool_input.file_path;
+  if (typeof filePath !== 'string' || filePath.length === 0) {
+    return denyResult('NIGHT_READ_DENIED', 'missing or invalid file_path');
+  }
+  const relPath = toRepoRelativePath(policy.repo_root, filePath);
+  if (relPath === null || relPath.length === 0) {
+    return denyResult('NIGHT_READ_DENIED', 'target does not resolve to a path inside the repo root');
+  }
+  const result = isSafeReadTarget({ repoRoot: policy.repo_root, targetRelPath: relPath, readPaths: policy.read_paths });
+  if (!result.safe) {
+    return denyResult('NIGHT_READ_DENIED', result.reason);
+  }
+  return allowResult('NIGHT_READ_ALLOWED', 'target is within the active policy read_paths and passed every path-safety gate');
+}
+
+/**
+ * Task-scoped Glob/Grep evaluation (section 14): requires an EXPLICIT path
+ * in tool_input — an omitted path is always denied, never treated as
+ * "search everywhere." The current exact tool_input field name for
+ * Glob/Grep's path argument was not independently re-verified in this
+ * block; `path` is used as the conventional/most-likely name. If the real
+ * field name differs, this degrades to always-deny for that tool (still
+ * safe — a false negative on functionality, never a false positive on
+ * safety) rather than guessing at an unverified schema.
+ * @param {any} hookInput
+ * @param {object|null} policy
+ * @returns {{decision: 'allow'|'deny', reason: string, family: string}}
+ */
+function evaluateGlobGrep(hookInput, policy) {
+  if (!policy) {
+    return denyResult('NIGHT_READ_NOT_YET_SCOPED', 'no valid active policy present for this Night Mode session');
+  }
+  const targetPath = hookInput.tool_input && hookInput.tool_input.path;
+  if (typeof targetPath !== 'string' || targetPath.length === 0) {
+    return denyResult('NIGHT_GLOB_GREP_PATH_REQUIRED', 'an explicit path within read_paths is required; an omitted path is always denied');
+  }
+  const relPath = toRepoRelativePath(policy.repo_root, targetPath);
+  if (relPath === null || relPath.length === 0) {
+    return denyResult('NIGHT_GLOB_GREP_DENIED', 'path does not resolve to a location inside the repo root');
+  }
+  const result = isSafeReadTarget({ repoRoot: policy.repo_root, targetRelPath: relPath, readPaths: policy.read_paths });
+  if (!result.safe) {
+    return denyResult('NIGHT_GLOB_GREP_DENIED', result.reason);
+  }
+  return allowResult('NIGHT_GLOB_GREP_ALLOWED', 'path is within the active policy read_paths and passed every path-safety gate');
+}
 
 /**
  * Evaluate a full PreToolUse hook input object per the official schema.
  * Pure function — no I/O, no process access — so it can be unit tested
- * directly. `nightModeActive` is passed in explicitly rather than read from
- * `process.env` here, so tests do not need to fork a process to exercise
- * both dormant and active branches.
+ * directly. `nightModeActive` and `activePolicy` are passed in explicitly
+ * rather than read from `process.env`/the filesystem here, so tests do not
+ * need to fork a process or create real policy files to exercise every
+ * branch. `activePolicy` must already be the parsed-and-validated policy
+ * object (or `null` if none is present/valid) — see loadActivePolicy below
+ * for the real (I/O-performing) loader used by main().
  * @param {any} hookInput
  * @param {boolean} nightModeActive
+ * @param {object|null} [activePolicy]
  * @returns {{active: boolean, decision: 'allow'|'deny'|null, reason: string|null, family: string|null}}
  */
-export function evaluate(hookInput, nightModeActive) {
+export function evaluate(hookInput, nightModeActive, activePolicy = null) {
   if (!nightModeActive) {
     return { active: false, decision: null, reason: null, family: null };
   }
@@ -384,44 +523,41 @@ export function evaluate(hookInput, nightModeActive) {
     };
   }
 
-  // R3: file-mutating built-in tools (confirmed current names, per
-  // code.claude.com/docs/en/tools-reference.md) are always denied in Night
-  // Mode — path-scoped enforcement (a task's allowed_paths) does not exist
-  // yet anywhere in this codebase, so there is no way to tell "an edit
-  // inside this task's declared scope" from "an edit anywhere." The reason
-  // is a fixed, generic family string; tool_input (file_path, content,
-  // notebook cell data, etc.) is never read or echoed here.
-  if (FILE_MUTATING_TOOLS.has(hookInput.tool_name)) {
-    return {
-      active: true,
-      decision: 'deny',
-      reason: 'NIGHT_FILE_MUTATION_NOT_YET_SCOPED: file-mutating tools are denied in Night Mode until path-scoped enforcement exists',
-      family: 'NIGHT_FILE_MUTATION_NOT_YET_SCOPED',
-    };
+  const toolName = hookInput.tool_name;
+
+  if (toolName === 'Bash') {
+    const command = hookInput.tool_input && hookInput.tool_input.command;
+    const result = classifyCommand(command);
+    return { active: true, decision: result.decision, reason: result.reason, family: result.family };
   }
 
-  if (hookInput.tool_name !== 'Bash') {
-    // R4 ANY_NON_BASH_TOOL_DENIED: the settings.json registration is now a
-    // single catch-all matcher ("*") covering every tool Claude Code can
-    // invoke — command-execution-capable ones (PowerShell, Monitor, Agent
-    // spawning a subagent that inherits Bash/PowerShell), file-mutating
-    // ones (Write, Edit, NotebookEdit), and anything not yet named or not
-    // invented yet. This is a closed policy, not an open enumeration: it
-    // denies by tool_name NOT being "Bash", never by matching a specific
-    // dangerous name. A brand-new future tool the guard has never heard of
-    // is denied by the same rule, with no code change required — see
-    // SAFETY.md's "R4: tool-surface catch-all" section.
-    return {
-      active: true,
-      decision: 'deny',
-      reason: 'NIGHT_TOOL_NOT_YET_SCOPED: only Bash (with its own narrow allowlist) is evaluated for possible allow in Night Mode; every other tool is denied',
-      family: 'NIGHT_TOOL_NOT_YET_SCOPED',
-    };
+  if (toolName === 'Write' || toolName === 'Edit') {
+    return { active: true, ...evaluateFileMutation(hookInput, activePolicy) };
   }
 
-  const command = hookInput.tool_input && hookInput.tool_input.command;
-  const result = classifyCommand(command);
-  return { active: true, decision: result.decision, reason: result.reason, family: result.family };
+  if (toolName === 'Read') {
+    return { active: true, ...evaluateRead(hookInput, activePolicy) };
+  }
+
+  if (toolName === 'Glob' || toolName === 'Grep') {
+    return { active: true, ...evaluateGlobGrep(hookInput, activePolicy) };
+  }
+
+  if (toolName === NOTEBOOK_EDIT_TOOL_NAME) {
+    return { active: true, ...denyResult('NIGHT_NOTEBOOK_EDIT_NOT_SUPPORTED', 'NotebookEdit is out of scope for Night Mode in V1-B') };
+  }
+
+  // ANY_NON_BASH_TOOL_DENIED: everything not explicitly handled above
+  // (PowerShell, Monitor, Agent, WebFetch, WebSearch, any MCP tool, or any
+  // tool this guard has never heard of) is denied by this single closed
+  // rule — never by matching a specific dangerous name. A brand-new future
+  // tool is denied automatically, with no code change required.
+  return {
+    active: true,
+    decision: 'deny',
+    reason: 'NIGHT_TOOL_NOT_YET_SCOPED: only Bash, Write, Edit, Read, Glob, and Grep are evaluated for possible allow in Night Mode; every other tool is denied',
+    family: 'NIGHT_TOOL_NOT_YET_SCOPED',
+  };
 }
 
 // ---------------------------------------------------------------------------
@@ -435,33 +571,52 @@ async function readStdin() {
   return Buffer.concat(chunks).toString('utf8');
 }
 
+/**
+ * Load and validate the active policy from KORIXA_NIGHT_POLICY_FILE (an
+ * absolute path set by the controller). Returns null on any failure —
+ * missing env var, missing/unreadable file, malformed JSON, or a policy
+ * that fails isValidActivePolicy — all treated identically by callers (no
+ * policy to trust), never as a partial/best-effort read. The only I/O in
+ * this file that reads a policy; evaluate() itself stays pure.
+ * @returns {object|null}
+ */
+function loadActivePolicy() {
+  const policyFile = process.env.KORIXA_NIGHT_POLICY_FILE;
+  if (typeof policyFile !== 'string' || policyFile.length === 0) return null;
+  let raw;
+  try {
+    raw = readFileSync(policyFile, 'utf8');
+  } catch {
+    return null;
+  }
+  let parsed;
+  try {
+    parsed = JSON.parse(raw);
+  } catch {
+    return null;
+  }
+  return isValidActivePolicy(parsed) ? parsed : null;
+}
+
 function denyAndExit(reason) {
-  // Exit code 2 is the documented unconditional PreToolUse block. R3
-  // re-verified this directly against current code.claude.com/docs/en/
-  // hooks.md text (not memory): "exit 2 blocks whether or not you print
-  // JSON... Claude Code still reads any valid JSON output on stdout,"
-  // and "the blocking message is the reason from your JSON's blocking
-  // decision when it makes one, and your stderr text otherwise." So JSON
-  // stdout IS read on exit 2 (first priority) with stderr as the documented
-  // fallback — both channels are written here so the reason surfaces
-  // either way. (A later, unverified claim asserted the opposite — that
-  // stdout/JSON is ignored on exit 2 — but that contradicts the quoted
-  // current docs, so it was not implemented; see SAFETY.md.)
+  // NIGHT-V1-B section 27: exit code 2 is the documented unconditional
+  // PreToolUse block, and blocking has never depended on JSON stdout being
+  // present or parsed — only the exit code itself. R1-R4 additionally wrote
+  // a structured JSON reason to stdout (also a documented, valid channel);
+  // B drops that channel and writes ONLY the generic reason to stderr,
+  // matching the exact pattern shown in the official docs' own exit-2
+  // example. This is a simplification, not a correction of something that
+  // was wrong — both forms remain valid per current docs — chosen so the
+  // security-relevant contract (EXIT_CODE_2 + STDERR) never has any
+  // dependency on stdout content at all.
   //
   // `reason` is ALWAYS a fixed, generic, pre-written string identifying the
   // decision family (e.g. "UNCLASSIFIABLE_COMMAND: ...") — never the raw
-  // command text. The command itself may contain a secret (a token in an
-  // env var reference, a connection string, a credential path); this
-  // function has no caller that passes it one, and must never be given one.
-  process.stdout.write(
-    JSON.stringify({
-      hookSpecificOutput: {
-        hookEventName: 'PreToolUse',
-        permissionDecision: 'deny',
-        permissionDecisionReason: reason,
-      },
-    }),
-  );
+  // command text, never tool_input (file_path/content/etc.), and never a
+  // dynamic `err.message` (section 28) — any of those could contain a
+  // secret (a token in an env var reference, a connection string, a
+  // credential path, or file content). No caller of this function passes
+  // it anything but a fixed string.
   process.stderr.write(`NIGHT_GUARD_DENY: ${reason}\n`);
   process.exit(2);
 }
@@ -490,7 +645,12 @@ async function main() {
       return;
     }
 
-    const result = evaluate(hookInput, true);
+    // Only Write/Edit/Read/Glob/Grep actually consult the policy; loading
+    // it unconditionally here (rather than per-tool inside evaluate) keeps
+    // evaluate() itself pure and I/O-free, per its own doc comment.
+    const activePolicy = loadActivePolicy();
+
+    const result = evaluate(hookInput, true, activePolicy);
     if (result.decision === 'deny') {
       denyAndExit(result.reason);
       return;
@@ -498,8 +658,12 @@ async function main() {
 
     // Allow: no decision emitted, normal permission flow proceeds.
     process.exit(0);
-  } catch (err) {
-    denyAndExit(`INTERNAL_GUARD_ERROR: ${err && err.message ? err.message : 'unknown error'} — failing closed`);
+  } catch {
+    // section 28: never include err.message (or any dynamic content) in
+    // hook output — it could contain a path, a stderr fragment, or worse.
+    // The exception is intentionally not bound to a variable here, so
+    // there is nothing dynamic available to leak even by mistake.
+    denyAndExit('INTERNAL_GUARD_ERROR: an unexpected internal error occurred — failing closed');
   }
 }
 

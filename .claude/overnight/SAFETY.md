@@ -287,6 +287,108 @@ A second independent audit found four gaps in the R1 model, all closed here:
   known-safe shape, it is denied as `UNCLASSIFIABLE_COMMAND` — see the
   "Guard model" section above and `.claude/hooks/night-guard.mjs`.
 
+## NIGHT-V1-B: controlled GREEN execution — task-scoped Write/Edit/Read
+
+R1-R4 built a purely DEFENSIVE foundation: every file-touching tool was
+denied unconditionally, because nothing in the codebase could tell "an edit
+inside this task's declared scope" from "an edit anywhere." B adds that
+missing piece — an **ACTIVE POLICY** file, and task-scoped enforcement in
+the guard — without enabling any real autonomous execution yet.
+
+**The active policy.** A future controller (`tools/night-agent/runner.mjs`,
+not yet wired to spawn anything real) would write a small JSON file
+*outside* the repository (`os.tmpdir()`, a random/unpredictable name) with
+exactly these fields: `version`, `task_id`, `repo_root`, `base_sha`,
+`read_paths`, `allowed_paths`, `created_at`, `nonce`. No secrets, no
+credentials, no prompt text. The child process is told where it is via two
+environment variables: `KORIXA_NIGHT_MODE=1` and
+`KORIXA_NIGHT_POLICY_FILE=<absolute path>`. The guard
+(`isValidActivePolicy` in `night-guard.mjs`) rejects a policy with even one
+unexpected field outright — a smuggled-in credential fails validation, it
+is never silently ignored and passed through.
+
+**Write / Edit**: denied unless a valid active policy is present AND the
+target resolves to a path inside the repo, is not a critical control-plane
+path, is within the policy's `allowed_paths`, has no symlink/junction
+escape, and passes filesystem realpath containment — see
+`tools/night-agent/path-safety.mjs`'s `isSafeWriteTarget`. No policy at all
+(the R1-R4 default) still denies everything, exactly as before.
+
+**Read**: same shape, checked against `read_paths` via `isSafeReadTarget`,
+which additionally requires the target to already exist.
+
+**Glob / Grep**: denied unless an EXPLICIT path is given (an omitted path
+is never treated as "search everywhere") and that path is within
+`read_paths`.
+
+**NotebookEdit**: denied unconditionally in V1-B, regardless of any policy
+— notebooks are out of scope.
+
+**Critical control-plane paths** (`.claude/**`, `tools/night-agent/**`,
+`.github/workflows/**`, `.git/**`, `.gitattributes`, `.gitmodules`,
+`package.json`, `package-lock.json`, `pubspec.yaml`, `pubspec.lock`) are
+never writable by an autonomous task, even if a task's `allowed_paths`
+would accidentally cover them — `tools/night-agent/queue.mjs`'s schema
+validation rejects such a task before it could ever run, and the guard
+checks the same rule independently as a second barrier.
+
+**Realpath containment and symlink/junction safety**
+(`tools/night-agent/path-safety.mjs`): a lexical path check alone cannot
+see a symlink or Windows junction redirecting a path outside the repo.
+`hasUnsafeSymlinkComponent` walks the existing path components looking for
+one, and `realpathContainment` independently confirms the target's (or its
+nearest existing ancestor's) real filesystem path resolves inside the
+repo's real path — two independent barriers, either of which alone would
+catch `repo/backend/link -> outside` where `link` is a symlink/junction.
+
+**Path canonicalization tightened further**: the R4 trailing-slash
+exception (`backend/`, kept only because `TASK_QUEUE.example.json` used
+it) is retired — the fixture was migrated to `backend/**` in this same
+block, so there is now exactly one canonical form. Windows reserved device
+names (`CON`, `PRN`, `AUX`, `NUL`, `COM1`-`COM9`, `LPT1`-`LPT9`, with or
+without an extension) are rejected as path segments.
+
+**Tool surface for a future autonomous child**: `Bash` is deliberately
+absent from the restricted tool set
+(`tools/night-agent/executor.mjs`'s `RESTRICTED_AUTONOMOUS_TOOLS` = `Read`,
+`Glob`, `Grep`, `Write`, `Edit`) — not merely denied by the guard, but never
+even offered to the child via the confirmed current `--tools` CLI flag
+(which restricts actual tool *availability*, unlike `--allowedTools`, which
+only pre-approves). Without a shell, the child cannot invoke
+`git`/`npm`/`flutter`/`gcloud`/`gh`/any script regardless of what the guard
+would otherwise classify. `--permission-mode dontAsk` denies anything not
+pre-approved without prompting; `--dangerously-skip-permissions` (and any
+`bypassPermissions` mode value) is scanned for and rejected in every
+generated argv before it would ever be spawned
+(`assertSafeArgvOrThrow`).
+
+**Exit-2 contract simplified further**: `denyAndExit` now writes ONLY a
+generic, fixed reason to stderr on deny — the R1-R4 structured-JSON-on-
+stdout channel is dropped. Both forms remain valid per current official
+docs (JSON-on-stdout is read and takes priority when present; stderr is
+the documented fallback) — this is not a correction of something wrong,
+just a simplification so the security-relevant contract
+(`EXIT_CODE_2` + `STDERR`) never has any dependency on stdout content at
+all, matching the exact pattern shown in the official docs' own exit-2
+example. Internal exceptions no longer include `err.message` (or any other
+dynamic content) in hook output, for the same reason a denial reason is
+always a fixed string: an internal error's message could itself contain a
+path, a stderr fragment, or worse.
+
+**`--execute-green` remains a real, but permanently stubbed, code path.**
+`tools/night-agent/runner.mjs`'s `runExecuteGreen` requires BOTH the
+`--execute-green` CLI flag AND `KORIXA_NIGHT_EXECUTION=1` in the
+environment — neither alone is sufficient. Even when both are satisfied,
+the actual execution step (`executeTaskFn`) defaults to a stub that
+returns `HOLD_NOT_IMPLEMENTED_IN_V1_B` and spawns nothing; a real
+implementation is a distinct, future, separately-authorized change.
+`CLAUDE_AGENT_RUNS = 0` for the entirety of this block.
+
+**No autonomous Git writer.** `git add`/`git commit`/`git push` remain
+denied in Night Mode exactly as R3 left them — B builds a SAFE EDIT ENGINE,
+not a publication mechanism. Even a fully successful (hypothetical) GREEN
+edit is never followed by an autonomous commit in this codebase today.
+
 ## Unlock path
 
 None of the above is unlocked by this file. A future version may explicitly

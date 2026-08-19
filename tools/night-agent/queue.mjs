@@ -1,9 +1,24 @@
 // Korixa Night Agent — task queue library.
 //
 // Pure functions only: no Claude invocation, no file mutation, no network,
-// no child_process, no filesystem resolution. Everything here takes a
-// parsed queue object (matching .claude/overnight/TASK_QUEUE.example.json's
-// schema) and returns data. Safe to unit test directly with node:test.
+// no child_process. Everything here takes a parsed queue object (matching
+// .claude/overnight/TASK_QUEUE.example.json's schema) and returns data.
+// Safe to unit test directly with node:test.
+//
+// NIGHT-V1-B: path-safety rules (canonical validation, case-folded overlap,
+// critical-path detection) moved to tools/night-agent/path-safety.mjs, the
+// single source of truth also used by night-guard.mjs — see path-safety.mjs
+// for the full rationale. Re-exported here for backward compatibility with
+// existing imports (`isRepoRelativePath`/`pathsOverlap` from this module).
+
+import {
+  isRepoRelativePath,
+  pathsOverlap,
+  isPathWithinScope,
+  isCriticalControlPlanePath,
+} from './path-safety.mjs';
+
+export { isRepoRelativePath, pathsOverlap };
 
 // Canonical task states (NIGHT-V1-A-R1): the only states any task may ever
 // be in. `DONE` and `IN_PROGRESS` are retired — they never appear here or
@@ -28,6 +43,15 @@ const VALID_SESSION_MODES = new Set(['dry-run']); // the only mode V1 knows
 
 const MAX_RETRIES_CEILING = 3;
 const MAX_SESSION_MINUTES_CEILING = 480; // POLICY.md V1 hard ceiling
+const MAX_TURNS_CEILING = 40; // NIGHT-V1-B: conservative ceiling — see POLICY.md
+
+// NIGHT-V1-B: the closed set of verification-command "families" a task may
+// request. Never a raw shell string — the controller maps a family (plus,
+// where relevant, a task-scoped target path) to a safe argv array itself
+// (see executor.mjs). This mirrors the guard's own tiny safe-command
+// surface deliberately: verification must never be a wider capability than
+// what a supervised session's own guard would allow.
+export const VALID_VERIFICATION_FAMILIES = new Set(['NODE_TEST', 'NODE_VERSION', 'PWD']);
 
 // TASK_QUEUE.example.json intentionally ships a synthetic, obviously-fake
 // base_sha so the fixture can never be mistaken for a real commit to build
@@ -47,148 +71,37 @@ function isValidBaseSha(value) {
   return typeof value === 'string' && (/^[0-9a-f]{40}$/i.test(value) || value === FIXTURE_BASE_SHA);
 }
 
-/**
- * A path is repo-relative-safe if it cannot escape the repository root and
- * cannot address an absolute filesystem location. This is a pure string
- * check — it never touches the filesystem — used to keep `allowed_paths`/
- * `forbidden_paths` entries from smuggling in a write target outside the
- * repo.
- * @param {unknown} value
- * @returns {boolean}
- */
-export function isRepoRelativePath(value) {
-  if (typeof value !== 'string' || value.length === 0) return false;
-  if (value !== value.trim()) return false; // R4: leading/trailing whitespace rejected
-  if (value.includes('\\')) return false; // no Windows separators
-  if (value.includes('\0')) return false; // NUL-like
-  // eslint-disable-next-line no-control-regex
-  if (/[\x00-\x1f\x7f]/.test(value)) return false; // R4: ASCII control characters
-  if (value.includes(':')) return false; // R4: colon — Windows drive-letter/ADS alias risk
-  if (value.startsWith('/')) return false; // POSIX absolute
-  if (value.includes('..')) return false; // any traversal segment, conservatively (also rejects a bare "..")
-  if (value === '.') return false; // R4: exact "." is not a valid scope
-
-  // Recognized global wildcards short-circuit here — no segments to validate.
-  if (value === '*' || value === '**' || value === '**/*') return true;
-
-  if (value.includes('*')) {
-    // Only a single recognized trailing "/**"/"/*" glob suffix is accepted
-    // (with no further "*" elsewhere) — anything more complex (e.g.
-    // "backend/**/secret/*.json") cannot be proven disjoint from another
-    // scope by the conservative exact/prefix/global model in pathsOverlap,
-    // so it is rejected here rather than silently risking a false
-    // "no conflict" — a queue that needs a glob this complex fails
-    // validation instead.
-    const isSimpleTrailingGlob =
-      (value.endsWith('/**') && !value.slice(0, -3).includes('*')) ||
-      (value.endsWith('/*') && !value.slice(0, -2).includes('*'));
-    if (!isSimpleTrailingGlob) return false;
-  }
-
-  // R4: reject non-canonical path forms — a scope should have exactly one
-  // string representation, so a future controlled writer can never see a
-  // different (unvalidated) spelling than the one policy was checked
-  // against. Trailing slash ("backend/") is the one deliberate exception:
-  // TASK_QUEUE.example.json (outside R4's authorized file scope) already
-  // uses it in forbidden_paths, and migrating the fixture is not
-  // authorized in this block — see SAFETY.md's "R4: path canonicalization"
-  // section for the explicit HOLD_SCOPE_EXPANSION reasoning.
-  let body = value;
-  if (body.endsWith('/**')) body = body.slice(0, -3);
-  else if (body.endsWith('/*')) body = body.slice(0, -2);
-  else if (body.endsWith('/')) body = body.slice(0, -1);
-
-  if (body.length === 0) return false; // e.g. "/", "/**", "/*" alone
-
-  for (const segment of body.split('/')) {
-    if (segment === '') return false; // R4: double slash ("backend//src")
-    if (segment === '.') return false; // R4: "." segment ("./backend", "backend/./src")
-    if (segment === '..') return false; // redundant with the substring check above, explicit for clarity
-    if (/\s$/.test(segment)) return false; // R4: Windows trailing-space alias risk
-    if (/\.$/.test(segment)) return false; // R4: Windows trailing-dot alias risk
-  }
-
-  return true;
+function isValidPathArray(value) {
+  return Array.isArray(value) && value.every((p) => typeof p === 'string');
 }
 
 /**
- * Reduce a path/glob entry to a comparable scope: an exact leaf path, or a
- * directory prefix (from a trailing `/**`, `/*`, `/`, or bare `*`). Used by
- * pathsOverlap to detect ancestor/glob containment, not just string
- * equality.
- * @param {string} rawValue
- * @returns {{type: 'exact'|'prefix'|'global', value?: string}}
- */
-function pathScope(rawValue) {
-  // R4: Windows runs a case-insensitive filesystem — "Backend" and
-  // "backend/src/main.ts" must be treated as potentially the same path for
-  // conflict-detection purposes, even though the repo's own convention is
-  // lowercase. Comparison is lowercased here (internal to pathScope, never
-  // exposed) so a case-differing pair still overlaps; the ORIGINAL casing
-  // is preserved everywhere else (findPathConflicts reports pathA/pathB as
-  // given, never the lowercased form) — this function only ever returns a
-  // boolean via pathsOverlap, so lowercasing here cannot leak into reports.
-  const value = rawValue.toLowerCase();
-  // "*", "**", and "**/*" address every repo-relative path — treat them as
-  // a distinct GLOBAL scope rather than falling through to the prefix
-  // branch below, where they would otherwise reduce to an empty-string
-  // prefix that (incorrectly) overlaps nothing.
-  if (value === '*' || value === '**' || value === '**/*') return { type: 'global' };
-  if (value.endsWith('/**')) return { type: 'prefix', value: value.slice(0, -3) };
-  if (value.endsWith('/*')) return { type: 'prefix', value: value.slice(0, -2) };
-  if (value.endsWith('/')) return { type: 'prefix', value: value.slice(0, -1) };
-  if (value.endsWith('*')) return { type: 'prefix', value: value.slice(0, -1) };
-  return { type: 'exact', value };
-}
-
-/**
- * Conservatively decide whether two path/glob entries could ever address
- * the same file: exact equality, one being an ancestor directory (via glob
- * or trailing slash) of the other, or either being a GLOBAL wildcard (a
- * bare "*", "**", or "**" + "/*") that by definition overlaps every path. When two
- * complex globs cannot be proven disjoint, this errs toward reporting a
- * conflict — false positive (over-cautious) is acceptable here; false
- * negative is not. Anything more complex than exact/prefix/global (e.g. a
- * mid-string wildcard) is rejected earlier, at schema validation, by
- * isRepoRelativePath — it never reaches this function.
- * @param {string} a
- * @param {string} b
+ * Validate one verification_commands entry against the closed family
+ * allowlist (section 24). NODE_TEST requires a `target` that is both a
+ * canonical repo-relative path and contained within the task's own
+ * allowed_paths/read_paths — a task cannot request verification of a path
+ * outside its own declared scope.
+ * @param {any} vc
+ * @param {any} task
  * @returns {boolean}
  */
-export function pathsOverlap(a, b) {
-  const sa = pathScope(a);
-  const sb = pathScope(b);
-
-  if (sa.type === 'global' || sb.type === 'global') return true;
-
-  // R3 fix: two EXACT-looking entries still need the same segment-boundary
-  // ancestor check as prefix/prefix below — "backend" and
-  // "backend/src/main.ts" are both `exact` scopes (neither ends in a glob
-  // suffix or trailing slash), so the R1/R2 code path here only checked
-  // literal equality and missed the ancestor relationship entirely. An
-  // exact path is always also a potential ancestor DIRECTORY of a deeper
-  // exact path — this is exactly the independently-audited bare-directory
-  // false negative. The `+ '/'` boundary is what correctly keeps
-  // "backend" from overlapping "backend2/file.ts" or "foo.js" from
-  // overlapping "foo.js.map": a bare startsWith without the slash would
-  // wrongly conflate string-prefix with path-ancestor.
-  if (sa.type === 'exact' && sb.type === 'exact') {
-    return sa.value === sb.value || sa.value.startsWith(`${sb.value}/`) || sb.value.startsWith(`${sa.value}/`);
+function isValidVerificationCommand(vc, task) {
+  if (vc === null || typeof vc !== 'object') return false;
+  if (!VALID_VERIFICATION_FAMILIES.has(vc.family)) return false;
+  if (vc.family === 'NODE_TEST') {
+    if (!isNonEmptyString(vc.target)) return false;
+    if (!isRepoRelativePath(vc.target)) return false;
+    const scope = [...(Array.isArray(task.allowed_paths) ? task.allowed_paths : []), ...(Array.isArray(task.read_paths) ? task.read_paths : [])];
+    if (!isPathWithinScope(vc.target, scope)) return false;
+    return Object.keys(vc).every((k) => k === 'family' || k === 'target');
   }
-  if (sa.type === 'prefix' && sb.type === 'prefix') {
-    return (
-      sa.value === sb.value ||
-      sa.value.startsWith(`${sb.value}/`) ||
-      sb.value.startsWith(`${sa.value}/`)
-    );
-  }
-  const [exact, prefix] = sa.type === 'exact' ? [sa, sb] : [sb, sa];
-  return exact.value === prefix.value || exact.value.startsWith(`${prefix.value}/`);
+  // NODE_VERSION / PWD take no target — no ambiguity to smuggle a path through.
+  return Object.keys(vc).every((k) => k === 'family');
 }
 
 /**
  * Validate the structural shape of a parsed queue object. Strict: every
- * field required by the NIGHT-V1-A-R1 contract is checked, not just the
+ * field required by the Night Agent contract is checked, not just the
  * fields a given task happens to use.
  * @param {any} queue
  * @returns {{valid: boolean, errors: string[]}}
@@ -257,6 +170,9 @@ export function validateSchema(queue) {
     if (!VALID_ON_FAILURE.has(task.on_failure)) {
       errors.push(`${where}.on_failure must be one of ${[...VALID_ON_FAILURE].join('|')}, got ${JSON.stringify(task.on_failure)}`);
     }
+    if (typeof task.enabled !== 'boolean') {
+      errors.push(`${where}.enabled must be a boolean (NIGHT-V1-B: explicit per-task GREEN-execution gate)`);
+    }
 
     if (!Array.isArray(task.depends_on) || !task.depends_on.every(isNonEmptyString)) {
       errors.push(`${where}.depends_on must be an array of non-empty strings`);
@@ -280,25 +196,35 @@ export function validateSchema(queue) {
       }
     }
 
-    if (!Array.isArray(task.allowed_paths) || !task.allowed_paths.every((p) => typeof p === 'string')) {
+    if (!isValidPathArray(task.allowed_paths)) {
       errors.push(`${where}.allowed_paths must be an array of strings`);
     } else {
       for (const p of task.allowed_paths) {
-        if (!isRepoRelativePath(p)) errors.push(`${where}.allowed_paths contains an unsafe path: "${p}"`);
+        if (!isRepoRelativePath(p)) errors.push(`${where}.allowed_paths contains an unsafe/non-canonical path: "${p}"`);
+        else if (isCriticalControlPlanePath(p)) errors.push(`${where}.allowed_paths contains a critical control-plane path: "${p}" (section 12 — never writable by an autonomous task)`);
       }
     }
-    if (!Array.isArray(task.forbidden_paths) || !task.forbidden_paths.every((p) => typeof p === 'string')) {
+    if (!isValidPathArray(task.forbidden_paths)) {
       errors.push(`${where}.forbidden_paths must be an array of strings`);
     } else {
       for (const p of task.forbidden_paths) {
-        if (!isRepoRelativePath(p)) errors.push(`${where}.forbidden_paths contains an unsafe path: "${p}"`);
+        if (!isRepoRelativePath(p)) errors.push(`${where}.forbidden_paths contains an unsafe/non-canonical path: "${p}"`);
+      }
+    }
+    // NIGHT-V1-B: read_paths — a task's read-only scope, independent of (and
+    // not necessarily a subset or superset of) allowed_paths. GREEN+READY
+    // tasks must declare both a writable and a readable scope (section 5).
+    if (!isValidPathArray(task.read_paths)) {
+      errors.push(`${where}.read_paths must be an array of strings`);
+    } else {
+      for (const p of task.read_paths) {
+        if (!isRepoRelativePath(p)) errors.push(`${where}.read_paths contains an unsafe/non-canonical path: "${p}"`);
+        else if (isCriticalControlPlanePath(p)) errors.push(`${where}.read_paths contains a critical control-plane path: "${p}" (section 12)`);
       }
     }
     if (
-      Array.isArray(task.allowed_paths) &&
-      Array.isArray(task.forbidden_paths) &&
-      task.allowed_paths.every((p) => typeof p === 'string') &&
-      task.forbidden_paths.every((p) => typeof p === 'string')
+      isValidPathArray(task.allowed_paths) &&
+      isValidPathArray(task.forbidden_paths)
     ) {
       for (const ap of task.allowed_paths) {
         for (const fp of task.forbidden_paths) {
@@ -311,10 +237,20 @@ export function validateSchema(queue) {
     if (
       task.risk === 'GREEN' &&
       task.status === 'READY' &&
-      Array.isArray(task.allowed_paths) &&
+      task.enabled === true &&
+      isValidPathArray(task.allowed_paths) &&
       task.allowed_paths.length === 0
     ) {
-      errors.push(`${where} ("${task.id}") is GREEN and READY but has an empty allowed_paths — no writable scope`);
+      errors.push(`${where} ("${task.id}") is GREEN, READY, and enabled but has an empty allowed_paths — no writable scope`);
+    }
+    if (
+      task.risk === 'GREEN' &&
+      task.status === 'READY' &&
+      task.enabled === true &&
+      isValidPathArray(task.read_paths) &&
+      task.read_paths.length === 0
+    ) {
+      errors.push(`${where} ("${task.id}") is GREEN, READY, and enabled but has an empty read_paths — no readable scope`);
     }
 
     if (!Array.isArray(task.required_checks) || !task.required_checks.every(isNonEmptyString)) {
@@ -325,6 +261,24 @@ export function validateSchema(queue) {
     }
     if (!isPositiveInteger(task.timeout_seconds)) {
       errors.push(`${where}.timeout_seconds must be a positive integer`);
+    }
+    // NIGHT-V1-B: max_turns — bounds a future Claude child's own turn count;
+    // required for every task (not just GREEN) so the field is never
+    // silently absent right when it starts mattering.
+    if (!isPositiveInteger(task.max_turns) || task.max_turns > MAX_TURNS_CEILING) {
+      errors.push(`${where}.max_turns must be a positive integer <= ${MAX_TURNS_CEILING}`);
+    }
+    // NIGHT-V1-B: verification_commands — closed family allowlist, never a
+    // raw shell string. Optional (an empty array is valid) but each present
+    // entry must be well-formed.
+    if (!Array.isArray(task.verification_commands)) {
+      errors.push(`${where}.verification_commands must be an array`);
+    } else {
+      task.verification_commands.forEach((vc, vcIndex) => {
+        if (!isValidVerificationCommand(vc, task)) {
+          errors.push(`${where}.verification_commands[${vcIndex}] is not a valid verification command (must be {family: one of ${[...VALID_VERIFICATION_FAMILIES].join('|')}} with no extra fields, plus a task-scoped "target" path when family is NODE_TEST)`);
+        }
+      });
     }
   });
 
@@ -415,10 +369,11 @@ export function findPathConflicts(tasks) {
 
 /**
  * Select the next task eligible for GREEN, dry-run-safe execution: risk
- * GREEN, status READY, and (for HARD_DEPENDENCY tasks) every dependency
- * already at the canonical terminal-success state PASS. YELLOW/RED tasks
- * are never returned, regardless of status — V1 has no execution path for
- * them at all (YELLOW_EXECUTION_ENABLED = NO).
+ * GREEN, status READY, explicitly `enabled: true`, and (for
+ * HARD_DEPENDENCY tasks) every dependency already at the canonical
+ * terminal-success state PASS. YELLOW/RED tasks are never returned,
+ * regardless of status — V1 has no execution path for them at all
+ * (YELLOW_EXECUTION_ENABLED = NO).
  * @param {any[]} tasks
  * @returns {any|null}
  */
@@ -427,6 +382,7 @@ export function selectNextGreenTask(tasks) {
   for (const task of tasks) {
     if (task.risk !== 'GREEN') continue;
     if (task.status !== 'READY') continue;
+    if (task.enabled !== true) continue;
     if (task.dependency_type === 'HARD_DEPENDENCY') {
       const unmet = (task.depends_on ?? []).some((depId) => byId.get(depId)?.status !== 'PASS');
       if (unmet) continue;
@@ -437,10 +393,10 @@ export function selectNextGreenTask(tasks) {
 }
 
 /**
- * Classify a task's executability under V1's policy. GREEN tasks with met
- * dependencies are EXECUTABLE; everything else (YELLOW, RED, blocked GREEN)
- * is NOT_EXECUTABLE, with a reason. A HARD_DEPENDENCY is met only when the
- * depended-on task's status is PASS.
+ * Classify a task's executability under V1's policy. GREEN, enabled tasks
+ * with met dependencies are EXECUTABLE; everything else (YELLOW, RED,
+ * disabled, blocked GREEN) is NOT_EXECUTABLE, with a reason. A
+ * HARD_DEPENDENCY is met only when the depended-on task's status is PASS.
  * @param {any} task
  * @param {any[]} allTasks
  * @returns {{executable: boolean, reason: string}}
@@ -452,6 +408,9 @@ export function classifyExecutability(task, allTasks) {
   if (task.risk === 'YELLOW') {
     return { executable: false, reason: 'YELLOW_EXECUTION_ENABLED = NO in V1; YELLOW tasks are recorded but not run.' };
   }
+  if (task.enabled !== true) {
+    return { executable: false, reason: 'task.enabled is not true — explicit per-task gate required for GREEN execution.' };
+  }
   if (task.status !== 'READY') {
     return { executable: false, reason: `task status is ${task.status}, not READY.` };
   }
@@ -462,5 +421,5 @@ export function classifyExecutability(task, allTasks) {
       return { executable: false, reason: `unmet hard dependencies (require status PASS): ${unmet.join(', ')}` };
     }
   }
-  return { executable: true, reason: 'GREEN, READY, and all dependencies satisfied.' };
+  return { executable: true, reason: 'GREEN, enabled, READY, and all dependencies satisfied.' };
 }

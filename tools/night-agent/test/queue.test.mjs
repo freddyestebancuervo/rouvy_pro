@@ -36,18 +36,26 @@ function minimalSession(overrides = {}) {
 }
 
 function minimalTask(overrides = {}) {
+  // NIGHT-V1-B: the default allowed/read path deliberately lives OUTSIDE
+  // every critical control-plane prefix (section 12) — "tools/night-agent/
+  // test/..." would now itself be rejected as a critical path, since the
+  // Night Agent's own code/tests are never a valid autonomous-task target.
   return {
     id: 'task-a',
     title: 't',
     objective: 'o',
     risk: 'GREEN',
     status: 'READY',
+    enabled: true,
     dependency_type: 'INDEPENDENT',
     depends_on: [],
-    allowed_paths: ['tools/night-agent/test/fixture-only.test.mjs'],
+    allowed_paths: ['examples/fixture-only.test.mjs'],
+    read_paths: ['examples/fixture-only.test.mjs'],
     forbidden_paths: [],
     required_checks: [],
+    verification_commands: [],
     max_retries: 1,
+    max_turns: 5,
     timeout_seconds: 10,
     on_failure: 'HOLD',
     ...overrides,
@@ -378,12 +386,15 @@ test('isRepoRelativePath rejects a "/../ " traversal alias mid-path', () => {
   assert.equal(isRepoRelativePath('backend/../src'), false);
 });
 
-test('isRepoRelativePath still accepts the deliberate trailing-slash exception', () => {
-  // TASK_QUEUE.example.json (out of R4's authorized file scope) uses this
-  // form in forbidden_paths — rejecting it would require migrating that
-  // fixture, which is not authorized here. See SAFETY.md "R4: path
-  // canonicalization" for the explicit scope reasoning.
-  assert.equal(isRepoRelativePath('backend/'), true);
+// NIGHT-V1-B SECURITY TIGHTENING (section 7): R4 kept a deliberate
+// trailing-slash exception because TASK_QUEUE.example.json depended on it
+// and migrating the fixture was out of R4's scope. B's own scope
+// explicitly authorizes — and requires — migrating that fixture (now using
+// "backend/**" instead of "backend/"), so the exception is retired
+// entirely: exactly one canonical form per scope, no exceptions. Renamed
+// rather than deleted, per section 39/11's "no borrar tests" policy.
+test('isRepoRelativePath rejects trailing slash — the R4 exception is retired now that the fixture no longer needs it', () => {
+  assert.equal(isRepoRelativePath('backend/'), false);
 });
 
 test('isRepoRelativePath rejects a Windows backslash separator', () => {
@@ -524,12 +535,18 @@ test('pathsOverlap: two overlapping glob prefixes conflict', () => {
   assert.equal(pathsOverlap('tools/night-agent/**', 'tools/night-agent/test/**'), true);
 });
 
-test('pathsOverlap: a directory-slash prefix conflicts with a file underneath it', () => {
-  assert.equal(pathsOverlap('foo/', 'foo/bar.js'), true);
+// NIGHT-V1-B SECURITY TIGHTENING (section 7): "foo/" is no longer a
+// canonical scope at all (isRepoRelativePath now rejects every trailing
+// slash unconditionally) — pathsOverlap's trailing-slash prefix branch was
+// removed accordingly, so a bare "foo/" is now just an opaque exact string
+// to this function. Rewritten to use the canonical directory-prefix form
+// ("foo/**") instead, which is what any real queue entry must use.
+test('pathsOverlap: a canonical glob-prefix directory conflicts with a file underneath it', () => {
+  assert.equal(pathsOverlap('foo/**', 'foo/bar.js'), true);
 });
 
 test('pathsOverlap: sibling directories with a shared string prefix do not conflict', () => {
-  assert.equal(pathsOverlap('foo/', 'foobar/baz.js'), false);
+  assert.equal(pathsOverlap('foo/**', 'foobar/baz.js'), false);
 });
 
 // ---------------------------------------------------------------------------
