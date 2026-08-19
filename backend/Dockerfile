@@ -1,16 +1,19 @@
 # syntax=docker/dockerfile:1
 #
 # Documento 22 (auditoría y plan) — Fase 2: contenedorización local.
-# Node 20 LTS (misma versión mayor usada en desarrollo/CI, ver
-# @types/node ^20.14.10 en package.json y actions/setup-node@v4 con
-# node-version: '20' en .github/workflows/ci.yml) — Alpine por tamaño de
-# imagen, sin dependencias nativas en package.json que lo desaconsejen.
+# Node 24 LTS (misma versión mayor usada en CI, ver actions/setup-node
+# con node-version: '24' en .github/workflows/ci.yml), build y runtime
+# alineados en el mismo major. Requerido por firebase-admin@14.2.0
+# (engines.node >=22) — @types/node solo tipa el compilador, no
+# determina qué versión de Node ejecuta el JavaScript en runtime.
+# Alpine por tamaño de imagen, sin dependencias nativas en package.json
+# que lo desaconsejen.
 
 # =============================================================================
 # Etapa 1 — build: instala TODAS las dependencias (incluidas devDependencies,
 # necesarias para compilar TypeScript) y genera dist/.
 # =============================================================================
-FROM node:20-alpine AS build
+FROM node:24-alpine AS build
 
 WORKDIR /app
 
@@ -46,7 +49,7 @@ COPY test ./test
 # resultado ya compilado (dist/) — sin TypeScript, sin ts-jest, sin eslint,
 # sin ningún devDependency, sin el código fuente .ts original.
 # =============================================================================
-FROM node:20-alpine AS runtime
+FROM node:24-alpine AS runtime
 
 ENV NODE_ENV=production
 
@@ -60,7 +63,7 @@ RUN npm ci --omit=dev && npm cache clean --force
 # Únicamente el JavaScript compilado — nunca el .ts fuente, nunca tests.
 COPY --from=build /app/dist ./dist
 
-# Usuario no root — la imagen base `node:20-alpine` ya incluye el usuario
+# Usuario no root — la imagen base `node:24-alpine` ya incluye el usuario
 # `node` (uid 1000), no hace falta crearlo a mano.
 USER node
 
