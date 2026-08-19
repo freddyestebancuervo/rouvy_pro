@@ -44,12 +44,26 @@ node tools/night-agent/runner.mjs --queue .claude/overnight/TASK_QUEUE.example.j
 node --test tools/night-agent/test/*.test.mjs
 ```
 
-## Relationship to the guard
+## Relationship to the guard (R1: default-deny allowlist)
 
 `.claude/hooks/night-guard.mjs` is registered as a `PreToolUse` hook in
-`.claude/settings.json` and is dormant unless `KORIXA_NIGHT_MODE=1` is set
-in the environment that launched Claude Code. It is a global safety net
-against a fixed list of dangerous command families (push, force-reset,
-Production infra mutation, etc.) — it is not aware of any individual
-task's `allowed_paths`/`forbidden_paths`. Enforcing those belongs to the
-queue/runner layer (and, once it exists, the Auditor), not to the guard.
+`.claude/settings.json` (referenced via the official `${CLAUDE_PROJECT_DIR}`
+placeholder, so it resolves the same regardless of the shell's current
+working directory) and is dormant unless `KORIXA_NIGHT_MODE=1` is set in the
+environment that launched Claude Code.
+
+As of R1, the guard is a **default-deny allowlist**, not a deny-pattern
+blocklist: a Bash command is allowed only if it matches one of a small,
+closed set of known-safe shapes (read-only Git, local test/static-analysis
+commands, and `git add`/`git commit -m "<message>"`); everything else is
+denied as `UNCLASSIFIABLE_COMMAND`. See `.claude/overnight/SAFETY.md`'s
+"Guard model" section for the full rationale.
+
+`git add`/`git commit` are allowed by the guard globally, as primitives —
+the guard has no notion of any individual task's `allowed_paths`/
+`forbidden_paths`, so it cannot tell "a commit inside this task's declared
+scope" from "a commit anywhere." Enforcing per-task path scope is the
+queue/runner layer's job (and, once it exists, the Auditor's), not the
+guard's — and neither exists yet as an execution engine:
+`EXECUTION_ENGINE = DISABLED_IN_V1_A`. The guard being permissive about
+these two primitives is not the same as autonomous commits being enabled.

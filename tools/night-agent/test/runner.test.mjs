@@ -90,6 +90,43 @@ test('buildDryRunPlan reports EXECUTION_ENGINE = DISABLED_IN_V1_A and never muta
 });
 
 // ---------------------------------------------------------------------------
+// R1 hardening regression: the retired DONE/IN_PROGRESS states and a
+// max_retries above the ceiling must fail validation through runValidation,
+// proving queue.mjs's stricter schema is actually wired into the runner's
+// gate, not just tested in isolation.
+// ---------------------------------------------------------------------------
+
+test('runValidation rejects a task using the retired DONE status', () => {
+  const queue = minimalQueue({
+    tasks: [
+      {
+        id: 'a', title: 't', objective: 'o', risk: 'GREEN', status: 'DONE',
+        dependency_type: 'INDEPENDENT', depends_on: [], allowed_paths: ['x'],
+        forbidden_paths: [], required_checks: [], max_retries: 1,
+        timeout_seconds: 10, on_failure: 'HOLD',
+      },
+    ],
+  });
+  const result = runValidation(queue);
+  assert.equal(result.ok, false);
+});
+
+test('runValidation rejects max_retries above the R1 ceiling of 3', () => {
+  const queue = minimalQueue({
+    tasks: [
+      {
+        id: 'a', title: 't', objective: 'o', risk: 'GREEN', status: 'READY',
+        dependency_type: 'INDEPENDENT', depends_on: [], allowed_paths: ['x'],
+        forbidden_paths: [], required_checks: [], max_retries: 5,
+        timeout_seconds: 10, on_failure: 'HOLD',
+      },
+    ],
+  });
+  const result = runValidation(queue);
+  assert.equal(result.ok, false);
+});
+
+// ---------------------------------------------------------------------------
 // CLI subprocess smoke tests. These invoke the real entrypoint (`node
 // runner.mjs ...`) to prove the stdin/stdout/exit-code contract works end
 // to end, using only safe, read-only inputs (--self-test and the committed

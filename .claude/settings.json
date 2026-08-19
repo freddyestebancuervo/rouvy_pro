@@ -11,7 +11,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "node .claude/hooks/night-guard.mjs"
+            "command": "node \"${CLAUDE_PROJECT_DIR}/.claude/hooks/night-guard.mjs\""
           }
         ]
       }

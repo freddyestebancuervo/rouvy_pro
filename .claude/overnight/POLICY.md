@@ -43,6 +43,15 @@ Any state -> SESSION_HALT   (global safety/integrity problem only)
 - After the **same material failure** (same root cause, not a new distinct
   failure) survives 3 correction cycles, the task moves to `HOLD` and the
   runner must stop looping on it. Do not silently keep retrying past budget.
+- `tools/night-agent/queue.mjs`'s schema validation rejects any task with
+  `max_retries > 3` outright — an out-of-budget queue contract fails
+  validation rather than being silently clamped down to 3.
+
+## Session budget ceiling
+
+- `MAX_SESSION_MINUTES_CEILING = 480` (8 hours) — the hard upper bound V1
+  will accept for a queue's `session.max_session_minutes`. A queue
+  declaring more than this fails schema validation; it is not clamped.
 
 ## Polling discipline
 
