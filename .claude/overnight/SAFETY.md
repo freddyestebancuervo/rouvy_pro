@@ -535,6 +535,36 @@ unlocked" path does so by passing the gate values directly to a function
 call, always paired with an injected fake `spawnFn` — never against the
 real CLI entrypoint.
 
+## NIGHT-V1-D-R1: the explicit TARGET HEAD gate
+
+D's clean-worktree gate proves the worktree has no uncommitted changes — it
+does NOT prove the worktree is sitting at the commit an operator actually
+authorized for this specific execution. A clean worktree on the WRONG
+commit is still clean. R1 closes this gap with a REQUIRED, explicit
+`--target-head <40-char-sha>` CLI argument (see `POLICY.md`'s
+"NIGHT-V1-D-R1" section for the full provenance rationale) — never inferred
+from the worktree's own `git rev-parse HEAD`, since that would silently
+convert "whatever commit happens to be checked out" into "authorized."
+
+`runExecuteGreen` requires the argument, validates its format
+(`isValidTargetHeadSha` — exactly 40 hex characters, case-insensitive), and
+compares it against a REAL, freshly-resolved `git -C <repoRoot> rev-parse
+HEAD` (`resolveLocalHeadSha`, argv array, `shell: false`, via
+`checkTargetHeadFn`/`checkTargetHead`). This happens immediately after the
+remote-main gate and strictly before `executeTaskFn` is ever called — a
+missing, malformed, mismatched, or unresolvable target head all produce
+zero side effects: no policy file, no checkpoint write, no spawn attempt,
+and the child's own worktree-clean gate is never even reached (proven by a
+dedicated integration test using the REAL `executeControlledGreenTask` with
+a spy on `checkWorktreeCleanFn`).
+
+`REMOTE_MAIN_FROZEN` and `TARGET_HEAD` are independent invariants that may
+legitimately hold different SHA values simultaneously — the remote-main
+gate answers "has the authorized base moved since this queue was written,"
+while the target-head gate answers "is THIS worktree, right now, at the
+EXACT commit this specific execution was authorized against." Both must
+PASS; neither substitutes for the other.
+
 ## Unlock path
 
 None of the above is unlocked by this file. A future version may explicitly

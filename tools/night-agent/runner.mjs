@@ -77,11 +77,12 @@ import { isRepoRelativePath, isPathWithinScope } from './path-safety.mjs';
 
 /**
  * @param {string[]} argv
- * @returns {{queuePath: string|null, mode: 'validate'|'dry-run'|'self-test'|'plan-execution'|'execute-green'}}
+ * @returns {{queuePath: string|null, mode: 'validate'|'dry-run'|'self-test'|'plan-execution'|'execute-green', targetHeadSha: string|null}}
  */
 export function parseArgs(argv) {
   let queuePath = null;
   let mode = 'dry-run'; // default per NIGHT-V1-A contract
+  let targetHeadSha = null;
   for (let i = 0; i < argv.length; i++) {
     const arg = argv[i];
     if (arg === '--queue') {
@@ -97,9 +98,16 @@ export function parseArgs(argv) {
       mode = 'plan-execution';
     } else if (arg === '--execute-green') {
       mode = 'execute-green';
+    } else if (arg === '--target-head') {
+      // NIGHT-V1-D-R1 section 6: the operator-supplied SHA the real
+      // execution worktree MUST be exactly at. Never inferred from `git
+      // rev-parse HEAD` — that would auto-authorize whatever the worktree
+      // happens to be on, defeating the entire point of the gate.
+      targetHeadSha = argv[i + 1] ?? null;
+      i++;
     }
   }
-  return { queuePath, mode };
+  return { queuePath, mode, targetHeadSha };
 }
 
 /**
@@ -215,6 +223,60 @@ export function resolveRemoteMainSha({ spawnSyncFn = spawnSync } = {}) {
   if (!result || result.status !== 0 || typeof result.stdout !== 'string') return null;
   const match = result.stdout.match(/^([0-9a-f]{40})\s+refs\/heads\/main/m);
   return match ? match[1] : null;
+}
+
+// ---------------------------------------------------------------------------
+// NIGHT-V1-D-R1 section 5-9: the TARGET HEAD gate. REMOTE_MAIN and
+// TARGET_HEAD are two distinct invariants — a clean worktree does not by
+// itself prove it is sitting at the commit the operator actually authorized
+// for this execution. `queue.session.base_sha` keeps its existing meaning
+// (the remote-main-frozen SHA, feeding ONLY checkRemoteMainDrift, unchanged
+// from NIGHT-V1-A onward) — targetHeadSha is a SEPARATE value, supplied
+// explicitly by the operator via `--target-head`, that the real local
+// worktree HEAD must match exactly before policy/checkpoint/spawn.
+// ---------------------------------------------------------------------------
+
+const FULL_GIT_SHA_PATTERN = /^[0-9a-fA-F]{40}$/;
+
+/**
+ * @param {unknown} value
+ * @returns {boolean}
+ */
+export function isValidTargetHeadSha(value) {
+  return typeof value === 'string' && FULL_GIT_SHA_PATTERN.test(value);
+}
+
+/**
+ * Resolve the REAL current local HEAD of `repoRoot` via a real `git -C
+ * <repoRoot> rev-parse HEAD` call — argv array, `shell: false`, no shell
+ * string. Returns null if Git fails or the output is not a well-formed
+ * 40-char SHA (the caller treats null as unresolved — fail closed, never
+ * silently accepted as a match).
+ * @param {{repoRoot: string, spawnSyncFn?: typeof spawnSync}} params
+ * @returns {string|null}
+ */
+export function resolveLocalHeadSha({ repoRoot, spawnSyncFn = spawnSync }) {
+  const result = spawnSyncFn('git', ['-C', repoRoot, 'rev-parse', 'HEAD'], { encoding: 'utf8', shell: false });
+  if (!result || result.status !== 0 || typeof result.stdout !== 'string') return null;
+  const sha = result.stdout.trim().toLowerCase();
+  return FULL_GIT_SHA_PATTERN.test(sha) ? sha : null;
+}
+
+/**
+ * Compare `repoRoot`'s real, freshly-resolved local HEAD against the
+ * operator-supplied `expectedTargetHeadSha` (already format-validated by
+ * the caller). Never infers the "expected" value from the worktree itself
+ * — that would auto-authorize whatever the worktree happens to be on.
+ * @param {{repoRoot: string, expectedTargetHeadSha: string, spawnSyncFn?: typeof spawnSync}} params
+ * @returns {{matched: boolean, reason: 'OK'|'MISMATCH'|'UNRESOLVED', actual: string|null}}
+ */
+export function checkTargetHead({ repoRoot, expectedTargetHeadSha, spawnSyncFn = spawnSync }) {
+  const actual = resolveLocalHeadSha({ repoRoot, spawnSyncFn });
+  if (actual === null) {
+    return { matched: false, reason: 'UNRESOLVED', actual: null };
+  }
+  const expected = expectedTargetHeadSha.toLowerCase();
+  return actual === expected ? { matched: true, reason: 'OK', actual } : { matched: false, reason: 'MISMATCH', actual };
 }
 
 /**
@@ -866,15 +928,30 @@ export async function executeControlledGreenTask({
  * inject a fake `executeTaskFn` to prove this orchestration correctly
  * reaches the execution step when every gate passes, without ever spawning
  * a real process.
+ *
+ * NIGHT-V1-D-R1: after the remote-main gate, and still strictly before
+ * `executeTaskFn` is ever called, `targetHeadSha` (the operator-supplied
+ * SHA `repoRoot`'s real local HEAD MUST exactly match) is required,
+ * format-validated, and compared against a freshly-resolved `git rev-parse
+ * HEAD` via `checkTargetHeadFn`. `queue.session.base_sha` keeps its
+ * existing meaning (remote-main-frozen) and is untouched by this gate — the
+ * two SHAs are independent invariants and may legitimately differ while
+ * both gates PASS. On success, the verified `targetHeadSha` (not
+ * `queue.session.base_sha`) is what gets threaded into `executeTaskFn`'s
+ * `ctx`, since it is what actually describes the worktree the execution is
+ * about to run in — see `SAFETY.md`'s "NIGHT-V1-D-R1" section for the full
+ * provenance rationale.
  * @param {object} params
  * @param {any} params.queue
  * @param {boolean} params.flagPresent
  * @param {string|undefined} params.envValue
  * @param {string|undefined} [params.realSpawnEnvValue]
  * @param {string} [params.repoRoot]
+ * @param {string|null} [params.targetHeadSha]
  * @param {() => string|null} [params.resolveRemoteMainShaFn]
+ * @param {typeof checkTargetHead} [params.checkTargetHeadFn]
  * @param {(task: any) => {status: 'ABSENT'|'INVALID'|'VALID', checkpoint?: object}} [params.checkpointLookupFn]
- * @param {(task: any, ctx: {attempt: number, checkpointFilePath: string}) => Promise<{status: string, realChildSpawn?: boolean}>} [params.executeTaskFn]
+ * @param {(task: any, ctx: {attempt: number, checkpointFilePath: string, targetHeadSha: string}) => Promise<{status: string, realChildSpawn?: boolean}>} [params.executeTaskFn]
  * @returns {Promise<{result: string, taskId: string|null, realChildSpawn: boolean}>}
  */
 export async function runExecuteGreen({
@@ -883,7 +960,9 @@ export async function runExecuteGreen({
   envValue,
   realSpawnEnvValue,
   repoRoot,
+  targetHeadSha,
   resolveRemoteMainShaFn = resolveRemoteMainSha,
+  checkTargetHeadFn = checkTargetHead,
   checkpointLookupFn,
   executeTaskFn = stubExecuteTaskFn,
 }) {
@@ -918,7 +997,19 @@ export async function runExecuteGreen({
     return { result: 'HOLD_REMOTE_MAIN_DRIFT', taskId: task.id, realChildSpawn: false };
   }
 
-  const execResult = await executeTaskFn(task, { attempt: recovery.nextAttempt, checkpointFilePath });
+  if (typeof targetHeadSha !== 'string' || targetHeadSha.length === 0) {
+    return { result: 'HOLD_TARGET_HEAD_REQUIRED', taskId: task.id, realChildSpawn: false };
+  }
+  if (!isValidTargetHeadSha(targetHeadSha)) {
+    return { result: 'HOLD_TARGET_HEAD_INVALID', taskId: task.id, realChildSpawn: false };
+  }
+  const targetCheck = checkTargetHeadFn({ repoRoot, expectedTargetHeadSha: targetHeadSha });
+  if (!targetCheck.matched) {
+    const result = targetCheck.reason === 'UNRESOLVED' ? 'HOLD_TARGET_HEAD_UNRESOLVED' : 'HOLD_TARGET_HEAD_MISMATCH';
+    return { result, taskId: task.id, realChildSpawn: false };
+  }
+
+  const execResult = await executeTaskFn(task, { attempt: recovery.nextAttempt, checkpointFilePath, targetHeadSha: targetCheck.actual });
   return { result: execResult.status, taskId: task.id, realChildSpawn: execResult.realChildSpawn ?? false };
 }
 
@@ -977,7 +1068,7 @@ function selfTestFixture() {
 }
 
 function main() {
-  const { queuePath, mode } = parseArgs(process.argv.slice(2));
+  const { queuePath, mode, targetHeadSha } = parseArgs(process.argv.slice(2));
 
   if (mode === 'self-test') {
     const queue = selfTestFixture();
@@ -1026,7 +1117,12 @@ function main() {
       executeControlledGreenTask({
         task,
         repoRoot,
-        baseSha: queue.session.base_sha,
+        // NIGHT-V1-D-R1: baseSha here describes the worktree actually being
+        // executed against — ctx.targetHeadSha (verified by runExecuteGreen's
+        // checkTargetHeadFn against a real `git rev-parse HEAD`), not
+        // queue.session.base_sha (which remains the separate, remote-main-
+        // frozen invariant feeding only the remote-main drift gate).
+        baseSha: ctx.targetHeadSha,
         flagPresent,
         executionEnvValue: envValue,
         realSpawnEnvValue,
@@ -1043,6 +1139,7 @@ function main() {
       envValue,
       realSpawnEnvValue,
       repoRoot,
+      targetHeadSha,
       executeTaskFn,
     }).then((outcome) => {
       console.log(`EXECUTE_GREEN_RESULT = ${outcome.result}`);

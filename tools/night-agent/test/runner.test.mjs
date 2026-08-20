@@ -28,6 +28,9 @@ import {
   runVerificationCommand,
   runAllVerificationCommands,
   resolveExitCode,
+  isValidTargetHeadSha,
+  resolveLocalHeadSha,
+  checkTargetHead,
 } from '../runner.mjs';
 import { FIXTURE_BASE_SHA } from '../queue.mjs';
 import { isValidActivePolicy } from '../../../.claude/hooks/night-guard.mjs';
@@ -101,6 +104,16 @@ test('parseArgs reads --plan-execution', () => {
 test('parseArgs reads --execute-green', () => {
   const result = parseArgs(['--queue', 'foo.json', '--execute-green']);
   assert.equal(result.mode, 'execute-green');
+});
+
+test('parseArgs reads --target-head', () => {
+  const result = parseArgs(['--queue', 'foo.json', '--execute-green', '--target-head', 'a'.repeat(40)]);
+  assert.equal(result.targetHeadSha, 'a'.repeat(40));
+});
+
+test('parseArgs: targetHeadSha defaults to null when --target-head is omitted', () => {
+  const result = parseArgs(['--queue', 'foo.json', '--execute-green']);
+  assert.equal(result.targetHeadSha, null);
 });
 
 // ---------------------------------------------------------------------------
@@ -249,6 +262,94 @@ test('checkRemoteMainDrift: unresolved remote (null) -> drifted (fail closed)', 
 
 test('checkRemoteMainDrift: the fixture base_sha sentinel is exempt from the drift check', () => {
   assert.equal(checkRemoteMainDrift(FIXTURE_BASE_SHA, 'anything-or-nothing').drifted, false);
+});
+
+// ---------------------------------------------------------------------------
+// isValidTargetHeadSha / resolveLocalHeadSha / checkTargetHead
+// (NIGHT-V1-D-R1 sections 6-9)
+// ---------------------------------------------------------------------------
+
+test('isValidTargetHeadSha: a well-formed 40-char hex SHA -> true', () => {
+  assert.equal(isValidTargetHeadSha('a'.repeat(40)), true);
+  assert.equal(isValidTargetHeadSha('0123456789abcdef0123456789ABCDEF01234567'), true);
+});
+
+test('isValidTargetHeadSha: too short -> false', () => {
+  assert.equal(isValidTargetHeadSha('a'.repeat(39)), false);
+});
+
+test('isValidTargetHeadSha: too long -> false', () => {
+  assert.equal(isValidTargetHeadSha('a'.repeat(41)), false);
+});
+
+test('isValidTargetHeadSha: non-hex characters -> false', () => {
+  assert.equal(isValidTargetHeadSha('g'.repeat(40)), false);
+});
+
+test('isValidTargetHeadSha: null/undefined/non-string -> false', () => {
+  assert.equal(isValidTargetHeadSha(null), false);
+  assert.equal(isValidTargetHeadSha(undefined), false);
+  assert.equal(isValidTargetHeadSha(40), false);
+});
+
+test('resolveLocalHeadSha: invokes git with argv array (-C repoRoot rev-parse HEAD), shell:false', () => {
+  let captured = null;
+  resolveLocalHeadSha({
+    repoRoot: '/fake/repo',
+    spawnSyncFn: (command, args, options) => {
+      captured = { command, args, options };
+      return { status: 0, stdout: `${'a'.repeat(40)}\n` };
+    },
+  });
+  assert.equal(captured.command, 'git');
+  assert.deepEqual(captured.args, ['-C', '/fake/repo', 'rev-parse', 'HEAD']);
+  assert.equal(captured.options.shell, false);
+});
+
+test('resolveLocalHeadSha: trims and lowercases the resolved SHA', () => {
+  const sha = resolveLocalHeadSha({ repoRoot: '/fake/repo', spawnSyncFn: () => ({ status: 0, stdout: `  ${'A'.repeat(40)}  \n` }) });
+  assert.equal(sha, 'a'.repeat(40));
+});
+
+test('resolveLocalHeadSha: git command failure -> null (fail closed)', () => {
+  const sha = resolveLocalHeadSha({ repoRoot: '/fake/repo', spawnSyncFn: () => ({ status: 128, stdout: '' }) });
+  assert.equal(sha, null);
+});
+
+test('resolveLocalHeadSha: malformed output -> null', () => {
+  const sha = resolveLocalHeadSha({ repoRoot: '/fake/repo', spawnSyncFn: () => ({ status: 0, stdout: 'not-a-sha\n' }) });
+  assert.equal(sha, null);
+});
+
+test('checkTargetHead: matching SHA (case-insensitive) -> matched true', () => {
+  const result = checkTargetHead({
+    repoRoot: '/fake/repo',
+    expectedTargetHeadSha: 'A'.repeat(40),
+    spawnSyncFn: () => ({ status: 0, stdout: `${'a'.repeat(40)}\n` }),
+  });
+  assert.deepEqual(result, { matched: true, reason: 'OK', actual: 'a'.repeat(40) });
+});
+
+test('checkTargetHead: mismatched SHA -> matched false, reason MISMATCH', () => {
+  const result = checkTargetHead({
+    repoRoot: '/fake/repo',
+    expectedTargetHeadSha: 'b'.repeat(40),
+    spawnSyncFn: () => ({ status: 0, stdout: `${'a'.repeat(40)}\n` }),
+  });
+  assert.equal(result.matched, false);
+  assert.equal(result.reason, 'MISMATCH');
+  assert.equal(result.actual, 'a'.repeat(40));
+});
+
+test('checkTargetHead: git rev-parse failure -> matched false, reason UNRESOLVED', () => {
+  const result = checkTargetHead({
+    repoRoot: '/fake/repo',
+    expectedTargetHeadSha: 'a'.repeat(40),
+    spawnSyncFn: () => ({ status: 128, stdout: '' }),
+  });
+  assert.equal(result.matched, false);
+  assert.equal(result.reason, 'UNRESOLVED');
+  assert.equal(result.actual, null);
 });
 
 // ---------------------------------------------------------------------------
@@ -1383,6 +1484,18 @@ test('checkPostExecutionScope: lists every violation, not just the first', () =>
 // test explicitly injects a fake) never spawns anything.
 // ---------------------------------------------------------------------------
 
+// NIGHT-V1-D-R1: a valid, matching target-head fixture — remote-main-frozen
+// (session.base_sha = 'a'.repeat(40)) and target-head are DELIBERATELY
+// different SHAs here, proving both gates can PASS simultaneously with
+// distinct values (section 15, test #10).
+const PASSING_TARGET_HEAD_SHA = 'b'.repeat(40);
+function passingTargetHeadFakes() {
+  return {
+    targetHeadSha: PASSING_TARGET_HEAD_SHA,
+    checkTargetHeadFn: () => ({ matched: true, reason: 'OK', actual: PASSING_TARGET_HEAD_SHA }),
+  };
+}
+
 function executableQueueFixture(overrides = {}) {
   return {
     schema_version: 1,
@@ -1529,6 +1642,7 @@ test('runExecuteGreen: a RETRY checkpoint with remaining budget -> executeTaskFn
     envValue: '1',
     realSpawnEnvValue: '1',
     repoRoot: '/fake/repo',
+    ...passingTargetHeadFakes(),
     resolveRemoteMainShaFn: () => 'a'.repeat(40),
     checkpointLookupFn: () => ({ status: 'VALID', checkpoint: retryCheckpoint }),
     executeTaskFn: async (task, ctx) => {
@@ -1539,6 +1653,7 @@ test('runExecuteGreen: a RETRY checkpoint with remaining budget -> executeTaskFn
   assert.equal(outcome.result, 'FAKE_EXECUTED_FOR_TEST_ONLY');
   assert.equal(receivedCtx.attempt, 1);
   assert.equal(typeof receivedCtx.checkpointFilePath, 'string');
+  assert.equal(receivedCtx.targetHeadSha, PASSING_TARGET_HEAD_SHA);
 });
 
 test('runExecuteGreen: a corrupt/invalid checkpoint -> HOLD_INVALID_CHECKPOINT, never silently ignored', async () => {
@@ -1569,6 +1684,7 @@ test('runExecuteGreen: every gate passes -> the execution step IS reached (with 
     envValue: '1',
     realSpawnEnvValue: '1',
     repoRoot: '/fake/repo',
+    ...passingTargetHeadFakes(),
     resolveRemoteMainShaFn: () => 'a'.repeat(40),
     checkpointLookupFn: () => ({ status: 'ABSENT' }),
     executeTaskFn: async (task, ctx) => {
@@ -1580,6 +1696,7 @@ test('runExecuteGreen: every gate passes -> the execution step IS reached (with 
   assert.equal(executeCalledWithTaskId, 'task-a');
   assert.equal(outcome.result, 'FAKE_EXECUTED_FOR_TEST_ONLY');
   assert.equal(receivedCtx.attempt, 0, 'a fresh (no prior checkpoint) execution starts at attempt 0');
+  assert.equal(receivedCtx.targetHeadSha, PASSING_TARGET_HEAD_SHA);
 });
 
 test('runExecuteGreen: with the DEFAULT executeTaskFn (no injection), every gate passing still never spawns anything real', async () => {
@@ -1589,6 +1706,7 @@ test('runExecuteGreen: with the DEFAULT executeTaskFn (no injection), every gate
     envValue: '1',
     realSpawnEnvValue: '1',
     repoRoot: '/fake/repo',
+    ...passingTargetHeadFakes(),
     resolveRemoteMainShaFn: () => 'a'.repeat(40),
     // executeTaskFn intentionally omitted — exercises the real default.
   });
@@ -1603,11 +1721,162 @@ test('runExecuteGreen: outcome.realChildSpawn is threaded up from executeTaskFn\
     envValue: '1',
     realSpawnEnvValue: '1',
     repoRoot: '/fake/repo',
+    ...passingTargetHeadFakes(),
     resolveRemoteMainShaFn: () => 'a'.repeat(40),
     checkpointLookupFn: () => ({ status: 'ABSENT' }),
     executeTaskFn: async () => ({ status: 'PASS', realChildSpawn: true }),
   });
   assert.equal(outcome.realChildSpawn, true);
+});
+
+// ---------------------------------------------------------------------------
+// NIGHT-V1-D-R1 sections 6-11: the TARGET HEAD gate, checked AFTER the
+// remote-main gate and STRICTLY BEFORE executeTaskFn is ever called.
+// ---------------------------------------------------------------------------
+
+test('runExecuteGreen: --target-head missing -> HOLD_TARGET_HEAD_REQUIRED, executeTaskFn never called, realChildSpawn false', async () => {
+  let executeCalled = false;
+  const outcome = await runExecuteGreen({
+    queue: executableQueueFixture(),
+    flagPresent: true,
+    envValue: '1',
+    realSpawnEnvValue: '1',
+    repoRoot: '/fake/repo',
+    targetHeadSha: null,
+    resolveRemoteMainShaFn: () => 'a'.repeat(40),
+    checkpointLookupFn: () => ({ status: 'ABSENT' }),
+    executeTaskFn: async () => {
+      executeCalled = true;
+      return { status: 'SHOULD_NOT_HAPPEN' };
+    },
+  });
+  assert.equal(outcome.result, 'HOLD_TARGET_HEAD_REQUIRED');
+  assert.equal(outcome.realChildSpawn, false);
+  assert.equal(executeCalled, false);
+});
+
+test('runExecuteGreen: a malformed --target-head (not a 40-char SHA) -> HOLD_TARGET_HEAD_INVALID, executeTaskFn never called', async () => {
+  let executeCalled = false;
+  const outcome = await runExecuteGreen({
+    queue: executableQueueFixture(),
+    flagPresent: true,
+    envValue: '1',
+    realSpawnEnvValue: '1',
+    repoRoot: '/fake/repo',
+    targetHeadSha: 'not-a-real-sha',
+    resolveRemoteMainShaFn: () => 'a'.repeat(40),
+    checkpointLookupFn: () => ({ status: 'ABSENT' }),
+    executeTaskFn: async () => {
+      executeCalled = true;
+      return { status: 'SHOULD_NOT_HAPPEN' };
+    },
+  });
+  assert.equal(outcome.result, 'HOLD_TARGET_HEAD_INVALID');
+  assert.equal(executeCalled, false);
+});
+
+test('runExecuteGreen: target-head MISMATCH (expected != real local HEAD) -> HOLD_TARGET_HEAD_MISMATCH, executeTaskFn never called', async () => {
+  let executeCalled = false;
+  const outcome = await runExecuteGreen({
+    queue: executableQueueFixture(),
+    flagPresent: true,
+    envValue: '1',
+    realSpawnEnvValue: '1',
+    repoRoot: '/fake/repo',
+    targetHeadSha: 'b'.repeat(40),
+    checkTargetHeadFn: () => ({ matched: false, reason: 'MISMATCH', actual: 'c'.repeat(40) }),
+    resolveRemoteMainShaFn: () => 'a'.repeat(40),
+    checkpointLookupFn: () => ({ status: 'ABSENT' }),
+    executeTaskFn: async () => {
+      executeCalled = true;
+      return { status: 'SHOULD_NOT_HAPPEN' };
+    },
+  });
+  assert.equal(outcome.result, 'HOLD_TARGET_HEAD_MISMATCH');
+  assert.equal(outcome.realChildSpawn, false);
+  assert.equal(executeCalled, false);
+});
+
+test('runExecuteGreen: target-head UNRESOLVED (git rev-parse failed) -> HOLD_TARGET_HEAD_UNRESOLVED, executeTaskFn never called', async () => {
+  let executeCalled = false;
+  const outcome = await runExecuteGreen({
+    queue: executableQueueFixture(),
+    flagPresent: true,
+    envValue: '1',
+    realSpawnEnvValue: '1',
+    repoRoot: '/fake/repo',
+    targetHeadSha: 'b'.repeat(40),
+    checkTargetHeadFn: () => ({ matched: false, reason: 'UNRESOLVED', actual: null }),
+    resolveRemoteMainShaFn: () => 'a'.repeat(40),
+    checkpointLookupFn: () => ({ status: 'ABSENT' }),
+    executeTaskFn: async () => {
+      executeCalled = true;
+      return { status: 'SHOULD_NOT_HAPPEN' };
+    },
+  });
+  assert.equal(outcome.result, 'HOLD_TARGET_HEAD_UNRESOLVED');
+  assert.equal(executeCalled, false);
+});
+
+test('runExecuteGreen: an EXACT target-head match -> proceeds to executeTaskFn (the next gate), with the verified actual SHA in ctx', async () => {
+  let receivedCtx = null;
+  const outcome = await runExecuteGreen({
+    queue: executableQueueFixture(),
+    flagPresent: true,
+    envValue: '1',
+    realSpawnEnvValue: '1',
+    repoRoot: '/fake/repo',
+    ...passingTargetHeadFakes(),
+    resolveRemoteMainShaFn: () => 'a'.repeat(40),
+    checkpointLookupFn: () => ({ status: 'ABSENT' }),
+    executeTaskFn: async (task, ctx) => {
+      receivedCtx = ctx;
+      return { status: 'FAKE_EXECUTED_FOR_TEST_ONLY' };
+    },
+  });
+  assert.equal(outcome.result, 'FAKE_EXECUTED_FOR_TEST_ONLY');
+  assert.equal(receivedCtx.targetHeadSha, PASSING_TARGET_HEAD_SHA);
+});
+
+test('runExecuteGreen: remote-main SHA and target-head SHA are legitimately DIFFERENT values, and both gates PASS simultaneously', async () => {
+  const remoteMainSha = 'a'.repeat(40);
+  const targetHeadSha = 'b'.repeat(40);
+  assert.notEqual(remoteMainSha, targetHeadSha, 'the two SHAs used in this test must actually differ, or the test would not prove anything');
+  let executeCalled = false;
+  const outcome = await runExecuteGreen({
+    queue: executableQueueFixture({ session: { session_id: 's', mode: 'dry-run', base_sha: remoteMainSha, branch_prefix: 'agent/night/x', max_session_minutes: 60, max_total_tasks: 1, max_consecutive_holds: 1 } }),
+    flagPresent: true,
+    envValue: '1',
+    realSpawnEnvValue: '1',
+    repoRoot: '/fake/repo',
+    targetHeadSha,
+    checkTargetHeadFn: () => ({ matched: true, reason: 'OK', actual: targetHeadSha }),
+    resolveRemoteMainShaFn: () => remoteMainSha, // matches queue.session.base_sha exactly -> remote-main gate PASS
+    checkpointLookupFn: () => ({ status: 'ABSENT' }),
+    executeTaskFn: async () => {
+      executeCalled = true;
+      return { status: 'PASS', realChildSpawn: true };
+    },
+  });
+  assert.equal(outcome.result, 'PASS');
+  assert.equal(executeCalled, true, 'both the remote-main gate and the target-head gate passed, reaching execution');
+});
+
+test('runExecuteGreen: telemetry — a target-head mismatch reports realChildSpawn=false (never true)', async () => {
+  const outcome = await runExecuteGreen({
+    queue: executableQueueFixture(),
+    flagPresent: true,
+    envValue: '1',
+    realSpawnEnvValue: '1',
+    repoRoot: '/fake/repo',
+    targetHeadSha: 'b'.repeat(40),
+    checkTargetHeadFn: () => ({ matched: false, reason: 'MISMATCH', actual: 'c'.repeat(40) }),
+    resolveRemoteMainShaFn: () => 'a'.repeat(40),
+    checkpointLookupFn: () => ({ status: 'ABSENT' }),
+    executeTaskFn: async () => ({ status: 'PASS', realChildSpawn: true }), // would report true, but must never be called
+  });
+  assert.equal(outcome.realChildSpawn, false);
+  assert.equal(resolveExitCode(outcome.result), 1);
 });
 
 // ---------------------------------------------------------------------------
@@ -1653,6 +1922,54 @@ test('runExecuteGreen + real executeControlledGreenTask: remote main drift block
 
   assert.equal(outcome.result, 'HOLD_REMOTE_MAIN_DRIFT');
   assert.equal(spawnCalled, false, 'BEFORE spawn: drift must block before executeControlledGreenTask is ever called');
+  assert.equal(existsSync(checkpointFilePath), false, 'BEFORE checkpoint RUNNING: no checkpoint may exist');
+  assert.deepEqual(readdirSync(dir), [], 'BEFORE policy: no policy file may exist');
+});
+
+test('runExecuteGreen + real executeControlledGreenTask: a target-head MISMATCH blocks BEFORE the worktree-clean gate, policy creation, checkpoint RUNNING, or spawn (sections 6-9)', async (t) => {
+  const dir = tempDir(t);
+  let spawnCalled = false;
+  let worktreeCleanCalled = false;
+  const checkpointFilePath = path.join(dir, 'checkpoint.json');
+
+  const outcome = await runExecuteGreen({
+    queue: executableQueueFixture(),
+    flagPresent: true,
+    envValue: '1',
+    realSpawnEnvValue: '1',
+    repoRoot: '/fake/repo',
+    targetHeadSha: 'b'.repeat(40),
+    checkTargetHeadFn: () => ({ matched: false, reason: 'MISMATCH', actual: 'c'.repeat(40) }),
+    resolveRemoteMainShaFn: () => 'a'.repeat(40), // matches session.base_sha exactly — remote-main gate PASSES; only target-head fails
+    executeTaskFn: (task, ctx) =>
+      executeControlledGreenTask({
+        task,
+        repoRoot: '/fake/repo',
+        baseSha: ctx.targetHeadSha,
+        flagPresent: true,
+        executionEnvValue: '1',
+        realSpawnEnvValue: '1', // triple lock fully satisfied — proves the target-head gate blocks earlier, not this one
+        prompt: 'x',
+        timeoutMs: 5000,
+        inactivityTimeoutMs: 5000,
+        attempt: ctx.attempt,
+        checkpointFilePath,
+        tmpDirFn: () => dir,
+        ...passingGateFakes(),
+        checkWorktreeCleanFn: () => {
+          worktreeCleanCalled = true;
+          return { clean: true, reason: 'OK' };
+        },
+        spawnFn: () => {
+          spawnCalled = true;
+          return makeFakeChild();
+        },
+      }),
+  });
+
+  assert.equal(outcome.result, 'HOLD_TARGET_HEAD_MISMATCH');
+  assert.equal(worktreeCleanCalled, false, 'BEFORE clean-worktree gate: executeControlledGreenTask (the child path) must never even be invoked');
+  assert.equal(spawnCalled, false, 'BEFORE spawn');
   assert.equal(existsSync(checkpointFilePath), false, 'BEFORE checkpoint RUNNING: no checkpoint may exist');
   assert.deepEqual(readdirSync(dir), [], 'BEFORE policy: no policy file may exist');
 });

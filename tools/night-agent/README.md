@@ -80,11 +80,20 @@ SAFETY.md`'s "NIGHT-V1-D" section for the full rationale.
     execution plan for the next GREEN task (policy summary, restricted
     tool surface, timeouts, retry budget) — no secrets, no real policy
     file created, no Claude spawned.
-  - `--execute-green` — `runExecuteGreen` checks the double gate (CLI flag +
+  - `--execute-green` — requires `--target-head <40-char-sha>`
+    (NIGHT-V1-D-R1). `runExecuteGreen` checks the double gate (CLI flag +
     `KORIXA_NIGHT_EXECUTION=1`), then the triple lock's third gate
     (`KORIXA_NIGHT_REAL_SPAWN=1`, NIGHT-V1-D), then queue/task validation,
-    task selection, the real deterministic-checkpoint recovery decision, and
-    remote-main drift — all before ever calling `executeTaskFn`. The REAL
+    task selection, the real deterministic-checkpoint recovery decision,
+    remote-main drift, and — strictly before ever calling `executeTaskFn` —
+    the TARGET HEAD gate: `--target-head` is required, format-validated
+    (`isValidTargetHeadSha`), and compared against a real, freshly-resolved
+    `git -C <repoRoot> rev-parse HEAD` (`checkTargetHead`/
+    `resolveLocalHeadSha`, argv array, `shell: false`) — never inferred from
+    the worktree itself. `queue.session.base_sha` (remote-main-frozen) and
+    `--target-head` (this exact worktree's authorized commit) are
+    independent invariants that may legitimately differ while both gates
+    PASS. The REAL
     `executeControlledGreenTask` is wired as that function (no longer the
     permanent `stubExecuteTaskFn`), receiving the real `(attempt,
     checkpointFilePath)` resolved by `runExecuteGreen` — no more

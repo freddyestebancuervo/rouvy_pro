@@ -131,6 +131,37 @@ code path in this repository's real CLI invocation ever sets
 `KORIXA_NIGHT_REAL_SPAWN` — see `SAFETY.md`'s "NIGHT-V1-D" section for the
 full rationale.
 
+## NIGHT-V1-D-R1: the TARGET HEAD gate — a clean worktree is not an authorized worktree
+
+`REMOTE_MAIN` and `TARGET_HEAD` are two distinct invariants.
+`queue.session.base_sha` keeps its ORIGINAL, unchanged meaning — the
+remote-main-frozen SHA, feeding ONLY `checkRemoteMainDrift` — going all the
+way back to NIGHT-V1-A. It says nothing about which commit the local
+execution worktree is actually sitting at; a worktree can be perfectly
+CLEAN (no uncommitted changes) while still being on an entirely different
+commit than the one an operator actually authorized for this specific run.
+
+`targetHeadSha` is a SEPARATE value the operator supplies explicitly via
+`--target-head <40-char-sha>` — never inferred from `git rev-parse HEAD`
+(doing so would auto-authorize whatever the worktree happens to be on,
+defeating the purpose of the gate entirely). `runExecuteGreen` requires it,
+format-validates it (`isValidTargetHeadSha`), and compares it against a
+freshly-resolved real local HEAD (`resolveLocalHeadSha`, `git -C <repoRoot>
+rev-parse HEAD`, argv array, `shell: false`) via `checkTargetHeadFn`. This
+happens AFTER the remote-main gate and strictly BEFORE `executeTaskFn` is
+ever called — before any policy file, checkpoint write, or spawn. The two
+SHAs may legitimately differ (remote-main frozen vs. the exact local
+execution commit) and both gates can PASS simultaneously.
+
+**Provenance**: the ACTIVE POLICY's and the CHECKPOINT's `base_sha` fields
+(their schema is unchanged — no new field was added to either) are now
+populated with the VERIFIED `targetHeadSha` (the worktree's own real,
+matched HEAD), not `queue.session.base_sha` — because that is what those
+records actually describe: the commit the execution is running against, not
+the separate remote-main freshness check. Recording the remote-main SHA
+there would have been a false provenance claim whenever the two values
+differ.
+
 ## Checkpoint states (a SEPARATE, execution-attempt-level state machine)
 
 `tools/night-agent/checkpoint.mjs` defines its own state set — `PENDING`,
