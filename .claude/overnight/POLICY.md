@@ -115,19 +115,21 @@ schema, enforced by `tools/night-agent/queue.mjs`) was extended with:
 - `max_turns` (positive integer, ceiling 40): bounds a future Claude
   child's own turn count.
 
-## NIGHT-V1-C: the triple execution lock
+## NIGHT-V1-C/D: the triple execution lock
 
-Real execution of `--execute-green` now requires THREE simultaneous
+Real execution of `--execute-green` requires THREE simultaneous
 conditions — the `--execute-green` CLI flag, `KORIXA_NIGHT_EXECUTION=1`,
-and a further `KORIXA_NIGHT_REAL_SPAWN=1` — checked by
-`isTripleExecutionLockSatisfied` inside `executeControlledGreenTask` itself,
-before any policy file, checkpoint, or spawn attempt. Any two of the three
-alone resolve to `HOLD_REAL_EXECUTION_LOCKED` with zero side effects. No
+and a further `KORIXA_NIGHT_REAL_SPAWN=1`. NIGHT-V1-D checks this at TWO
+independent layers, defense in depth: `runExecuteGreen` itself checks it
+(immediately after the existing double gate, before queue/task validation
+even runs — section 24's "TRIPLE LOCK" is the very first pipeline step),
+and `executeControlledGreenTask` re-checks it again via
+`isTripleExecutionLockSatisfied` before creating any policy file, writing
+any checkpoint, or attempting any spawn. Any two of the three alone resolve
+to `HOLD_REAL_EXECUTION_LOCKED` with zero side effects at either layer. No
 code path in this repository's real CLI invocation ever sets
-`KORIXA_NIGHT_REAL_SPAWN` — see `SAFETY.md`'s "NIGHT-V1-C" section for the
-full rationale. This is on top of, not instead of, the existing double gate
-(`isExecuteGreenUnlocked`) that `runExecuteGreen` itself checks before even
-selecting a task.
+`KORIXA_NIGHT_REAL_SPAWN` — see `SAFETY.md`'s "NIGHT-V1-D" section for the
+full rationale.
 
 ## Checkpoint states (a SEPARATE, execution-attempt-level state machine)
 
@@ -140,4 +142,56 @@ describes its place in the overall queue; a checkpoint describes the
 progress of one attempt at running it. A checkpoint claiming `RUNNING` is
 never assumed to still be running after a runner restart with no live
 reference to that process — it becomes `HOLD_STALE_SESSION` instead (see
-`resolveResumeState`). Neither state machine silently maps onto the other.
+`resolveResumeState`, and NIGHT-V1-D's `resolveCheckpointRecoveryDecision`,
+which extends the same conservative treatment to `VERIFYING` and `PENDING`
+too). Neither state machine silently maps onto the other.
+
+## NIGHT-V1-D: persistent, recoverable checkpoints and the real pre-spawn pipeline
+
+`checkpoint.mjs`'s `resolveCheckpointPath` gives every (repoRoot, task.id)
+pair a deterministic, stable path OUTSIDE the repository (under
+`os.tmpdir()/korixa-night-agent-checkpoints/`, keyed by a SHA-256 hash — the
+raw repoRoot/task.id strings never appear in the path itself). A real CLI
+invocation can therefore find a PRIOR run's checkpoint after a process
+restart with no in-memory state at all. `resolveCheckpointRecoveryDecision`
+maps whatever it finds (or doesn't) to one of: `START_FRESH` (attempt 0),
+`RESUME_RETRY` (budget remains — reuses the checkpoint's own `attempt`,
+already incremented when it was written), `HOLD_STALE_SESSION` (`RUNNING`/
+`VERIFYING`/`PENDING`), `HOLD_ALREADY_COMPLETED` (`PASS`), `HOLD_EXISTING_HOLD`
+(`HOLD`), `HOLD_RETRY_EXHAUSTED` (`RETRY` with `attempt >= max_retries`), or
+`HOLD_INVALID_CHECKPOINT` (present but corrupt/malformed — never silently
+treated as absent). This is the FROZEN, pre-existing `attempt`/`max_retries`
+semantics `checkpoint.mjs`'s own retry-limit test already demonstrated —
+NIGHT-V1-D makes it reusable across a process restart, it does not
+reinterpret it.
+
+`executeControlledGreenTask`'s pipeline (section 24) now runs, in order,
+BEFORE any policy/checkpoint/spawn: the triple lock, task validity, a
+task-worktree-clean gate (`checkWorktreeClean` — a real `git status
+--porcelain=v1 -z --untracked-files=all`, argv array, `shell: false`), a
+Night-Guard-installation preflight (`checkNightGuardInstalled` — confirms
+`.claude/settings.json` exists, parses as JSON, and its `hooks.PreToolUse`
+actually registers `night-guard.mjs`; also confirms the guard file itself
+exists), and a verification-commands-present gate (`HOLD_NO_VERIFICATION_COMMANDS`
+if empty — a real GREEN task must declare at least one verification).
+
+`CHILD_EXIT_0 != TASK_PASS`. After a successful child, the pipeline is:
+POST-SCOPE CHECK #1 (real `git status`, passed to the SAME
+`checkPostExecutionScope` from NIGHT-V1-B/C, not duplicated) -> checkpoint
+`VERIFYING` -> run every `verification_commands` entry via the trusted
+verification runner (`runVerificationCommand`/`runAllVerificationCommands`
+— reuses `queue.mjs`'s already-closed `VALID_VERIFICATION_FAMILIES` exactly,
+argv array, `shell: false`, a bounded timeout, never a raw stdout/stderr
+stored anywhere) -> POST-SCOPE CHECK #2 -> only THEN checkpoint `PASS`. An
+unauthorized-scope finding at EITHER check is `HOLD` unconditionally — never
+`RETRY`, and never converted to `PASS` by a later step, regardless of
+remaining retry budget. A verification failure IS budget-checked (`RETRY` if
+budget remains, `HOLD` once exhausted), using the same
+`decideRetryOrHold`/`resolveCheckpointRecoveryDecision` semantics as a child
+failure.
+
+The CLI's `REAL_CHILD_SPAWN` telemetry and exit code are now truthful: 1
+only if `runControlledChild` was actually invoked (regardless of the
+eventual outcome), 0 for every gate-blocked HOLD; exit 0 only for an actual
+`PASS`, non-zero for every `RETRY`/`HOLD`/gate-locked/validation-failure
+outcome (`resolveExitCode`).

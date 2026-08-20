@@ -444,6 +444,97 @@ multi-attempt retry decision remains a distinct, future concern), no
 controlled Git writer, no publication path, no Production access. `git
 add`/`git commit`/`git push` remain denied in Night Mode exactly as before.
 
+## NIGHT-V1-D: pre-real-run safety closure
+
+C wired the controlled-execution pipeline but left several gaps a real
+first GREEN run would need closed. D closes exactly five, and only five —
+no Git writer, no auto-commit/push, no PR automation, no multi-agent, no
+scheduler, no Production/Cloud access, no new queue system, no new
+`verification_commands` format, no new permission system:
+
+**1. `verification_commands` now drive the real result.**
+`runVerificationCommand`/`runAllVerificationCommands`
+(`tools/night-agent/runner.mjs`) reuse `queue.mjs`'s ALREADY-CLOSED
+`VALID_VERIFICATION_FAMILIES` (`NODE_TEST`, `NODE_VERSION`, `PWD`) exactly —
+no new family. Each command is mapped to a safe argv array (never a raw
+shell string), run with `shell: false`, cwd `repoRoot`, and a bounded
+timeout. `NODE_TEST`'s target is re-verified (defense in depth, beyond
+`queue.mjs`'s own schema-time check) against the task's own
+`allowed_paths`/`read_paths` via `isRepoRelativePath`/`isPathWithinScope` —
+a target outside the task's own scope fails closed
+(`VERIFICATION_TARGET_OUT_OF_SCOPE`), never spawned. `PWD` is a direct
+filesystem check (`existsSync(repoRoot)`), not a spawn — there is no
+portable, shell-free `pwd` executable to invoke consistently across
+platforms. Raw stdout/stderr from a verification command is captured only
+transiently in local scope and is NEVER returned or persisted — only a
+PASS/FAIL boolean and a fixed, generic error family.
+
+**2. `checkPostExecutionScope` is now wired to REAL Git output.**
+`getGitStatusPaths` runs a real `git status --porcelain=v1 -z
+--untracked-files=all` (argv array, `shell: false`), and
+`parseGitStatusPorcelainZ` parses the NUL-separated output correctly —
+including paths containing spaces, and rename/copy entries' extra
+NUL-terminated original-path field — without ever line-splitting on
+whitespace. The resulting path list is passed to the SAME
+`checkPostExecutionScope` function from NIGHT-V1-B/C, not duplicated. This
+runs TWICE per successful child (before verification and after) — an
+unauthorized finding at either point is `HOLD`, unconditionally, and the
+unauthorized paths are reported in the result but never written into the
+checkpoint (whose field set stays exactly as closed as ever).
+
+**3. The checkpoint is now persistent and recoverable across a process
+restart.** See `POLICY.md`'s "NIGHT-V1-D" section for
+`resolveCheckpointPath`/`resolveCheckpointRecoveryDecision`'s full
+semantics. The checkpoint directory (under `os.tmpdir()`, never inside the
+repo) is created only at the moment of an actual WRITE
+(`writeCheckpointAtomic`'s own `mkdirSync`) — a mere path resolution or read
+lookup never creates anything.
+
+**4. CLI telemetry and exit code are now truthful, not hardcoded.**
+`REAL_CHILD_SPAWN` reflects `executeControlledGreenTask`'s own
+`realChildSpawn` flag (`true` from the moment a spawn is actually
+attempted, `false` for every gate-blocked outcome) rather than a fixed `0`
+print statement. `resolveExitCode` maps `PASS` to exit `0` and every other
+outcome — `RETRY`, `HOLD` (of any family), a validation failure, a
+gate-locked result — to a non-zero exit, replacing the previous
+unconditional `process.exit(1)`.
+
+**5. A Night Guard installation preflight, before any real execution.**
+`checkNightGuardInstalled` confirms — read-only, never modifying
+`.claude/settings.json` or the guard file — that `.claude/settings.json`
+exists and parses as valid JSON, that `.claude/hooks/night-guard.mjs`
+exists, and that `settings.json`'s `hooks.PreToolUse` array structurally
+registers a `command`-type hook whose `args` (or, tolerantly, a single
+shell-string `command`) actually names `night-guard.mjs` — not merely that
+the guard file happens to exist on disk somewhere. Any gap (`SETTINGS_MISSING`,
+`SETTINGS_INVALID_JSON`, `GUARD_FILE_MISSING`, `PRETOOLUSE_MISSING`,
+`GUARD_NOT_REGISTERED`) is `HOLD_NIGHT_GUARD_NOT_INSTALLED`, checked before
+any policy/checkpoint/spawn.
+
+**Also closed, as prerequisites for the above:** a task-worktree-clean gate
+(`checkWorktreeClean`, the same real `git status` machinery as #2) —
+tracked modifications, deletions, untracked files, and renames/copies all
+count as dirty, and the worktree is never cleaned/reset/stashed by this
+codebase, only read; a `verification_commands`-present requirement for any
+task actually reaching real execution (`HOLD_NO_VERIFICATION_COMMANDS` if
+empty — historical `--validate`/`--dry-run` fixtures that deliberately ship
+no verification commands are unaffected, since this gate only applies to
+the real `--execute-green` pipeline); and the budget-aware
+`decideRetryOrHold` helper, which makes a child failure OR a verification
+failure `RETRY` only while budget remains and `HOLD` once exhausted — an
+unauthorized-scope finding is EXEMPT from this budget check and is always
+`HOLD`, on the reasoning that "the same failure keeps recurring" (what a
+retry budget exists to bound) does not apply to "an unexpected file was
+touched," which needs human review regardless of how many retries remain.
+
+**The triple execution lock is unchanged in substance, strengthened in
+placement** — see `POLICY.md`'s "NIGHT-V1-C/D" section. `REAL_CLAUDE_AGENT_RUNS`
+stays `0` for the entirety of NIGHT-V1-D: nothing in this block's own code
+ever sets `KORIXA_NIGHT_REAL_SPAWN`, and every test exercising the "3/3
+unlocked" path does so by passing the gate values directly to a function
+call, always paired with an injected fake `spawnFn` — never against the
+real CLI entrypoint.
+
 ## Unlock path
 
 None of the above is unlocked by this file. A future version may explicitly

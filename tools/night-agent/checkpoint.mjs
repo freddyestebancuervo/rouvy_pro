@@ -7,7 +7,9 @@
 //
 // Node built-ins only.
 
-import { writeFileSync, renameSync, readFileSync, existsSync } from 'node:fs';
+import { writeFileSync, renameSync, readFileSync, existsSync, mkdirSync } from 'node:fs';
+import { createHash } from 'node:crypto';
+import { tmpdir } from 'node:os';
 import path from 'node:path';
 
 export const CHECKPOINT_STATES = ['PENDING', 'RUNNING', 'VERIFYING', 'PASS', 'RETRY', 'HOLD'];
@@ -111,6 +113,12 @@ export function writeCheckpointAtomic(filePath, checkpoint) {
     throw new Error('writeCheckpointAtomic: checkpoint failed validateCheckpoint — refusing to write a malformed checkpoint');
   }
   const dir = path.dirname(filePath);
+  // NIGHT-V1-D: the deterministic checkpoint directory (see
+  // resolveCheckpointPath below) does not exist until the first real write
+  // — creating it here, in the WRITE path only, keeps every READ path
+  // (readCheckpoint, readCheckpointForResume) from ever creating a
+  // directory or file as a side effect of a lookup.
+  mkdirSync(dir, { recursive: true });
   const tmpPath = path.join(dir, `.${path.basename(filePath)}.tmp-${process.pid}-${Date.now()}-${Math.random().toString(36).slice(2)}`);
   writeFileSync(tmpPath, JSON.stringify(checkpoint, null, 2), 'utf8');
   renameSync(tmpPath, filePath);
@@ -172,4 +180,125 @@ export function resolveResumeState(checkpoint, { hasControlledChildEvidence }) {
     return { action: 'STAY_HOLD', reason: 'checkpoint is already HOLD — requires human input, not automatic resume' };
   }
   return { action: 'RESUME', reason: `resuming from checkpoint state ${checkpoint.state}` };
+}
+
+// ---------------------------------------------------------------------------
+// NIGHT-V1-D: a deterministic, persistent, recoverable checkpoint path — so
+// a real CLI invocation can find a PRIOR run's checkpoint after the process
+// that wrote it has exited, without any in-memory dependency injection.
+// ---------------------------------------------------------------------------
+
+const CHECKPOINT_DIR_NAME = 'korixa-night-agent-checkpoints';
+
+/**
+ * Resolve the deterministic, stable path a checkpoint for this exact
+ * (repoRoot, taskId) pair always lives at — same repoRoot/task -> same
+ * path, a different task or a different repo -> a different path. Pure
+ * string computation: no filesystem access, so calling this alone (a
+ * "read"/lookup) never creates a directory or file — only
+ * `writeCheckpointAtomic` (above) does, and only at the moment of an actual
+ * write. The path itself never embeds a task-controlled string directly
+ * (only a SHA-256 hash of it) so a task id containing unusual characters
+ * can never influence the checkpoint directory's structure.
+ * @param {object} params
+ * @param {string} params.repoRoot
+ * @param {string} params.taskId
+ * @param {() => string} [params.tmpDirFn]
+ * @returns {string}
+ */
+export function resolveCheckpointPath({ repoRoot, taskId, tmpDirFn = tmpdir }) {
+  const normalizedRoot = path.resolve(repoRoot).replace(/\\/g, '/').replace(/\/$/, '').toLowerCase();
+  const key = `${normalizedRoot}::${taskId}`;
+  const hash = createHash('sha256').update(key, 'utf8').digest('hex');
+  return path.join(tmpDirFn(), CHECKPOINT_DIR_NAME, `${hash}.json`);
+}
+
+/**
+ * Read a checkpoint file for the purpose of a resume/recovery decision,
+ * distinguishing "no checkpoint at all" from "a checkpoint file exists but
+ * is corrupt/invalid" — `readCheckpoint` above deliberately collapses both
+ * to `null` (fine for its own simpler callers), but section 9's recovery
+ * policy needs to tell them apart: absence means "safe to start fresh,"
+ * while a present-but-invalid file must never be silently treated the same
+ * way. Pure read — `existsSyncFn` is checked before any read attempt, so a
+ * missing file never even reaches `readFileSyncFn`.
+ * @param {string} filePath
+ * @param {{existsSyncFn?: typeof existsSync, readFileSyncFn?: typeof readFileSync}} [params]
+ * @returns {{status: 'ABSENT'} | {status: 'INVALID'} | {status: 'VALID', checkpoint: object}}
+ */
+export function readCheckpointForResume(filePath, { existsSyncFn = existsSync, readFileSyncFn = readFileSync } = {}) {
+  if (!existsSyncFn(filePath)) return { status: 'ABSENT' };
+  let raw;
+  try {
+    raw = readFileSyncFn(filePath, 'utf8');
+  } catch {
+    return { status: 'INVALID' };
+  }
+  let parsed;
+  try {
+    parsed = JSON.parse(raw);
+  } catch {
+    return { status: 'INVALID' };
+  }
+  if (!validateCheckpoint(parsed)) return { status: 'INVALID' };
+  return { status: 'VALID', checkpoint: parsed };
+}
+
+/**
+ * NIGHT-V1-D section 9's full recovery policy, built on top of
+ * `readCheckpointForResume`'s three-way result and the FROZEN existing
+ * `attempt`/`max_retries` semantics already demonstrated by this file's own
+ * pre-existing test ("a checkpoint sequence hitting max_retries transitions
+ * to HOLD"): `attempt` counts how many RETRY transitions have already
+ * happened (0 for a checkpoint that has never yet been retried); a RETRY
+ * checkpoint's `attempt` field is written as the count AFTER that
+ * transition, and remains the correct number to reuse, unchanged, for the
+ * next actual attempt (the increment already happened when the RETRY
+ * checkpoint was written — resuming does not increment again). A retry is
+ * permitted only while `checkpoint.attempt < maxRetries`; once
+ * `attempt >= maxRetries`, no further attempt is permitted, matching the
+ * pre-existing test exactly (this function does not reinterpret that
+ * semantics, only makes it reusable across a process restart).
+ *
+ * `RUNNING`, `VERIFYING`, and `PENDING` are all treated identically
+ * (`HOLD_STALE_SESSION`): each represents a prior attempt that was
+ * interrupted mid-flight with no live evidence in THIS invocation that it
+ * is still progressing, so none of them may ever be silently resumed or
+ * assumed finished — the same conservative reasoning `resolveResumeState`
+ * already applies to `RUNNING` alone, extended here to the two other
+ * "in-progress" states this newer flow can also leave behind.
+ * @param {object} params
+ * @param {{status: 'ABSENT'} | {status: 'INVALID'} | {status: 'VALID', checkpoint: object}} params.readResult
+ * @param {number} params.maxRetries
+ * @returns {{decision: 'START_FRESH'|'RESUME_RETRY'|'HOLD_STALE_SESSION'|'HOLD_ALREADY_COMPLETED'|'HOLD_EXISTING_HOLD'|'HOLD_RETRY_EXHAUSTED'|'HOLD_INVALID_CHECKPOINT', nextAttempt: number|null}}
+ */
+export function resolveCheckpointRecoveryDecision({ readResult, maxRetries }) {
+  if (readResult.status === 'ABSENT') {
+    return { decision: 'START_FRESH', nextAttempt: 0 };
+  }
+  if (readResult.status === 'INVALID') {
+    return { decision: 'HOLD_INVALID_CHECKPOINT', nextAttempt: null };
+  }
+
+  const cp = readResult.checkpoint;
+  if (cp.state === 'RUNNING' || cp.state === 'VERIFYING' || cp.state === 'PENDING') {
+    return { decision: 'HOLD_STALE_SESSION', nextAttempt: null };
+  }
+  if (cp.state === 'PASS') {
+    return { decision: 'HOLD_ALREADY_COMPLETED', nextAttempt: null };
+  }
+  if (cp.state === 'HOLD') {
+    return { decision: 'HOLD_EXISTING_HOLD', nextAttempt: null };
+  }
+  if (cp.state === 'RETRY') {
+    if (cp.attempt >= maxRetries) {
+      return { decision: 'HOLD_RETRY_EXHAUSTED', nextAttempt: null };
+    }
+    return { decision: 'RESUME_RETRY', nextAttempt: cp.attempt };
+  }
+
+  // Unreachable given CHECKPOINT_STATES' closed set plus validateCheckpoint
+  // already having accepted this checkpoint — fail closed defensively
+  // rather than falling through to an implicit allow.
+  return { decision: 'HOLD_INVALID_CHECKPOINT', nextAttempt: null };
 }

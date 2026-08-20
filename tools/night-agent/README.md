@@ -9,7 +9,7 @@ Node built-ins only.
 
 ```
 EXECUTION_ENGINE = DISABLED_IN_V1_A
-CLAUDE_AGENT_RUNS_IN_V1_C = 0
+CLAUDE_AGENT_RUNS_IN_V1_D = 0
 REAL_AUTONOMOUS_EXECUTION_READY = NO
 ```
 
@@ -19,12 +19,16 @@ mutates any file outside of an active-policy-scoped Write/Edit that a
 below). `git add`/`git commit`/`git push` are denied entirely in Night
 Mode — there is no controlled Git writer, so any commit still goes through
 a human or an explicitly authorized supervised block, never autonomously.
-`--execute-green` is gated by a TRIPLE execution lock as of NIGHT-V1-C (CLI
-flag + `KORIXA_NIGHT_EXECUTION=1` + `KORIXA_NIGHT_REAL_SPAWN=1`) — the real
-controlled-execution pipeline (`executeControlledGreenTask`) is wired end to
-end, but no code path in this codebase ever sets `KORIXA_NIGHT_REAL_SPAWN`,
-so a real spawn is never reached in a real invocation. See
-`.claude/overnight/SAFETY.md`'s "NIGHT-V1-C" section for the full rationale.
+`--execute-green` is gated by a TRIPLE execution lock, checked at TWO
+independent layers as of NIGHT-V1-D (`runExecuteGreen` itself, and again
+inside `executeControlledGreenTask`): CLI flag + `KORIXA_NIGHT_EXECUTION=1`
++ `KORIXA_NIGHT_REAL_SPAWN=1`. The real controlled-execution pipeline
+(`executeControlledGreenTask` — now including a task-worktree-clean gate, a
+Night-Guard-installation preflight, a persistent/recoverable checkpoint, and
+a real post-child verification+scope pipeline) is wired end to end, but no
+code path in this codebase ever sets `KORIXA_NIGHT_REAL_SPAWN`, so a real
+spawn is never reached in a real invocation. See `.claude/overnight/
+SAFETY.md`'s "NIGHT-V1-D" section for the full rationale.
 
 ## Files
 
@@ -43,10 +47,17 @@ so a real spawn is never reached in a real invocation. See
   critical control-plane path detection, task-scope containment, and real
   filesystem realpath/symlink-junction containment checks. Both
   `queue.mjs` and `.claude/hooks/night-guard.mjs` import from here.
-- **`checkpoint.mjs`** (NIGHT-V1-B) — atomic (write-temp-then-rename) task
-  checkpointing with a fixed, secret-free field set, and the stale-session
-  resume policy: a checkpoint claiming `RUNNING` is never assumed to still
-  be running after a restart with no live process reference.
+- **`checkpoint.mjs`** — atomic (write-temp-then-rename) task checkpointing
+  with a fixed, secret-free field set, and the stale-session resume policy:
+  a checkpoint claiming `RUNNING` is never assumed to still be running
+  after a restart with no live process reference. NIGHT-V1-D added
+  `resolveCheckpointPath` (a deterministic, SHA-256-keyed path outside the
+  repo, stable per repoRoot+task.id — created only on an actual write,
+  never on a lookup) and `resolveCheckpointRecoveryDecision` (the full
+  recovery policy: `START_FRESH`/`RESUME_RETRY`/`HOLD_STALE_SESSION`/
+  `HOLD_ALREADY_COMPLETED`/`HOLD_EXISTING_HOLD`/`HOLD_RETRY_EXHAUSTED`/
+  `HOLD_INVALID_CHECKPOINT`), so a real CLI invocation can find and
+  correctly resume from a PRIOR run's checkpoint after a process restart.
 - **`executor.mjs`** — builds the exact `claude` CLI argv for a restricted,
   non-interactive child: `-p <prompt> --tools Read,Glob,Grep,Write,Edit
   --allowedTools Read Glob Grep Write Edit --permission-mode dontAsk
@@ -70,15 +81,26 @@ so a real spawn is never reached in a real invocation. See
     tool surface, timeouts, retry budget) — no secrets, no real policy
     file created, no Claude spawned.
   - `--execute-green` — `runExecuteGreen` checks the double gate (CLI flag +
-    `KORIXA_NIGHT_EXECUTION=1`), then remote-main drift and stale-checkpoint
-    state, before ever calling `executeTaskFn`. NIGHT-V1-C wires the REAL
-    `executeControlledGreenTask` as that function (no longer the permanent
-    `stubExecuteTaskFn`), but `executeControlledGreenTask` itself is gated
-    FIRST by a further triple execution lock (CLI flag +
-    `KORIXA_NIGHT_EXECUTION=1` + `KORIXA_NIGHT_REAL_SPAWN=1`) — nothing in
-    this codebase's real path ever sets the third variable, so every real
-    invocation still resolves to `HOLD_REAL_EXECUTION_LOCKED` before any
-    policy/checkpoint/spawn side effect.
+    `KORIXA_NIGHT_EXECUTION=1`), then the triple lock's third gate
+    (`KORIXA_NIGHT_REAL_SPAWN=1`, NIGHT-V1-D), then queue/task validation,
+    task selection, the real deterministic-checkpoint recovery decision, and
+    remote-main drift — all before ever calling `executeTaskFn`. The REAL
+    `executeControlledGreenTask` is wired as that function (no longer the
+    permanent `stubExecuteTaskFn`), receiving the real `(attempt,
+    checkpointFilePath)` resolved by `runExecuteGreen` — no more
+    `checkpointLookupFn = () => null` in the real path. Inside
+    `executeControlledGreenTask` itself: the triple lock is re-checked
+    (defense in depth), then a task-worktree-clean gate, a
+    Night-Guard-installation preflight, and a verification-commands-present
+    check — ALL before any policy/checkpoint/spawn. After a successful
+    child: post-execution scope check #1 (real `git status`) -> checkpoint
+    `VERIFYING` -> run every `verification_commands` entry -> post-execution
+    scope check #2 -> only then checkpoint `PASS`
+    (`CHILD_EXIT_0 != TASK_PASS`). Nothing in this codebase's real path ever
+    sets `KORIXA_NIGHT_REAL_SPAWN`, so every real invocation still resolves
+    to `HOLD_REAL_EXECUTION_LOCKED` before any of the above ever runs.
+    `REAL_CHILD_SPAWN` telemetry and the CLI exit code are now truthful
+    (`resolveExitCode`), not a hardcoded constant.
   - `--self-test` — runs against a hardcoded in-memory fixture, touching no
     files on disk at all.
 - **`test/`** — `node:test` suites for the guard, the queue library,
@@ -122,11 +144,13 @@ sections for the full rationale.
 
 There is still no controlled Git writer — `git add`/`git commit` remain
 denied entirely in Night Mode (delegated-execution risk via Git hooks/
-attribute filters, unchanged since R3). NIGHT-V1-C wires a real controlled-
-execution sandbox (`executeControlledGreenTask`: temporary active policy ->
-checkpoint `RUNNING` -> `runControlledChild` -> checkpoint final state ->
-policy cleanup), but its own triple execution lock means no real invocation
-in this codebase ever reaches a real spawn — see `.claude/overnight/
-SAFETY.md`'s "NIGHT-V1-C" section. A future, separately-authorized change
-would be the one to actually set `KORIXA_NIGHT_REAL_SPAWN=1` from a real
-controller: `EXECUTION_ENGINE = DISABLED_IN_V1_A`, `CLAUDE_AGENT_RUNS = 0`.
+attribute filters, unchanged since R3). The real controlled-execution
+sandbox (`executeControlledGreenTask`: pre-spawn safety gates -> temporary
+active policy -> checkpoint `RUNNING` -> `runControlledChild` -> the
+post-child verification+scope pipeline -> checkpoint final state -> policy
+cleanup) is fully wired as of NIGHT-V1-D, but the triple execution lock
+(checked at two layers) means no real invocation in this codebase ever
+reaches a real spawn — see `.claude/overnight/SAFETY.md`'s "NIGHT-V1-D"
+section. A future, separately-authorized change would be the one to
+actually set `KORIXA_NIGHT_REAL_SPAWN=1` from a real controller:
+`EXECUTION_ENGINE = DISABLED_IN_V1_A`, `CLAUDE_AGENT_RUNS = 0`.

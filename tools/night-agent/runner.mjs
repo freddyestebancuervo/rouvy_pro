@@ -1,15 +1,21 @@
 #!/usr/bin/env node
 // Korixa Night Agent — V1/V1-B runner.
 //
-// EXECUTION_ENGINE = DISABLED_IN_V1_A. NIGHT-V1-C wires the real controlled-
+// EXECUTION_ENGINE = DISABLED_IN_V1_A. NIGHT-V1-C wired the real controlled-
 // execution pipeline end to end — TASK -> temporary ACTIVE POLICY ->
 // CHECKPOINT RUNNING -> CONTROLLED EXECUTOR -> RESULT -> CHECKPOINT FINAL ->
-// POLICY CLEANUP (see executeControlledGreenTask below) — but a THIRD,
-// separate gate on top of the existing double gate (section 10's "triple
-// execution lock": CLI flag + KORIXA_NIGHT_EXECUTION=1 + a further
-// KORIXA_NIGHT_REAL_SPAWN=1) still guards the actual spawn. Nothing in this
-// codebase's real CLI path ever sets KORIXA_NIGHT_REAL_SPAWN — so every real
-// `--execute-green` invocation in NIGHT-V1-C still resolves to
+// POLICY CLEANUP (see executeControlledGreenTask below). NIGHT-V1-D adds the
+// remaining pre-spawn safety gates (task-worktree-clean, Night-Guard-
+// installed, verification-commands-present), a real post-child pipeline
+// (post-scope check #1 -> verification_commands -> post-scope check #2 ->
+// only THEN checkpoint PASS — CHILD_EXIT_0 != TASK_PASS), a deterministic,
+// persistent, recoverable checkpoint path (resolveCheckpointPath in
+// checkpoint.mjs, keyed by repoRoot+task.id, outside the repo), and
+// truthful CLI telemetry/exit codes. A THIRD gate on top of the double gate
+// (section 10's "triple execution lock": CLI flag + KORIXA_NIGHT_EXECUTION=1
+// + a further KORIXA_NIGHT_REAL_SPAWN=1) still guards the actual spawn.
+// Nothing in this codebase's real CLI path ever sets KORIXA_NIGHT_REAL_SPAWN
+// — so every real `--execute-green` invocation still resolves to
 // HOLD_REAL_EXECUTION_LOCKED before any policy/checkpoint/spawn ever
 // happens. CLAUDE_AGENT_RUNS stays 0 for every real invocation in this
 // version; the wiring itself is proven reachable only via tests that pass
@@ -30,7 +36,11 @@
 //                          KORIXA_NIGHT_EXECUTION=1 + KORIXA_NIGHT_REAL_SPAWN=1,
 //                          section 10). No code path in this version ever
 //                          satisfies all three simultaneously in a real
-//                          invocation — see above.
+//                          invocation — see above. Exit code and
+//                          REAL_CHILD_SPAWN telemetry now reflect the real
+//                          outcome (0/PASS-only vs non-zero, 1 only if a
+//                          spawn was actually attempted) rather than a
+//                          hardcoded constant.
 //   --self-test            Run this file's own internal fixture: hardcoded
 //                          in-memory queue objects, no filesystem/network.
 //
@@ -52,9 +62,18 @@ import {
   selectNextGreenTask,
   classifyExecutability,
   FIXTURE_BASE_SHA,
+  VALID_VERIFICATION_FAMILIES,
 } from './queue.mjs';
 import { RESTRICTED_AUTONOMOUS_TOOLS, buildClaudeArgv, runControlledChild } from './executor.mjs';
-import { createCheckpoint, advanceCheckpoint, writeCheckpointAtomic, resolveResumeState } from './checkpoint.mjs';
+import {
+  createCheckpoint,
+  advanceCheckpoint,
+  writeCheckpointAtomic,
+  resolveCheckpointPath,
+  readCheckpointForResume,
+  resolveCheckpointRecoveryDecision,
+} from './checkpoint.mjs';
+import { isRepoRelativePath, isPathWithinScope } from './path-safety.mjs';
 
 /**
  * @param {string[]} argv
@@ -212,6 +231,19 @@ export function isExecuteGreenUnlocked({ flagPresent, envValue }) {
 }
 
 /**
+ * NIGHT-V1-D section 21: the CLI exit-code mapping — 0 ONLY for an actual
+ * TASK PASS, non-zero for every RETRY/HOLD/gate-locked/validation-failure
+ * outcome. Pure, so this exact mapping is directly testable without ever
+ * spawning a real `claude` process (section 21: "NO ejecutar real Claude
+ * para probarlo").
+ * @param {string} result runExecuteGreen's `result` field
+ * @returns {number}
+ */
+export function resolveExitCode(result) {
+  return result === 'PASS' ? 0 : 1;
+}
+
+/**
  * Section 26's post-execution scope checker: every path a (hypothetical)
  * execution actually touched must belong to the task's allowed_paths.
  * Pure — takes a list of modified paths as data (never inspects the
@@ -234,6 +266,203 @@ export function checkPostExecutionScope(modifiedPaths, allowedPaths) {
     if (!covered) unauthorized.push(modifiedPath);
   }
   return { ok: unauthorized.length === 0, unauthorized };
+}
+
+// ---------------------------------------------------------------------------
+// NIGHT-V1-D section 6/14: trusted-controller Git status, via a real
+// `git status --porcelain=v1 -z --untracked-files=all` (argv array, no
+// shell) — machine-safe (`-z`, NUL-separated) so paths containing spaces or
+// other unusual characters are parsed correctly, not split on whitespace.
+// ---------------------------------------------------------------------------
+
+/**
+ * Parse `git status --porcelain=v1 -z` stdout into a flat list of
+ * repo-relative paths. Each entry is `XY<space>PATH`, NUL-terminated; a
+ * rename/copy entry (`X`/`Y` starting with `R`/`C`) is followed by a SECOND
+ * NUL-terminated field (the original path), which this function consumes
+ * and discards — only the resulting (current) path is reported, since that
+ * is what `checkPostExecutionScope` needs to classify against
+ * `allowed_paths`.
+ * @param {string} stdout
+ * @returns {string[]}
+ */
+export function parseGitStatusPorcelainZ(stdout) {
+  const paths = [];
+  const fields = stdout.split('\0');
+  let i = 0;
+  while (i < fields.length) {
+    const entry = fields[i];
+    if (entry.length === 0) {
+      i++;
+      continue;
+    }
+    const statusCode = entry.slice(0, 2);
+    const entryPath = entry.slice(3);
+    paths.push(entryPath);
+    i++;
+    if (statusCode[0] === 'R' || statusCode[0] === 'C') {
+      i++; // consume the original-path field that follows a rename/copy
+    }
+  }
+  return paths;
+}
+
+/**
+ * Run the real, trusted-controller `git status` and return the parsed
+ * paths, or `{ok: false}` if the command itself failed (the caller must
+ * fail closed — never treat "could not verify" as "clean"/"authorized").
+ * @param {{repoRoot: string, spawnSyncFn?: typeof spawnSync}} params
+ * @returns {{ok: boolean, paths: string[]|null}}
+ */
+export function getGitStatusPaths({ repoRoot, spawnSyncFn = spawnSync }) {
+  const result = spawnSyncFn('git', ['status', '--porcelain=v1', '-z', '--untracked-files=all'], {
+    cwd: repoRoot,
+    encoding: 'utf8',
+    shell: false,
+  });
+  if (!result || result.status !== 0 || typeof result.stdout !== 'string') {
+    return { ok: false, paths: null };
+  }
+  return { ok: true, paths: parseGitStatusPorcelainZ(result.stdout) };
+}
+
+/**
+ * NIGHT-V1-D section 6: the task worktree must be clean BEFORE policy
+ * creation, checkpoint RUNNING, or any spawn — tracked modifications,
+ * deletions, untracked files, and renames/copies all count as dirty (any
+ * non-empty `git status` output at all). Never cleaned, reset, or stashed
+ * by this function or any caller — evidence of pre-existing state is always
+ * preserved.
+ * @param {{repoRoot: string, spawnSyncFn?: typeof spawnSync}} params
+ * @returns {{clean: boolean, reason: string, paths?: string[]}}
+ */
+export function checkWorktreeClean({ repoRoot, spawnSyncFn = spawnSync }) {
+  const { ok, paths } = getGitStatusPaths({ repoRoot, spawnSyncFn });
+  if (!ok) return { clean: false, reason: 'GIT_STATUS_FAILED' };
+  return paths.length === 0 ? { clean: true, reason: 'OK' } : { clean: false, reason: 'DIRTY', paths };
+}
+
+// ---------------------------------------------------------------------------
+// NIGHT-V1-D section 7: the Night Guard installation preflight. Read-only —
+// never modifies `.claude/settings.json` or the guard file. Rejects
+// anything short of a structurally well-formed PreToolUse hook registration
+// that actually points at this project's `night-guard.mjs`.
+// ---------------------------------------------------------------------------
+
+/**
+ * @param {{repoRoot: string, existsSyncFn?: typeof existsSync, readFileSyncFn?: typeof readFileSync}} params
+ * @returns {{installed: boolean, reason: string}}
+ */
+export function checkNightGuardInstalled({ repoRoot, existsSyncFn = existsSync, readFileSyncFn = readFileSync }) {
+  const settingsPath = path.join(repoRoot, '.claude', 'settings.json');
+  const guardPath = path.join(repoRoot, '.claude', 'hooks', 'night-guard.mjs');
+
+  if (!existsSyncFn(settingsPath)) return { installed: false, reason: 'SETTINGS_MISSING' };
+  if (!existsSyncFn(guardPath)) return { installed: false, reason: 'GUARD_FILE_MISSING' };
+
+  let raw;
+  try {
+    raw = readFileSyncFn(settingsPath, 'utf8');
+  } catch {
+    return { installed: false, reason: 'SETTINGS_UNREADABLE' };
+  }
+  let settings;
+  try {
+    settings = JSON.parse(raw);
+  } catch {
+    return { installed: false, reason: 'SETTINGS_INVALID_JSON' };
+  }
+
+  const preToolUse = settings?.hooks?.PreToolUse;
+  if (!Array.isArray(preToolUse) || preToolUse.length === 0) {
+    return { installed: false, reason: 'PRETOOLUSE_MISSING' };
+  }
+
+  const registersGuard = preToolUse.some((entry) => {
+    const entryHooks = entry?.hooks;
+    if (!Array.isArray(entryHooks)) return false;
+    return entryHooks.some((hook) => {
+      if (!hook || hook.type !== 'command') return false;
+      if (Array.isArray(hook.args) && hook.args.some((a) => typeof a === 'string' && a.replace(/\\/g, '/').endsWith('.claude/hooks/night-guard.mjs'))) {
+        return true;
+      }
+      // Tolerate the alternate single shell-string `command` registration
+      // form documented in SAFETY.md, without accepting a bare filename
+      // match outside a well-formed command-type hook entry.
+      return typeof hook.command === 'string' && hook.command.replace(/\\/g, '/').includes('night-guard.mjs');
+    });
+  });
+
+  if (!registersGuard) return { installed: false, reason: 'GUARD_NOT_REGISTERED' };
+
+  return { installed: true, reason: 'OK' };
+}
+
+// ---------------------------------------------------------------------------
+// NIGHT-V1-D section 11-12: the trusted verification runner. Reuses
+// `queue.mjs`'s ALREADY-CLOSED `VALID_VERIFICATION_FAMILIES` set exactly —
+// no new family, no raw shell string, ever. argv array, `shell: false`, a
+// bounded `timeout` (spawnSync) so a hung verification target cannot hang
+// the controller forever. Every result is PASS/FAIL plus a generic error
+// family — raw stdout/stderr is captured only transiently in this
+// function's own local scope and is NEVER returned or persisted anywhere
+// (never written to a checkpoint).
+// ---------------------------------------------------------------------------
+
+const DEFAULT_VERIFICATION_TIMEOUT_MS = 60000;
+
+/**
+ * @param {any} vc a single verification_commands entry
+ * @param {{repoRoot: string, task: any, spawnSyncFn?: typeof spawnSync, existsSyncFn?: typeof existsSync, timeoutMs?: number}} params
+ * @returns {{pass: boolean, family: string, errorFamily: string|null}}
+ */
+export function runVerificationCommand(vc, { repoRoot, task, spawnSyncFn = spawnSync, existsSyncFn = existsSync, timeoutMs = DEFAULT_VERIFICATION_TIMEOUT_MS }) {
+  if (!vc || !VALID_VERIFICATION_FAMILIES.has(vc.family)) {
+    return { pass: false, family: vc?.family ?? null, errorFamily: 'UNKNOWN_VERIFICATION_FAMILY' };
+  }
+
+  if (vc.family === 'PWD') {
+    // No spawn needed — `pwd` has no portable, shell-free equivalent
+    // executable on every platform this project runs on; the family's
+    // intent (confirm the working directory is real) is satisfied by a
+    // direct filesystem check instead of an unreliable subprocess.
+    return existsSyncFn(repoRoot)
+      ? { pass: true, family: vc.family, errorFamily: null }
+      : { pass: false, family: vc.family, errorFamily: 'VERIFICATION_TARGET_MISSING' };
+  }
+
+  if (vc.family === 'NODE_TEST') {
+    const scope = [...(Array.isArray(task.allowed_paths) ? task.allowed_paths : []), ...(Array.isArray(task.read_paths) ? task.read_paths : [])];
+    if (!isRepoRelativePath(vc.target) || !isPathWithinScope(vc.target, scope)) {
+      return { pass: false, family: vc.family, errorFamily: 'VERIFICATION_TARGET_OUT_OF_SCOPE' };
+    }
+  }
+
+  const { command, args } = vc.family === 'NODE_VERSION' ? { command: 'node', args: ['--version'] } : { command: 'node', args: ['--test', vc.target] };
+
+  const result = spawnSyncFn(command, args, { cwd: repoRoot, encoding: 'utf8', shell: false, timeout: timeoutMs });
+  if (!result || result.error || result.status !== 0) {
+    return { pass: false, family: vc.family, errorFamily: 'VERIFICATION_FAILED' };
+  }
+  return { pass: true, family: vc.family, errorFamily: null };
+}
+
+/**
+ * Run every `verification_commands` entry in order, stopping at the FIRST
+ * failure (no point running further checks once one has already failed —
+ * the task cannot PASS regardless).
+ * @param {any} task
+ * @param {{repoRoot: string, spawnSyncFn?: typeof spawnSync, existsSyncFn?: typeof existsSync, timeoutMs?: number}} params
+ * @returns {{allPass: boolean, results: {pass: boolean, family: string, errorFamily: string|null}[]}}
+ */
+export function runAllVerificationCommands(task, params) {
+  const results = [];
+  for (const vc of task.verification_commands) {
+    const r = runVerificationCommand(vc, { ...params, task });
+    results.push(r);
+    if (!r.pass) return { allPass: false, results };
+  }
+  return { allPass: true, results };
 }
 
 /**
@@ -352,22 +581,6 @@ export function buildControlledChildEnv({ baseEnv = process.env, policyFilePath 
   return { ...baseEnv, KORIXA_NIGHT_MODE: '1', KORIXA_NIGHT_POLICY_FILE: policyFilePath };
 }
 
-// NIGHT-V1-C section 13: a single execution attempt's outcome maps to a
-// checkpoint terminal state. PASS on real success; RETRY for outcomes a
-// future attempt could plausibly resolve (the child ran but the task
-// itself did not verify, or it was killed by a timeout); HOLD for a
-// spawn-level ERROR (an infrastructure problem — a wrong/missing `claude`
-// binary, a permission issue — that blindly retrying the same argv is
-// unlikely to fix, matching POLICY.md's "HOLD is the preferred outcome over
-// unsafe improvisation"). This is a single-attempt classification only — a
-// multi-attempt retry-budget loop (attempt count vs max_retries) is a
-// distinct, future orchestration concern, out of this block's 3 objectives.
-function classifyCheckpointState(execStatus) {
-  if (execStatus === 'PASS') return 'PASS';
-  if (execStatus === 'ERROR') return 'HOLD';
-  return 'RETRY'; // NONZERO_EXIT, TIMEOUT, INACTIVITY_TIMEOUT
-}
-
 // A fixed, generic error-family identifier per execStatus — never a raw
 // message (checkpoint.mjs's own contract: no prompt/raw stderr/secret).
 function classifyErrorFamily(execStatus) {
@@ -388,19 +601,51 @@ function classifyErrorFamily(execStatus) {
 }
 
 /**
- * NIGHT-V1-C section 9: the real controlled-execution function — TASK ->
- * ACTIVE POLICY (temporary) -> CHECKPOINT RUNNING -> CONTROLLED EXECUTOR ->
- * RESULT -> CHECKPOINT FINAL -> POLICY CLEANUP (always, via `finally`).
+ * NIGHT-V1-D section 16/19: the budget-aware RETRY-vs-HOLD decision, built
+ * on the FROZEN `attempt`/`max_retries` semantics `checkpoint.mjs`'s
+ * pre-existing test already demonstrates (see
+ * `resolveCheckpointRecoveryDecision`'s own doc comment for the full
+ * derivation): `attempt` counts retries already used; the NEXT attempt
+ * number is `attempt + 1`, and it is permitted only while that number is
+ * still `< maxRetries` — once it would reach `maxRetries`, the checkpoint
+ * moves to `HOLD` instead of another `RETRY`, exactly mirroring the
+ * existing "a checkpoint sequence hitting max_retries transitions to HOLD"
+ * test. Never called for a spawn-level `ERROR` (see
+ * `executeControlledGreenTask` — an infra-level spawn error is an
+ * unconditional HOLD, not budget-checked, since retrying the identical argv
+ * is unlikely to help).
+ * @param {{attempt: number, maxRetries: number}} params
+ * @returns {{state: 'RETRY'|'HOLD', attempt: number}}
+ */
+function decideRetryOrHold({ attempt, maxRetries }) {
+  const nextAttempt = attempt + 1;
+  return nextAttempt >= maxRetries ? { state: 'HOLD', attempt: nextAttempt } : { state: 'RETRY', attempt: nextAttempt };
+}
+
+/**
+ * NIGHT-V1-D: the real controlled-execution function, extended from
+ * NIGHT-V1-C with the full pre-spawn safety pipeline (section 24) and the
+ * post-child verification/scope pipeline (section 15): TASK -> WORKTREE
+ * CLEAN GATE -> NIGHT GUARD INSTALLED GATE -> VERIFICATION_COMMANDS PRESENT
+ * -> ACTIVE POLICY (temporary) -> CHECKPOINT RUNNING -> CONTROLLED EXECUTOR
+ * -> (only on child success) POST-SCOPE CHECK #1 -> VERIFYING -> RUN
+ * VERIFICATION_COMMANDS -> POST-SCOPE CHECK #2 -> CHECKPOINT PASS -> POLICY
+ * CLEANUP (always, via `finally`). `CHILD_EXIT_0 != TASK_PASS` — a
+ * successful child is only the START of the post-execution pipeline, never
+ * itself sufficient for PASS.
  *
- * Gated FIRST by the triple execution lock (section 10) — if not satisfied,
- * returns `HOLD_REAL_EXECUTION_LOCKED` immediately with ZERO side effects:
- * no policy file, no checkpoint write, no spawn attempt. Only when all
- * three gates are satisfied does this function do anything at all. Nothing
- * in this codebase's real CLI path ever sets KORIXA_NIGHT_REAL_SPAWN=1, so
- * REAL_CLAUDE_AGENT_RUNS stays 0 for every real invocation in NIGHT-V1-C;
- * tests prove the path past the lock is reachable by passing the three gate
- * values directly, always paired with an injected fake `spawnFn` — never a
- * real spawn.
+ * Gated FIRST by the triple execution lock (section 10, unchanged from C)
+ * — if not satisfied, returns `HOLD_REAL_EXECUTION_LOCKED` immediately with
+ * ZERO side effects. The worktree-clean, Night-Guard-installed, and
+ * verification-commands-present gates each ALSO produce zero side effects
+ * (no policy, no checkpoint, no spawn) when they fail — every one of them
+ * runs strictly before `createTemporaryActivePolicy` is ever called.
+ *
+ * `realChildSpawn` in the returned object is `true` from the moment a real
+ * spawn is actually attempted (right before `runControlledChildFn` is
+ * called) onward — `false` for every gate-blocked outcome that never
+ * reaches that point. This is what makes the CLI's `REAL_CHILD_SPAWN`
+ * telemetry (section 20) truthful rather than a hardcoded constant.
  *
  * No Git staging/commit/push anywhere in this function — that remains
  * entirely out of scope (no controlled Git writer exists).
@@ -414,7 +659,9 @@ function classifyErrorFamily(execStatus) {
  * @param {string} params.prompt
  * @param {number} params.timeoutMs
  * @param {number} params.inactivityTimeoutMs
- * @param {string} [params.checkpointFilePath]
+ * @param {number} [params.attempt] the attempt number this invocation is making (0 = first ever attempt); see checkpoint.mjs's resolveCheckpointRecoveryDecision for how a real caller resolves this
+ * @param {string} [params.checkpointFilePath] defaults to the deterministic path resolved from repoRoot+task.id
+ * @param {number} [params.verificationTimeoutMs] defaults to timeoutMs
  * @param {() => string} [params.nowFn]
  * @param {() => string} [params.nonceFn]
  * @param {() => string} [params.tmpDirFn]
@@ -422,12 +669,18 @@ function classifyErrorFamily(execStatus) {
  * @param {typeof renameSync} [params.renameSyncFn]
  * @param {typeof existsSync} [params.existsSyncFn]
  * @param {typeof unlinkSync} [params.unlinkSyncFn]
+ * @param {typeof readFileSync} [params.readFileSyncFn]
  * @param {typeof writeCheckpointAtomic} [params.writeCheckpointFn]
  * @param {typeof buildClaudeArgv} [params.buildClaudeArgvFn]
  * @param {typeof runControlledChild} [params.runControlledChildFn]
+ * @param {typeof spawnSync} [params.spawnSyncFn] used for the worktree-clean/scope/verification trusted-controller checks
+ * @param {typeof checkWorktreeClean} [params.checkWorktreeCleanFn]
+ * @param {typeof checkNightGuardInstalled} [params.checkNightGuardInstalledFn]
+ * @param {typeof getGitStatusPaths} [params.getGitStatusPathsFn]
+ * @param {typeof runAllVerificationCommands} [params.runAllVerificationCommandsFn]
  * @param {Function} [params.spawnFn] forwarded to runControlledChildFn; tests always inject a fake
  * @param {NodeJS.ProcessEnv} [params.baseEnv]
- * @returns {Promise<{status: string, checkpointState?: string}>}
+ * @returns {Promise<{status: string, checkpointState?: string, realChildSpawn: boolean, execStatus?: string, unauthorizedPaths?: string[]}>}
  */
 export async function executeControlledGreenTask({
   task,
@@ -439,7 +692,9 @@ export async function executeControlledGreenTask({
   prompt,
   timeoutMs,
   inactivityTimeoutMs,
-  checkpointFilePath = path.join(tmpdir(), `korixa-night-checkpoint-${task?.id ?? 'unknown'}.json`),
+  attempt = 0,
+  checkpointFilePath,
+  verificationTimeoutMs,
   nowFn = () => new Date().toISOString(),
   nonceFn = () => randomBytes(16).toString('hex'),
   tmpDirFn = tmpdir,
@@ -447,14 +702,20 @@ export async function executeControlledGreenTask({
   renameSyncFn = renameSync,
   existsSyncFn = existsSync,
   unlinkSyncFn = unlinkSync,
+  readFileSyncFn = readFileSync,
   writeCheckpointFn = writeCheckpointAtomic,
   buildClaudeArgvFn = buildClaudeArgv,
   runControlledChildFn = runControlledChild,
+  spawnSyncFn = spawnSync,
+  checkWorktreeCleanFn = checkWorktreeClean,
+  checkNightGuardInstalledFn = checkNightGuardInstalled,
+  getGitStatusPathsFn = getGitStatusPaths,
+  runAllVerificationCommandsFn = runAllVerificationCommands,
   spawnFn,
   baseEnv = process.env,
 }) {
   if (!isTripleExecutionLockSatisfied({ flagPresent, executionEnvValue, realSpawnEnvValue })) {
-    return { status: 'HOLD_REAL_EXECUTION_LOCKED' };
+    return { status: 'HOLD_REAL_EXECUTION_LOCKED', realChildSpawn: false };
   }
   if (
     !task ||
@@ -463,22 +724,43 @@ export async function executeControlledGreenTask({
     !Array.isArray(task.allowed_paths) ||
     !Array.isArray(task.read_paths) ||
     !Number.isInteger(task.max_turns) ||
-    task.max_turns <= 0
+    task.max_turns <= 0 ||
+    !Number.isInteger(task.max_retries) ||
+    task.max_retries < 0
   ) {
-    return { status: 'HOLD_INVALID_TASK' };
+    return { status: 'HOLD_INVALID_TASK', realChildSpawn: false };
+  }
+
+  const resolvedCheckpointFilePath = checkpointFilePath ?? resolveCheckpointPath({ repoRoot, taskId: task.id, tmpDirFn });
+  const resolvedVerificationTimeoutMs = verificationTimeoutMs ?? timeoutMs;
+
+  const worktreeState = checkWorktreeCleanFn({ repoRoot, spawnSyncFn });
+  if (!worktreeState.clean) {
+    return { status: 'HOLD_DIRTY_WORKTREE', realChildSpawn: false };
+  }
+
+  const guardState = checkNightGuardInstalledFn({ repoRoot, existsSyncFn, readFileSyncFn });
+  if (!guardState.installed) {
+    return { status: 'HOLD_NIGHT_GUARD_NOT_INSTALLED', realChildSpawn: false };
+  }
+
+  if (!Array.isArray(task.verification_commands) || task.verification_commands.length === 0) {
+    return { status: 'HOLD_NO_VERIFICATION_COMMANDS', realChildSpawn: false };
   }
 
   let policyPath = null;
+  let realChildSpawn = false;
   try {
     const created = createTemporaryActivePolicy({ task, repoRoot, baseSha, tmpDirFn, nowFn, nonceFn, writeFileSyncFn, renameSyncFn });
     policyPath = created.policyPath;
 
-    let checkpoint = createCheckpoint({ taskId: task.id, state: 'RUNNING', attempt: 1, baseSha, now: nowFn() });
-    writeCheckpointFn(checkpointFilePath, checkpoint);
+    let checkpoint = createCheckpoint({ taskId: task.id, state: 'RUNNING', attempt, baseSha, now: nowFn() });
+    writeCheckpointFn(resolvedCheckpointFilePath, checkpoint);
 
     const argvSpec = buildClaudeArgvFn({ prompt, maxTurns: task.max_turns });
     const env = buildControlledChildEnv({ baseEnv, policyFilePath: policyPath });
 
+    realChildSpawn = true;
     const execResult = await runControlledChildFn({
       argvSpec,
       cwd: repoRoot,
@@ -488,97 +770,170 @@ export async function executeControlledGreenTask({
       spawnFn,
     });
 
-    const finalState = classifyCheckpointState(execResult.status);
-    checkpoint = advanceCheckpoint(checkpoint, { state: finalState, now: nowFn(), errorFamily: classifyErrorFamily(execResult.status) });
-    writeCheckpointFn(checkpointFilePath, checkpoint);
+    if (execResult.status !== 'PASS') {
+      // The child itself failed/timed out/errored — verification and the
+      // scope checks are never reached (section 15).
+      const decision =
+        execResult.status === 'ERROR'
+          ? { state: 'HOLD', attempt } // infra-level spawn error — not budget-checked
+          : decideRetryOrHold({ attempt, maxRetries: task.max_retries });
+      checkpoint = advanceCheckpoint(checkpoint, { state: decision.state, now: nowFn(), errorFamily: classifyErrorFamily(execResult.status) });
+      checkpoint = { ...checkpoint, attempt: decision.attempt };
+      writeCheckpointFn(resolvedCheckpointFilePath, checkpoint);
+      return { status: decision.state, execStatus: execResult.status, checkpointState: decision.state, realChildSpawn };
+    }
 
-    return { status: execResult.status, checkpointState: finalState };
+    // Child exited 0 — CHILD_EXIT_0 != TASK_PASS (section 15/18).
+    const scopeCheck1 = getGitStatusPathsFn({ repoRoot, spawnSyncFn });
+    if (!scopeCheck1.ok) {
+      checkpoint = advanceCheckpoint(checkpoint, { state: 'HOLD', now: nowFn(), errorFamily: 'SCOPE_CHECK_FAILED' });
+      writeCheckpointFn(resolvedCheckpointFilePath, checkpoint);
+      return { status: 'HOLD', checkpointState: 'HOLD', realChildSpawn };
+    }
+    const scopeResult1 = checkPostExecutionScope(scopeCheck1.paths, task.allowed_paths);
+    if (!scopeResult1.ok) {
+      // Unauthorized scope is HOLD unconditionally — never RETRY, and never
+      // convertible to PASS by a later verification step (section 17/18).
+      checkpoint = advanceCheckpoint(checkpoint, { state: 'HOLD', now: nowFn(), errorFamily: 'UNAUTHORIZED_SCOPE' });
+      writeCheckpointFn(resolvedCheckpointFilePath, checkpoint);
+      return { status: 'HOLD', checkpointState: 'HOLD', realChildSpawn, unauthorizedPaths: scopeResult1.unauthorized };
+    }
+
+    checkpoint = advanceCheckpoint(checkpoint, { state: 'VERIFYING', now: nowFn() });
+    writeCheckpointFn(resolvedCheckpointFilePath, checkpoint);
+
+    const verification = runAllVerificationCommandsFn(task, { repoRoot, spawnSyncFn, existsSyncFn, timeoutMs: resolvedVerificationTimeoutMs });
+    if (!verification.allPass) {
+      const decision = decideRetryOrHold({ attempt, maxRetries: task.max_retries });
+      checkpoint = advanceCheckpoint(checkpoint, { state: decision.state, now: nowFn(), errorFamily: 'VERIFICATION_FAILED' });
+      checkpoint = { ...checkpoint, attempt: decision.attempt };
+      writeCheckpointFn(resolvedCheckpointFilePath, checkpoint);
+      return { status: decision.state, checkpointState: decision.state, realChildSpawn };
+    }
+
+    const scopeCheck2 = getGitStatusPathsFn({ repoRoot, spawnSyncFn });
+    if (!scopeCheck2.ok) {
+      checkpoint = advanceCheckpoint(checkpoint, { state: 'HOLD', now: nowFn(), errorFamily: 'SCOPE_CHECK_FAILED' });
+      writeCheckpointFn(resolvedCheckpointFilePath, checkpoint);
+      return { status: 'HOLD', checkpointState: 'HOLD', realChildSpawn };
+    }
+    const scopeResult2 = checkPostExecutionScope(scopeCheck2.paths, task.allowed_paths);
+    if (!scopeResult2.ok) {
+      checkpoint = advanceCheckpoint(checkpoint, { state: 'HOLD', now: nowFn(), errorFamily: 'UNAUTHORIZED_SCOPE' });
+      writeCheckpointFn(resolvedCheckpointFilePath, checkpoint);
+      return { status: 'HOLD', checkpointState: 'HOLD', realChildSpawn, unauthorizedPaths: scopeResult2.unauthorized };
+    }
+
+    checkpoint = advanceCheckpoint(checkpoint, { state: 'PASS', now: nowFn(), errorFamily: null });
+    writeCheckpointFn(resolvedCheckpointFilePath, checkpoint);
+    return { status: 'PASS', checkpointState: 'PASS', realChildSpawn };
   } finally {
     if (policyPath !== null) removeTemporaryActivePolicy(policyPath, { existsSyncFn, unlinkSyncFn });
   }
 }
 
 /**
- * Section 19-23's orchestration for `--execute-green`: check the double
- * gate, validate the queue, select the next GREEN task, check for a stale
- * checkpoint, check remote-main drift — all BEFORE any hypothetical
- * execution step. `executeTaskFn` is dependency-injected: the FUNCTION
- * default (`stubExecuteTaskFn`) never spawns anything and always returns
+ * NIGHT-V1-D section 24's full orchestration for `--execute-green`: TRIPLE
+ * LOCK -> QUEUE/TASK VALIDATION -> SELECT GREEN -> RESOLVE DETERMINISTIC
+ * CHECKPOINT -> CHECK EXISTING CHECKPOINT/RECOVERY -> REMOTE MAIN GATE ->
+ * (the remaining pre-spawn gates, worktree-clean/Night-Guard-installed/
+ * verification-commands-present, live inside `executeTaskFn` —
+ * `executeControlledGreenTask` in a real invocation) -> execution.
+ *
+ * The double gate (`isExecuteGreenUnlocked`) is checked FIRST, UNCHANGED
+ * from NIGHT-V1-C, so its `HOLD_DOUBLE_GATE_NOT_SATISFIED` result and every
+ * test asserting it stay exactly as they were. The triple lock's third gate
+ * (`KORIXA_NIGHT_REAL_SPAWN=1`) is then checked immediately after, still
+ * before validation — so section 24's "TRIPLE LOCK" step is satisfied by
+ * two consecutive checks with identical observable effect (nothing proceeds
+ * past this point unless all three gates hold) rather than by changing the
+ * already-audited double-gate behavior.
+ *
+ * `checkpointLookupFn`, when supplied, must return the SAME shape
+ * `readCheckpointForResume` does (`{status: 'ABSENT'|'INVALID'|'VALID', checkpoint?}`)
+ * — the default resolves the real deterministic path
+ * (`resolveCheckpointPath`) from `repoRoot`+`task.id` and reads it for
+ * real, so a real CLI invocation can find a PRIOR run's checkpoint after a
+ * process restart without any injected lookup at all.
+ *
+ * `executeTaskFn` is dependency-injected: the FUNCTION default
+ * (`stubExecuteTaskFn`) never spawns anything and always returns
  * NOT_IMPLEMENTED, kept as a safe fallback for any caller that omits
- * `executeTaskFn`. NIGHT-V1-C: `main()`'s real CLI path no longer relies on
- * that implicit default — it always explicitly wires the real
- * `executeControlledGreenTask`, whose OWN triple-lock check (section 10) is
- * what actually keeps REAL_CHILD_SPAWN at 0 for every real invocation, not
- * merely this function's stub. Tests inject a fake `executeTaskFn` to prove
- * this orchestration correctly reaches the execution step when every gate
- * passes, without ever spawning a real process.
+ * `executeTaskFn`. `main()`'s real CLI path always explicitly wires the
+ * real `executeControlledGreenTask`, whose OWN triple-lock check is what
+ * actually keeps a real spawn from happening in this version — nothing in
+ * this codebase's real path ever sets `KORIXA_NIGHT_REAL_SPAWN=1`. Tests
+ * inject a fake `executeTaskFn` to prove this orchestration correctly
+ * reaches the execution step when every gate passes, without ever spawning
+ * a real process.
  * @param {object} params
  * @param {any} params.queue
  * @param {boolean} params.flagPresent
  * @param {string|undefined} params.envValue
+ * @param {string|undefined} [params.realSpawnEnvValue]
+ * @param {string} [params.repoRoot]
  * @param {() => string|null} [params.resolveRemoteMainShaFn]
- * @param {(checkpoint: any) => {hasControlledChildEvidence: boolean}} [params.checkpointLookupFn] returns null if no checkpoint exists
- * @param {(task: any) => Promise<{status: string}>} [params.executeTaskFn]
- * @returns {Promise<{result: string, taskId: string|null}>}
+ * @param {(task: any) => {status: 'ABSENT'|'INVALID'|'VALID', checkpoint?: object}} [params.checkpointLookupFn]
+ * @param {(task: any, ctx: {attempt: number, checkpointFilePath: string}) => Promise<{status: string, realChildSpawn?: boolean}>} [params.executeTaskFn]
+ * @returns {Promise<{result: string, taskId: string|null, realChildSpawn: boolean}>}
  */
 export async function runExecuteGreen({
   queue,
   flagPresent,
   envValue,
+  realSpawnEnvValue,
+  repoRoot,
   resolveRemoteMainShaFn = resolveRemoteMainSha,
-  checkpointLookupFn = () => null,
+  checkpointLookupFn,
   executeTaskFn = stubExecuteTaskFn,
 }) {
   if (!isExecuteGreenUnlocked({ flagPresent, envValue })) {
-    return { result: 'HOLD_DOUBLE_GATE_NOT_SATISFIED', taskId: null };
+    return { result: 'HOLD_DOUBLE_GATE_NOT_SATISFIED', taskId: null, realChildSpawn: false };
+  }
+  if (!isTripleExecutionLockSatisfied({ flagPresent, executionEnvValue: envValue, realSpawnEnvValue })) {
+    return { result: 'HOLD_REAL_EXECUTION_LOCKED', taskId: null, realChildSpawn: false };
   }
 
   const validation = runValidation(queue);
   if (!validation.ok) {
-    return { result: 'HOLD_VALIDATION_FAILED', taskId: null };
+    return { result: 'HOLD_VALIDATION_FAILED', taskId: null, realChildSpawn: false };
   }
 
   const task = selectNextGreenTask(queue.tasks);
   if (!task) {
-    return { result: 'HOLD_NO_ELIGIBLE_TASK', taskId: null };
+    return { result: 'HOLD_NO_ELIGIBLE_TASK', taskId: null, realChildSpawn: false };
   }
 
-  const existingCheckpoint = checkpointLookupFn(task.id);
-  const resume = resolveResumeState(existingCheckpoint, { hasControlledChildEvidence: false });
-  if (resume.action === 'HOLD_STALE_SESSION') {
-    return { result: 'HOLD_STALE_SESSION', taskId: task.id };
-  }
-  if (resume.action === 'ALREADY_PASSED') {
-    return { result: 'ALREADY_PASSED', taskId: task.id };
-  }
-  if (resume.action === 'STAY_HOLD') {
-    return { result: 'STAY_HOLD', taskId: task.id };
+  const checkpointFilePath = resolveCheckpointPath({ repoRoot, taskId: task.id });
+  const lookupFn = checkpointLookupFn ?? (() => readCheckpointForResume(checkpointFilePath));
+  const readResult = lookupFn(task);
+  const recovery = resolveCheckpointRecoveryDecision({ readResult, maxRetries: task.max_retries });
+  if (recovery.decision !== 'START_FRESH' && recovery.decision !== 'RESUME_RETRY') {
+    return { result: recovery.decision, taskId: task.id, realChildSpawn: false };
   }
 
   const remoteMainSha = resolveRemoteMainShaFn();
   const drift = checkRemoteMainDrift(queue.session.base_sha, remoteMainSha);
   if (drift.drifted) {
-    return { result: 'HOLD_REMOTE_MAIN_DRIFT', taskId: task.id };
+    return { result: 'HOLD_REMOTE_MAIN_DRIFT', taskId: task.id, realChildSpawn: false };
   }
 
-  // Every gate passed. NIGHT-V1-B still does not implement real execution
-  // (no policy file is created, no child is spawned) — see executeTaskFn's
-  // default below.
-  const execResult = await executeTaskFn(task);
-  return { result: execResult.status, taskId: task.id };
+  const execResult = await executeTaskFn(task, { attempt: recovery.nextAttempt, checkpointFilePath });
+  return { result: execResult.status, taskId: task.id, realChildSpawn: execResult.realChildSpawn ?? false };
 }
 
 /**
  * The default, always-safe `executeTaskFn`: never spawns anything, never
  * creates a policy file, never touches the filesystem. This is what makes
- * REAL_CHILD_SPAWN = 0 an invariant of this file rather than a promise —
- * even if every gate above is satisfied in a real invocation, this is the
- * function that would actually have to spawn `claude`, and it doesn't.
+ * a real spawn impossible via this default path — even if every gate above
+ * is satisfied in a real invocation, this is the function that would
+ * actually have to spawn `claude`, and it doesn't.
  * @param {any} _task
- * @returns {Promise<{status: string}>}
+ * @param {{attempt: number, checkpointFilePath: string}} [_ctx]
+ * @returns {Promise<{status: string, realChildSpawn: boolean}>}
  */
-async function stubExecuteTaskFn(_task) {
-  return { status: 'HOLD_NOT_IMPLEMENTED_IN_V1_B' };
+async function stubExecuteTaskFn(_task, _ctx) {
+  return { status: 'HOLD_NOT_IMPLEMENTED_IN_V1_B', realChildSpawn: false };
 }
 
 function selfTestFixture() {
@@ -654,19 +1009,20 @@ function main() {
   }
 
   if (mode === 'execute-green') {
-    // NIGHT-V1-C: the double gate (flagPresent + KORIXA_NIGHT_EXECUTION) is
-    // still checked (and reported) before validation even runs, so an
-    // unlocked-gate failure never depends on queue content. The real
-    // executeControlledGreenTask is now wired in (no longer the permanent
-    // stub) as the executeTaskFn — but its own triple-lock check (section
-    // 10) still requires KORIXA_NIGHT_REAL_SPAWN=1, which nothing in this
-    // codebase's real path ever sets, so REAL_CHILD_SPAWN stays 0 here too.
+    // NIGHT-V1-D: the double gate (flagPresent + KORIXA_NIGHT_EXECUTION) is
+    // still checked (and reported) before validation even runs, unchanged
+    // from C. The triple lock's third gate (KORIXA_NIGHT_REAL_SPAWN=1) is
+    // checked immediately after, still before validation — nothing in this
+    // codebase's real path ever sets it. The real executeControlledGreenTask
+    // is wired in as executeTaskFn, receiving the real (attempt,
+    // checkpointFilePath) resolved by runExecuteGreen's own real checkpoint
+    // recovery — no more `checkpointLookupFn = () => null` in the real path.
     const flagPresent = true;
     const envValue = process.env.KORIXA_NIGHT_EXECUTION;
     const realSpawnEnvValue = process.env.KORIXA_NIGHT_REAL_SPAWN;
     const repoRoot = process.cwd();
 
-    const executeTaskFn = (task) =>
+    const executeTaskFn = (task, ctx) =>
       executeControlledGreenTask({
         task,
         repoRoot,
@@ -677,21 +1033,26 @@ function main() {
         prompt: `Night Agent GREEN task: ${task.objective}`,
         timeoutMs: task.timeout_seconds * 1000,
         inactivityTimeoutMs: task.timeout_seconds * 1000,
+        attempt: ctx.attempt,
+        checkpointFilePath: ctx.checkpointFilePath,
       });
 
     runExecuteGreen({
       queue,
       flagPresent,
       envValue,
+      realSpawnEnvValue,
+      repoRoot,
       executeTaskFn,
     }).then((outcome) => {
       console.log(`EXECUTE_GREEN_RESULT = ${outcome.result}`);
       console.log(`TASK = ${outcome.taskId ?? 'none'}`);
-      console.log('REAL_CHILD_SPAWN = 0');
-      // Every possible outcome in V1-C is a HOLD/no-op of some kind — never
-      // a successful autonomous execution — so this always exits non-zero,
-      // signaling "nothing was executed" to any calling script.
-      process.exit(1);
+      // NIGHT-V1-D section 20: truthful telemetry — 1 only if a real spawn
+      // was actually attempted (outcome.realChildSpawn, threaded up from
+      // executeControlledGreenTask's own realChildSpawn flag), never a
+      // hardcoded constant.
+      console.log(`REAL_CHILD_SPAWN = ${outcome.realChildSpawn ? 1 : 0}`);
+      process.exit(resolveExitCode(outcome.result));
     });
     return;
   }
