@@ -9,7 +9,7 @@ Node built-ins only.
 
 ```
 EXECUTION_ENGINE = DISABLED_IN_V1_A
-CLAUDE_AGENT_RUNS_IN_V1_B = 0
+CLAUDE_AGENT_RUNS_IN_V1_C = 0
 REAL_AUTONOMOUS_EXECUTION_READY = NO
 ```
 
@@ -19,9 +19,12 @@ mutates any file outside of an active-policy-scoped Write/Edit that a
 below). `git add`/`git commit`/`git push` are denied entirely in Night
 Mode — there is no controlled Git writer, so any commit still goes through
 a human or an explicitly authorized supervised block, never autonomously.
-`--execute-green` (NIGHT-V1-B) is a real, double-gated code path, but its
-actual execution step is a permanent stub in this codebase today — see
-`runner.mjs`'s `stubExecuteTaskFn`.
+`--execute-green` is gated by a TRIPLE execution lock as of NIGHT-V1-C (CLI
+flag + `KORIXA_NIGHT_EXECUTION=1` + `KORIXA_NIGHT_REAL_SPAWN=1`) — the real
+controlled-execution pipeline (`executeControlledGreenTask`) is wired end to
+end, but no code path in this codebase ever sets `KORIXA_NIGHT_REAL_SPAWN`,
+so a real spawn is never reached in a real invocation. See
+`.claude/overnight/SAFETY.md`'s "NIGHT-V1-C" section for the full rationale.
 
 ## Files
 
@@ -44,15 +47,20 @@ actual execution step is a permanent stub in this codebase today — see
   checkpointing with a fixed, secret-free field set, and the stale-session
   resume policy: a checkpoint claiming `RUNNING` is never assumed to still
   be running after a restart with no live process reference.
-- **`executor.mjs`** (NIGHT-V1-B) — builds the exact `claude` CLI argv for a
-  restricted, non-interactive child (`--tools Read,Glob,Grep,Write,Edit
-  --permission-mode dontAsk --max-turns N`, confirmed against current
-  official docs — `--tools` restricts actual tool *availability*, unlike
-  `--allowedTools`, which only pre-approves), scans every generated argv for
-  a permission-bypass flag before it would ever be spawned, and runs a
-  spawned child under a watchdog (hard timeout + inactivity timeout).
-  Nothing in this file, or anywhere else in this directory, spawns a real
-  `claude` process — `spawnFn` is always dependency-injected in tests.
+- **`executor.mjs`** — builds the exact `claude` CLI argv for a restricted,
+  non-interactive child: `-p <prompt> --tools Read,Glob,Grep,Write,Edit
+  --allowedTools Read Glob Grep Write Edit --permission-mode dontAsk
+  --max-turns N` (NIGHT-V1-C added `--allowedTools`; both flags were
+  re-confirmed against current official docs — `--tools` restricts actual
+  tool *availability* as one comma-joined value, `--allowedTools`
+  pre-approves as separate argv tokens per tool name, its own documented
+  convention). `assertSafeArgvOrThrow` scans every generated argv for a
+  permission-bypass flag AND requires `--allowedTools` to express exactly
+  the same set as `--tools` before it would ever be spawned, and
+  `runControlledChild` runs a spawned child under a watchdog (hard timeout +
+  inactivity timeout). Nothing in this file, or anywhere else in this
+  directory, spawns a real `claude` process — `spawnFn` is always
+  dependency-injected in tests.
 - **`runner.mjs`** — the CLI entrypoint. Reads a queue file and runs one of:
   - `--validate` — schema/cycle/path-conflict checks only.
   - `--dry-run` (default) — validation, plus a printed execution plan
@@ -61,10 +69,16 @@ actual execution step is a permanent stub in this codebase today — see
     execution plan for the next GREEN task (policy summary, restricted
     tool surface, timeouts, retry budget) — no secrets, no real policy
     file created, no Claude spawned.
-  - `--execute-green` (NIGHT-V1-B) — double-gated by BOTH the CLI flag AND
-    `KORIXA_NIGHT_EXECUTION=1`; even when unlocked, checks remote-main
-    drift and stale-checkpoint state before ever reaching the (permanently
-    stubbed) execution step — see `runExecuteGreen`/`stubExecuteTaskFn`.
+  - `--execute-green` — `runExecuteGreen` checks the double gate (CLI flag +
+    `KORIXA_NIGHT_EXECUTION=1`), then remote-main drift and stale-checkpoint
+    state, before ever calling `executeTaskFn`. NIGHT-V1-C wires the REAL
+    `executeControlledGreenTask` as that function (no longer the permanent
+    `stubExecuteTaskFn`), but `executeControlledGreenTask` itself is gated
+    FIRST by a further triple execution lock (CLI flag +
+    `KORIXA_NIGHT_EXECUTION=1` + `KORIXA_NIGHT_REAL_SPAWN=1`) — nothing in
+    this codebase's real path ever sets the third variable, so every real
+    invocation still resolves to `HOLD_REAL_EXECUTION_LOCKED` before any
+    policy/checkpoint/spawn side effect.
   - `--self-test` — runs against a hardcoded in-memory fixture, touching no
     files on disk at all.
 - **`test/`** — `node:test` suites for the guard, the queue library,
@@ -106,12 +120,13 @@ denies with `NIGHT_TOOL_NOT_YET_SCOPED`. See `.claude/overnight/SAFETY.md`'s
 path canonicalization", and "NIGHT-V1-B: controlled GREEN execution"
 sections for the full rationale.
 
-There is still no controlled Git writer and no controlled execution
-sandbox — `git add`/`git commit` remain denied entirely in Night Mode
-(delegated-execution risk via Git hooks/attribute filters, unchanged since
-R3), and `--execute-green`'s actual execution step is a permanent stub
-(`stubExecuteTaskFn`) regardless of whether its double gate is satisfied.
-Task-scoped Write/Edit/Read enforcement now exists, but nothing in this
-codebase today actually drives it from a real autonomous session — that
-remains a distinct, future, separately-authorized change:
-`EXECUTION_ENGINE = DISABLED_IN_V1_A`, `CLAUDE_AGENT_RUNS = 0`.
+There is still no controlled Git writer — `git add`/`git commit` remain
+denied entirely in Night Mode (delegated-execution risk via Git hooks/
+attribute filters, unchanged since R3). NIGHT-V1-C wires a real controlled-
+execution sandbox (`executeControlledGreenTask`: temporary active policy ->
+checkpoint `RUNNING` -> `runControlledChild` -> checkpoint final state ->
+policy cleanup), but its own triple execution lock means no real invocation
+in this codebase ever reaches a real spawn — see `.claude/overnight/
+SAFETY.md`'s "NIGHT-V1-C" section. A future, separately-authorized change
+would be the one to actually set `KORIXA_NIGHT_REAL_SPAWN=1` from a real
+controller: `EXECUTION_ENGINE = DISABLED_IN_V1_A`, `CLAUDE_AGENT_RUNS = 0`.

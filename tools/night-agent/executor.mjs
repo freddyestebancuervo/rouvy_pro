@@ -13,6 +13,19 @@
 // headless.md) as part of this block's own mandatory research step, not
 // invented or assumed from memory.
 //
+// NIGHT-V1-C: both --tools AND --allowedTools now express the identical
+// restricted 5-tool set, re-confirmed against current docs as part of THIS
+// block's own research step. The two flags do not share an argv shape:
+// --tools takes one comma-joined value (its documented convention), while
+// --allowedTools takes each tool name as its own separate argv token (its
+// documented convention — official examples show `--allowedTools "Read"
+// "Bash(git log *)"`, never a comma-joined single string). Encoding the
+// same set in each flag's own native syntax is not a workaround for any
+// doc drift — nothing was renamed or changed; --tools restricts actual
+// tool AVAILABILITY (defense layer 1), --allowedTools pre-approves so
+// --permission-mode dontAsk never blocks on a tool the child is already
+// restricted to (defense layer 2) — belt-and-suspenders, not redundancy.
+//
 // NIGHT-V1-B does not spawn a real `claude` process anywhere — see
 // runner.mjs's --execute-green double-gate. `spawnFn` here is always
 // dependency-injected in tests (a synthetic fake), and defaults to
@@ -64,12 +77,35 @@ export function buildClaudeArgv({ prompt, maxTurns, restrictedTools = RESTRICTED
     prompt,
     '--tools',
     restrictedTools.join(','),
+    '--allowedTools',
+    ...restrictedTools,
     '--permission-mode',
     'dontAsk',
     '--max-turns',
     String(maxTurns),
   ];
   return { command: 'claude', args };
+}
+
+/**
+ * Collect the argv tokens following `flagName` up to (but not including) the
+ * next `--`-prefixed token or the end of the array. Returns null if
+ * `flagName` is not present at all. Used to read a flag's own contiguous
+ * value span without assuming a fixed length (--allowedTools takes one
+ * token per tool name, not a single joined value).
+ * @param {string[]} args
+ * @param {string} flagName
+ * @returns {string[]|null}
+ */
+function collectFlagTokens(args, flagName) {
+  const idx = args.indexOf(flagName);
+  if (idx === -1) return null;
+  const values = [];
+  for (let i = idx + 1; i < args.length; i++) {
+    if (typeof args[i] === 'string' && args[i].startsWith('--')) break;
+    values.push(args[i]);
+  }
+  return values;
 }
 
 /**
@@ -84,8 +120,10 @@ export function containsDangerousBypassFlag(args) {
 /**
  * Defense-in-depth gate run on every argv immediately before it would ever
  * be spawned: no bypass flag, `--tools` present and excluding Bash,
- * `--permission-mode dontAsk` present. Throws (never silently proceeds) on
- * any violation.
+ * `--allowedTools` present and expressing the EXACT same tool set as
+ * `--tools` (NIGHT-V1-C — belt-and-suspenders: availability restriction AND
+ * pre-approval must never diverge), `--permission-mode dontAsk` present.
+ * Throws (never silently proceeds) on any violation.
  * @param {{command: string, args: string[]}} argvSpec
  * @returns {true}
  */
@@ -103,6 +141,19 @@ export function assertSafeArgvOrThrow(argvSpec) {
   const toolsList = argvSpec.args[toolsIndex + 1].split(',');
   if (toolsList.includes('Bash')) {
     throw new Error('assertSafeArgvOrThrow: Bash must never appear in --tools for the autonomous child');
+  }
+  const allowedToolsValues = collectFlagTokens(argvSpec.args, '--allowedTools');
+  if (allowedToolsValues === null || allowedToolsValues.length === 0) {
+    throw new Error('assertSafeArgvOrThrow: --allowedTools restriction is required and was not found');
+  }
+  if (allowedToolsValues.includes('Bash')) {
+    throw new Error('assertSafeArgvOrThrow: Bash must never appear in --allowedTools for the autonomous child');
+  }
+  const toolsSet = new Set(toolsList);
+  const allowedToolsSet = new Set(allowedToolsValues);
+  const setsEqual = toolsSet.size === allowedToolsSet.size && [...toolsSet].every((t) => allowedToolsSet.has(t));
+  if (!setsEqual) {
+    throw new Error('assertSafeArgvOrThrow: --allowedTools must express exactly the same tool set as --tools — availability and pre-approval must never diverge');
   }
   const permIndex = argvSpec.args.indexOf('--permission-mode');
   if (permIndex === -1 || argvSpec.args[permIndex + 1] !== 'dontAsk') {

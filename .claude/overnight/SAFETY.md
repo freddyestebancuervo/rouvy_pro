@@ -389,6 +389,61 @@ denied in Night Mode exactly as R3 left them — B builds a SAFE EDIT ENGINE,
 not a publication mechanism. Even a fully successful (hypothetical) GREEN
 edit is never followed by an autonomous commit in this codebase today.
 
+## NIGHT-V1-C: the controlled-execution pipeline is wired, but locked by a THIRD gate
+
+B built task-scoped Write/Edit/Read enforcement in the guard but left
+`--execute-green`'s actual execution step a permanent stub. C wires the real
+pipeline — `executeControlledGreenTask` in `tools/night-agent/runner.mjs`:
+TASK -> temporary ACTIVE POLICY -> CHECKPOINT `RUNNING` -> controlled
+executor (`runControlledChild`) -> RESULT -> CHECKPOINT final state ->
+POLICY CLEANUP (always, via `finally` — success, failure, timeout, or spawn
+error alike) — but this is wiring, not an unlock. Nothing in this
+repository's real CLI path can reach a live spawn.
+
+**The triple execution lock.** Real execution now requires THREE
+simultaneous conditions, not two: the `--execute-green` CLI flag, the
+existing `KORIXA_NIGHT_EXECUTION=1` environment variable, AND a new, further
+`KORIXA_NIGHT_REAL_SPAWN=1` environment variable
+(`isTripleExecutionLockSatisfied`). This is checked FIRST, inside
+`executeControlledGreenTask` itself — before creating a policy file, before
+writing a checkpoint, before building any argv — so an unsatisfied lock
+produces zero side effects, not merely "no spawn." No code path anywhere in
+this codebase ever sets `KORIXA_NIGHT_REAL_SPAWN`; it exists only as a
+manual, out-of-band switch a human would set explicitly and separately from
+everything this repository's own code controls. `REAL_CLAUDE_AGENT_RUNS = 0`
+for the entirety of NIGHT-V1-C, enforced by this gate, not merely
+documented.
+
+**`--allowedTools` added alongside `--tools`.** Current official docs were
+re-confirmed for this block: `--tools` restricts actual tool *availability*
+(one comma-joined value); `--allowedTools` pre-approves tool use (a
+SEPARATE argv token per tool name — its own documented convention, not
+comma-joined). `buildClaudeArgv` now emits both, expressing the identical
+restricted 5-tool set (`Read`, `Glob`, `Grep`, `Write`, `Edit` — still no
+`Bash`) in each flag's own native syntax. `assertSafeArgvOrThrow` — the
+gate re-checked immediately before every spawn, regardless of how the argv
+was built — now also requires `--allowedTools` to be present and to express
+EXACTLY the same set as `--tools`; a diverging or missing `--allowedTools`
+throws before any spawn, the same defense-in-depth principle as the
+existing dangerous-bypass-flag scan.
+
+**The temporary active policy is now really created (when unlocked).**
+`createTemporaryActivePolicy` writes it under `os.tmpdir()` (never inside
+the repository) with an unpredictable filename (`crypto.randomBytes`, never
+`Math.random` or a task-id-derived name alone), atomically (temp file in the
+same directory, then `renameSync` over the final path — the same pattern
+`checkpoint.mjs`'s `writeCheckpointAtomic` already uses). It is removed
+unconditionally in a `finally` block — success, a nonzero-exit child
+failure, a timeout, or a spawn error all lead to the same cleanup, proven by
+one test per scenario, all using an injected fake child/spawn.
+
+**No new architecture beyond wiring these three objectives.** No retry-
+budget loop across multiple attempts (a single `executeControlledGreenTask`
+call is one attempt only — mapping a raw execution outcome to a
+multi-attempt retry decision remains a distinct, future concern), no
+controlled Git writer, no publication path, no Production access. `git
+add`/`git commit`/`git push` remain denied in Night Mode exactly as before.
+
 ## Unlock path
 
 None of the above is unlocked by this file. A future version may explicitly

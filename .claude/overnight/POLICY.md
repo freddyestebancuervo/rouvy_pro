@@ -115,6 +115,20 @@ schema, enforced by `tools/night-agent/queue.mjs`) was extended with:
 - `max_turns` (positive integer, ceiling 40): bounds a future Claude
   child's own turn count.
 
+## NIGHT-V1-C: the triple execution lock
+
+Real execution of `--execute-green` now requires THREE simultaneous
+conditions — the `--execute-green` CLI flag, `KORIXA_NIGHT_EXECUTION=1`,
+and a further `KORIXA_NIGHT_REAL_SPAWN=1` — checked by
+`isTripleExecutionLockSatisfied` inside `executeControlledGreenTask` itself,
+before any policy file, checkpoint, or spawn attempt. Any two of the three
+alone resolve to `HOLD_REAL_EXECUTION_LOCKED` with zero side effects. No
+code path in this repository's real CLI invocation ever sets
+`KORIXA_NIGHT_REAL_SPAWN` — see `SAFETY.md`'s "NIGHT-V1-C" section for the
+full rationale. This is on top of, not instead of, the existing double gate
+(`isExecuteGreenUnlocked`) that `runExecuteGreen` itself checks before even
+selecting a task.
+
 ## Checkpoint states (a SEPARATE, execution-attempt-level state machine)
 
 `tools/night-agent/checkpoint.mjs` defines its own state set — `PENDING`,

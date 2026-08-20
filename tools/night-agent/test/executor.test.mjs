@@ -29,7 +29,7 @@ function makeFakeChild() {
 // buildClaudeArgv
 // ---------------------------------------------------------------------------
 
-test('buildClaudeArgv builds the confirmed current CLI contract: -p, --tools, --permission-mode dontAsk, --max-turns', () => {
+test('buildClaudeArgv builds the confirmed current CLI contract: -p, --tools, --allowedTools, --permission-mode dontAsk, --max-turns', () => {
   const { command, args } = buildClaudeArgv({ prompt: 'do the task', maxTurns: 5 });
   assert.equal(command, 'claude');
   assert.deepEqual(args, [
@@ -37,11 +37,26 @@ test('buildClaudeArgv builds the confirmed current CLI contract: -p, --tools, --
     'do the task',
     '--tools',
     RESTRICTED_AUTONOMOUS_TOOLS.join(','),
+    '--allowedTools',
+    ...RESTRICTED_AUTONOMOUS_TOOLS,
     '--permission-mode',
     'dontAsk',
     '--max-turns',
     '5',
   ]);
+});
+
+// NIGHT-V1-C section 5-6: --allowedTools takes each tool name as its OWN
+// argv token (confirmed against current official docs — its examples show
+// `--allowedTools "Read" "Bash(git log *)"`, never a comma-joined string),
+// unlike --tools which takes one comma-joined value. Both express the
+// identical restricted set, just in each flag's own native syntax.
+test('buildClaudeArgv encodes --allowedTools as separate tokens (not a comma-joined string), one per restricted tool', () => {
+  const { args } = buildClaudeArgv({ prompt: 'x', maxTurns: 5 });
+  const idx = args.indexOf('--allowedTools');
+  assert.ok(idx !== -1);
+  assert.deepEqual(args.slice(idx + 1, idx + 1 + RESTRICTED_AUTONOMOUS_TOOLS.length), RESTRICTED_AUTONOMOUS_TOOLS);
+  assert.equal(args[idx + 1 + RESTRICTED_AUTONOMOUS_TOOLS.length], '--permission-mode');
 });
 
 test('buildClaudeArgv default restricted tool set excludes Bash and every other command-execution-capable tool', () => {
@@ -102,6 +117,48 @@ test('assertSafeArgvOrThrow throws when --tools is missing', () => {
 test('assertSafeArgvOrThrow throws when Bash appears in the --tools value', () => {
   assert.throws(() =>
     assertSafeArgvOrThrow({ command: 'claude', args: ['-p', 'x', '--tools', 'Read,Bash', '--permission-mode', 'dontAsk'] }),
+  );
+});
+
+test('assertSafeArgvOrThrow throws when --allowedTools is missing entirely', () => {
+  assert.throws(() =>
+    assertSafeArgvOrThrow({ command: 'claude', args: ['-p', 'x', '--tools', 'Read,Glob,Grep,Write,Edit', '--permission-mode', 'dontAsk'] }),
+  );
+});
+
+test('assertSafeArgvOrThrow throws when Bash appears in the --allowedTools value', () => {
+  assert.throws(() =>
+    assertSafeArgvOrThrow({
+      command: 'claude',
+      args: ['-p', 'x', '--tools', 'Read,Glob,Grep,Write,Edit', '--allowedTools', 'Read', 'Bash', '--permission-mode', 'dontAsk'],
+    }),
+  );
+});
+
+test('assertSafeArgvOrThrow throws when --allowedTools expresses a DIFFERENT set than --tools', () => {
+  assert.throws(() =>
+    assertSafeArgvOrThrow({
+      command: 'claude',
+      args: ['-p', 'x', '--tools', 'Read,Glob,Grep,Write,Edit', '--allowedTools', 'Read', 'Glob', '--permission-mode', 'dontAsk'],
+    }),
+  );
+});
+
+test('assertSafeArgvOrThrow throws when --allowedTools is a subset of --tools (must be the exact same set, not merely no extra tools)', () => {
+  assert.throws(() =>
+    assertSafeArgvOrThrow({
+      command: 'claude',
+      args: ['-p', 'x', '--tools', 'Read,Glob,Grep,Write,Edit', '--allowedTools', 'Read', 'Glob', 'Grep', 'Write', '--permission-mode', 'dontAsk'],
+    }),
+  );
+});
+
+test('assertSafeArgvOrThrow passes when --allowedTools expresses the exact same set as --tools regardless of order', () => {
+  assert.doesNotThrow(() =>
+    assertSafeArgvOrThrow({
+      command: 'claude',
+      args: ['-p', 'x', '--tools', 'Read,Glob,Grep,Write,Edit', '--allowedTools', 'Edit', 'Write', 'Grep', 'Glob', 'Read', '--permission-mode', 'dontAsk'],
+    }),
   );
 });
 
