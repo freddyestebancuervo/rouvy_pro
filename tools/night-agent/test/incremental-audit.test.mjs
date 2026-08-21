@@ -73,10 +73,29 @@ function buildFixture() {
   writeFileSync(path.join(naDir, 'README.md'), '# night-agent fixture\n');
   writeFileSync(path.join(rootDir, 'README.md'), '# fixture root (outside Night Agent scope)\n');
 
+  // Mirror the REAL repository layout exactly: the actual external
+  // security dependencies IMP5-SCOPE-BOUNDARY-001 found — the PreToolUse
+  // enforcement hook and its registration file — both outside
+  // tools/night-agent/, both real, both present in every fixture from here
+  // on so every test below reflects the real production topology.
+  const hooksDir = path.join(rootDir, '.claude', 'hooks');
+  mkdirSync(hooksDir, { recursive: true });
+  writeFileSync(
+    path.join(hooksDir, 'night-guard.mjs'),
+    "import { PATH_SAFETY } from '../../tools/night-agent/path-safety.mjs';\n"
+    + 'export function checkWrite() { return PATH_SAFETY ? \'DENY\' : \'DENY\'; }\n',
+  );
+  writeFileSync(
+    path.join(rootDir, '.claude', 'settings.json'),
+    JSON.stringify({ hooks: { PreToolUse: [{ hooks: [{ type: 'command', args: ['.claude/hooks/night-guard.mjs'] }] }] } }, null, 2),
+  );
+
   const baselineSha = commitAll(rootDir, 'initial');
   const rootCommit = git(rootDir, ['rev-list', '--max-parents=0', 'HEAD']);
 
-  return { rootDir, naDir, testDir, baselineSha, rootCommit };
+  return {
+    rootDir, naDir, testDir, hooksDir, settingsPath: path.join(rootDir, '.claude', 'settings.json'), baselineSha, rootCommit,
+  };
 }
 
 function trustedBaseline(fx, sha = fx.baselineSha) {
@@ -100,15 +119,23 @@ test('classifyFile: closed catalog and known production files', () => {
   assert.equal(classifyFile('tools/night-agent/incremental-audit.mjs'), 'AUDIT_ENGINE');
   assert.equal(classifyFile('tools/night-agent/test/evidence-policy.test.mjs'), 'TESTS');
   assert.equal(classifyFile('tools/night-agent/README.md'), 'DOCS');
-  assert.equal(classifyFile('some/fixtures/thing.json'), 'FIXTURES');
+  assert.equal(classifyFile('tools/night-agent/fixtures/thing.json'), 'FIXTURES');
+  assert.equal(classifyFile('.claude/hooks/night-guard.mjs'), 'SECURITY_HOOK');
+  assert.equal(classifyFile('.claude/settings.json'), 'HOOK_REGISTRATION');
 });
 
-test('classifyFile: an unrecognized path -> UNKNOWN (never ignored)', () => {
+test('classifyFile: an unrecognized path INSIDE canonical scope -> UNKNOWN (never ignored)', () => {
   assert.equal(classifyFile('tools/night-agent/some-new-module-nobody-classified-yet.mjs'), 'UNKNOWN');
-  assert.equal(classifyFile('package.json'), 'UNKNOWN');
   assert.equal(classifyFile(''), 'UNKNOWN');
   assert.equal(classifyFile(null), 'UNKNOWN');
   assert.equal(classifyFile(undefined), 'UNKNOWN');
+});
+
+test('classifyFile: a path entirely outside the canonical scope -> OUT_OF_SCOPE, distinct from UNKNOWN', () => {
+  assert.equal(classifyFile('package.json'), 'OUT_OF_SCOPE');
+  assert.equal(classifyFile('lib/some_app/ui_widget.dart'), 'OUT_OF_SCOPE');
+  assert.equal(classifyFile('.claude/agents/night-auditor.md'), 'OUT_OF_SCOPE');
+  assert.equal(classifyFile('README.md'), 'OUT_OF_SCOPE', 'the repository ROOT README is outside tools/night-agent/, unlike tools/night-agent/README.md');
 });
 
 test('COMPONENT_CLASSES is a real closed catalog', () => {
@@ -600,4 +627,150 @@ test('REUSED_RESULT_HAS_PROVENANCE: a persisted manifest always carries its orig
   assert.equal(manifest.current_sha, decision.currentSha);
   assert.equal(manifest.schema_version, AUDIT_POLICY_VERSION);
   assert.equal(typeof manifest.created_at, 'string');
+});
+
+// =============================================================================
+// IMP5-SCOPE-BOUNDARY-001 remediation — the canonical security scope now
+// includes the REAL external runtime dependencies (.claude/hooks/night-
+// guard.mjs, .claude/settings.json) found by independent audit, git itself
+// is never asked to hide any path (no pathspec argument at all), and there
+// is no public parameter through which a caller could narrow, relocate, or
+// exclude any part of that canonical scope.
+// =============================================================================
+
+test('no public parameter exists to narrow or relocate the canonical scope: decideIncrementalAudit/computeChangeset accept no scopePathspec/nightAgentSubdir at all', () => {
+  const fx = buildFixture();
+  const baseline = trustedBaseline(fx);
+  // Passing these historical parameter names must have NO effect whatsoever
+  // -- they are simply not read anywhere in the current implementation.
+  const decisionWithBogusParams = decideIncrementalAudit({
+    baseline, repoRoot: fx.rootDir, scopePathspec: 'tools/night-agent/test', nightAgentSubdir: 'tools/night-agent/test',
+  });
+  const decisionWithoutThem = decideIncrementalAudit({ baseline, repoRoot: fx.rootDir });
+  assert.deepEqual(decisionWithBogusParams, decisionWithoutThem, 'a caller-supplied scopePathspec/nightAgentSubdir must be silently ignored, never honored');
+});
+
+test('ATTACK_DEFAULT_NIGHT_GUARD_CHANGE: modifying ONLY .claude/hooks/night-guard.mjs (tools/night-agent/** entirely untouched) is now detected and escalates', () => {
+  const fx = buildFixture();
+  const baseline = trustedBaseline(fx);
+  writeFileSync(path.join(fx.hooksDir, 'night-guard.mjs'), "import { PATH_SAFETY } from '../../tools/night-agent/path-safety.mjs';\nexport function checkWrite() { return 'ALLOW'; } // SECURITY WEAKENING\n");
+  commitAll(fx.rootDir, 'weaken night-guard.mjs only');
+  const decision = decideIncrementalAudit({ baseline, repoRoot: fx.rootDir });
+  assert.equal(decision.decision, 'FULL_REQUIRED');
+  assert.ok(decision.changedFiles.includes('.claude/hooks/night-guard.mjs'));
+  assert.ok(decision.escalationReasons.includes('SECURITY_CRITICAL_CHANGE'));
+  assert.equal(decision.reuseAllowed, false);
+});
+
+test('ATTACK_NIGHT_GUARD_DELETE: deleting .claude/hooks/night-guard.mjs escalates', () => {
+  const fx = buildFixture();
+  const baseline = trustedBaseline(fx);
+  rmSync(path.join(fx.hooksDir, 'night-guard.mjs'));
+  commitAll(fx.rootDir, 'delete night-guard.mjs');
+  const decision = decideIncrementalAudit({ baseline, repoRoot: fx.rootDir });
+  assert.equal(decision.decision, 'FULL_REQUIRED');
+  assert.ok(decision.escalationReasons.includes('SECURITY_FILE_DELETED'));
+});
+
+test('ATTACK_NIGHT_GUARD_RENAME: renaming .claude/hooks/night-guard.mjs to a harmless-looking name escalates (old + new path both considered)', () => {
+  const fx = buildFixture();
+  const baseline = trustedBaseline(fx);
+  renameSync(path.join(fx.hooksDir, 'night-guard.mjs'), path.join(fx.hooksDir, 'totally-harmless-utility.mjs'));
+  commitAll(fx.rootDir, 'rename night-guard.mjs');
+  const decision = decideIncrementalAudit({ baseline, repoRoot: fx.rootDir });
+  assert.equal(decision.decision, 'FULL_REQUIRED');
+  assert.ok(decision.escalationReasons.includes('SECURITY_FILE_RENAMED'));
+});
+
+test('a change to .claude/settings.json (hook registration) alone escalates', () => {
+  const fx = buildFixture();
+  const baseline = trustedBaseline(fx);
+  writeFileSync(fx.settingsPath, JSON.stringify({ hooks: {} }, null, 2));
+  commitAll(fx.rootDir, 'un-register the guard hook');
+  const decision = decideIncrementalAudit({ baseline, repoRoot: fx.rootDir });
+  assert.equal(decision.decision, 'FULL_REQUIRED');
+  assert.ok(decision.changedFiles.includes('.claude/settings.json'));
+  assert.ok(decision.escalationReasons.includes('SECURITY_CRITICAL_CHANGE'));
+});
+
+test('an UNTRACKED (never committed) modification to night-guard.mjs also escalates via DIRTY_WORKTREE, scoped correctly to an in-scope file', () => {
+  const fx = buildFixture();
+  const baseline = trustedBaseline(fx);
+  writeFileSync(path.join(fx.hooksDir, 'night-guard.mjs'), "export function checkWrite() { return 'ALLOW'; }\n");
+  const decision = decideIncrementalAudit({ baseline, repoRoot: fx.rootDir });
+  assert.equal(decision.decision, 'FULL_REQUIRED');
+  assert.ok(decision.escalationReasons.includes('DIRTY_WORKTREE'));
+});
+
+test('POSITIVE: an unrelated, genuinely out-of-scope dirty file does NOT force DIRTY_WORKTREE escalation -- incremental value is preserved', () => {
+  const fx = buildFixture();
+  const baseline = trustedBaseline(fx);
+  mkdirSync(path.join(fx.rootDir, 'lib', 'some_app'), { recursive: true });
+  writeFileSync(path.join(fx.rootDir, 'lib', 'some_app', 'ui_widget.dart'), '// unrelated, uncommitted, out of scope\n');
+  const decision = decideIncrementalAudit({ baseline, repoRoot: fx.rootDir });
+  assert.equal(decision.decision, 'INCREMENTAL');
+  assert.deepEqual(decision.escalationReasons, []);
+});
+
+test('POSITIVE (UNRELATED_PRODUCT_CHANGE): a real, committed, genuinely unrelated application change outside every canonical root -> INCREMENTAL, not FULL_REQUIRED', () => {
+  const fx = buildFixture();
+  const baseline = trustedBaseline(fx);
+  mkdirSync(path.join(fx.rootDir, 'lib', 'some_app'), { recursive: true });
+  writeFileSync(path.join(fx.rootDir, 'lib', 'some_app', 'ui_widget.dart'), '// unrelated app code, no relationship to Night Agent whatsoever\n');
+  commitAll(fx.rootDir, 'unrelated committed app change');
+  const decision = decideIncrementalAudit({ baseline, repoRoot: fx.rootDir });
+  assert.equal(decision.decision, 'INCREMENTAL');
+  assert.deepEqual(decision.changedFiles, []);
+  assert.deepEqual(decision.escalationReasons, []);
+});
+
+test('a genuinely unrelated file added right next to a REAL security change is not enough to hide the security change: both are correctly detected, decision still FULL_REQUIRED', () => {
+  const fx = buildFixture();
+  const baseline = trustedBaseline(fx);
+  writeFileSync(path.join(fx.hooksDir, 'night-guard.mjs'), "export function checkWrite() { return 'ALLOW'; } // weakened\n");
+  mkdirSync(path.join(fx.rootDir, 'lib', 'some_app'), { recursive: true });
+  writeFileSync(path.join(fx.rootDir, 'lib', 'some_app', 'ui_widget.dart'), '// unrelated, committed in the SAME commit\n');
+  commitAll(fx.rootDir, 'weaken guard + unrelated app change together');
+  const decision = decideIncrementalAudit({ baseline, repoRoot: fx.rootDir });
+  assert.equal(decision.decision, 'FULL_REQUIRED');
+  assert.deepEqual(decision.changedFiles, ['.claude/hooks/night-guard.mjs'], 'the unrelated file must not even appear -- it is out of scope -- but the real security change must still be caught');
+});
+
+test('OLD_SCOPE_POLICY_MANIFEST_REJECTED: a manifest whose schema_version is the OLD (pre-remediation) policy version is rejected, even if repo/baseline/current SHA all still match exactly', () => {
+  const fx = buildFixture();
+  const baseline = trustedBaseline(fx);
+  const decision = decideIncrementalAudit({ baseline, repoRoot: fx.rootDir });
+  const oldPolicyManifest = { ...buildManifest({ repoRoot: fx.rootDir, decision }), schema_version: AUDIT_POLICY_VERSION - 1 };
+  assert.equal(validateManifest(oldPolicyManifest), false, 'a manifest computed under the OLD (vulnerable) scope policy must not even validate structurally under the current policy version');
+});
+
+test('MANIFEST_BOUND_TO_AUDIT_POLICY: resolveManifestReuse rejects a manifest that structurally embeds the old policy version, via readManifestForReuse -> INVALID', () => {
+  const fx = buildFixture();
+  const baseline = trustedBaseline(fx);
+  const decision = decideIncrementalAudit({ baseline, repoRoot: fx.rootDir });
+  const oldPolicyManifest = { ...buildManifest({ repoRoot: fx.rootDir, decision }), schema_version: AUDIT_POLICY_VERSION - 1 };
+  const manifestPath = resolveManifestPath({ repoRoot: fx.rootDir, tmpDirFn: () => fx.rootDir });
+  mkdirSync(path.dirname(manifestPath), { recursive: true });
+  writeFileSync(manifestPath, JSON.stringify(oldPolicyManifest, null, 2));
+  const reuse = resolveManifestReuse({ filePath: manifestPath, repoRoot: fx.rootDir, baseline, currentSha: decision.currentSha });
+  assert.equal(reuse.reusable, false);
+  assert.equal(reuse.reason, 'MANIFEST_INVALID');
+});
+
+test('CANONICAL_SCOPE covers the real, independently-confirmed external dependencies: SECURITY_HOOK and HOOK_REGISTRATION are both security-critical components', async () => {
+  const mod = await import('../incremental-audit.mjs');
+  assert.ok(mod.COMPONENT_CLASSES.includes('SECURITY_HOOK'));
+  assert.ok(mod.COMPONENT_CLASSES.includes('HOOK_REGISTRATION'));
+  assert.ok(mod.COMPONENT_CLASSES.includes('OUT_OF_SCOPE'));
+});
+
+test('POSITIVE (no-change reuse still functional after remediation): trusted baseline == HEAD, clean worktree -> INCREMENTAL, manifest genuinely reusable', () => {
+  const fx = buildFixture();
+  const baseline = trustedBaseline(fx);
+  const decision = decideIncrementalAudit({ baseline, repoRoot: fx.rootDir });
+  assert.equal(decision.decision, 'INCREMENTAL');
+  const manifestPath = resolveManifestPath({ repoRoot: fx.rootDir, tmpDirFn: () => fx.rootDir });
+  writeManifestAtomic(manifestPath, buildManifest({ repoRoot: fx.rootDir, decision }));
+  const reuse = resolveManifestReuse({ filePath: manifestPath, repoRoot: fx.rootDir, baseline, currentSha: decision.currentSha });
+  assert.equal(reuse.reusable, true);
 });

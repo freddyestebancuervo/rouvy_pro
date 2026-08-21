@@ -45,26 +45,92 @@ export { checkAuditMainDrift };
 // manifest format. Bumping this is itself an AUDIT_POLICY_CHANGE (section
 // 13/14) — any manifest written under an older version is structurally
 // rejected by `resolveManifestReuse` below, never silently accepted.
-export const AUDIT_POLICY_VERSION = 1;
+//
+// Bumped 1 -> 2 by IMP5-SCOPE-BOUNDARY-001's remediation: the canonical
+// scope model changed (git-pathspec scoping removed; classification-based
+// CANONICAL_SECURITY_ROOTS added; SECURITY_HOOK/HOOK_REGISTRATION
+// components added). A manifest computed under version 1's vulnerable
+// scoping could have recorded `decision: 'INCREMENTAL'` for a real change
+// that touched `.claude/hooks/night-guard.mjs`/`.claude/settings.json` —
+// such a manifest must never be treated as current just because its
+// baseline/current SHA still happen to match; the policy that PRODUCED it
+// is no longer trusted, independent of SHA matching.
+export const AUDIT_POLICY_VERSION = 2;
 
 const FROZEN_SHA_PATTERN = /^[0-9a-f]{40}$/;
 
 // ---------------------------------------------------------------------------
-// Component classification — closed set. Anything not recognized is
-// UNKNOWN, which always escalates (see `decideIncrementalAudit`) — this
-// module never silently ignores a path it cannot classify.
+// IMP5-SCOPE-BOUNDARY-001 REMEDIATION: the canonical security scope. This
+// list is a MODULE-OWNED, PRIVATE constant — never a function parameter,
+// never caller-suppliable in any form. It was independently re-audited
+// (not assumed) against the real repository: every actual runtime security
+// dependency Night Agent has, beyond its own `tools/night-agent/` source
+// tree, was traced by hand:
+//   - `.claude/hooks/night-guard.mjs` is the real PreToolUse enforcement
+//     hook `runner.mjs`'s controlled-execution pipeline depends on — it
+//     directly imports `isSafeWriteTarget`/`isSafeReadTarget` from this
+//     module's own `path-safety.mjs`, and this project's own test suite
+//     (`tools/night-agent/test/night-guard.test.mjs`) already treats it as
+//     part of the same system, just relocated because Claude Code's own
+//     hook-discovery convention requires hooks to live under
+//     `.claude/hooks/`.
+//   - `.claude/settings.json` is read at runtime by `runner.mjs`'s
+//     `checkNightGuardInstalled` — the preflight gate that verifies the
+//     guard is actually wired up as a PreToolUse hook BEFORE any
+//     policy/checkpoint/spawn ever runs. A change here can silently
+//     un-register or redirect the guard.
+// No other file outside `tools/night-agent/` was found, by the same
+// process, to be read or executed by any Night Agent production code path
+// (confirmed: `.claude/agents/*.md` are Claude Code subagent persona
+// definitions Claude Code itself reads, never referenced by any
+// `tools/night-agent/*.mjs`; `.claude/overnight/*.md`/`TASK_QUEUE.example
+// .json` are human documentation whose VALUES were manually copied into
+// hardcoded constants already inside `tools/night-agent/queue.mjs` — never
+// read at runtime; this repository has no root `package.json`/lockfile/
+// `.nvmrc`/`.gitattributes`/`.gitmodules` at all). If a FUTURE change to
+// `tools/night-agent/**` introduces a new external dependency, that change
+// is itself inside the canonical scope and is caught by ordinary
+// SECURITY_CRITICAL_CHANGE escalation before it could ever benefit from
+// stale incremental reuse (section 10's requirement).
+// ---------------------------------------------------------------------------
+
+const CANONICAL_SECURITY_ROOTS = Object.freeze([
+  'tools/night-agent',
+  '.claude/hooks/night-guard.mjs',
+  '.claude/settings.json',
+]);
+
+function isWithinCanonicalScope(relPath) {
+  if (typeof relPath !== 'string' || relPath.length === 0) return false;
+  const normalized = relPath.replace(/\\/g, '/');
+  return CANONICAL_SECURITY_ROOTS.some((root) => normalized === root || normalized.startsWith(`${root}/`));
+}
+
+// ---------------------------------------------------------------------------
+// Component classification — closed set. OUT_OF_SCOPE is the only
+// component this module ever silently disregards (a real, demonstrably
+// unrelated change elsewhere in the repository — section 7/22, so a
+// Night-Agent-specific incremental audit retains real value rather than
+// becoming FULL_REQUIRED for every unrelated product edit). UNKNOWN means
+// "inside the canonical scope but not classifiable" and always escalates
+// (see `decideIncrementalAudit`) — this module never silently ignores a
+// path it cannot classify THAT IS WITHIN scope.
 // ---------------------------------------------------------------------------
 
 export const COMPONENT_CLASSES = Object.freeze([
   'AUDIT_ENGINE', 'SOURCE_TRUTH', 'EVIDENCE_POLICY', 'RECOVERY', 'EXECUTION',
-  'QUEUE', 'PATH_SAFETY', 'TESTS', 'DOCS', 'FIXTURES', 'UNKNOWN',
+  'QUEUE', 'PATH_SAFETY', 'SECURITY_HOOK', 'HOOK_REGISTRATION',
+  'TESTS', 'DOCS', 'FIXTURES', 'UNKNOWN', 'OUT_OF_SCOPE',
 ]);
 
-// Every component EXCEPT TESTS/DOCS/FIXTURES/UNKNOWN is security-critical —
-// a change there can never be silently treated as "just an optimization
-// opportunity" (section 9).
+// Every component EXCEPT TESTS/DOCS/FIXTURES/UNKNOWN/OUT_OF_SCOPE is
+// security-critical — a change there can never be silently treated as
+// "just an optimization opportunity" (section 9). SECURITY_HOOK and
+// HOOK_REGISTRATION — both OUTSIDE tools/night-agent/ — are included here
+// on the exact same footing as the in-tree components (section 8).
 const SECURITY_CRITICAL_COMPONENTS = new Set([
   'AUDIT_ENGINE', 'SOURCE_TRUTH', 'EVIDENCE_POLICY', 'RECOVERY', 'EXECUTION', 'QUEUE', 'PATH_SAFETY',
+  'SECURITY_HOOK', 'HOOK_REGISTRATION',
 ]);
 
 const FILE_CLASS_MAP = Object.freeze({
@@ -76,15 +142,21 @@ const FILE_CLASS_MAP = Object.freeze({
   'tools/night-agent/runner.mjs': 'EXECUTION',
   'tools/night-agent/queue.mjs': 'QUEUE',
   'tools/night-agent/path-safety.mjs': 'PATH_SAFETY',
+  '.claude/hooks/night-guard.mjs': 'SECURITY_HOOK',
+  '.claude/settings.json': 'HOOK_REGISTRATION',
 });
 
 /**
  * Classify a repo-relative path into a component class. Derived from this
  * project's REAL, current file layout (`FILE_CLASS_MAP` above enumerates
- * the actual production modules under `tools/night-agent/`), not an
- * abstract/assumed taxonomy. Anything not explicitly recognized —
- * including a real file this map simply hasn't been updated for yet —
- * classifies as UNKNOWN, which `decideIncrementalAudit` always escalates.
+ * the actual production modules AND the actual external security
+ * dependencies — see `CANONICAL_SECURITY_ROOTS` above), not an abstract/
+ * assumed taxonomy. A path outside every canonical root is OUT_OF_SCOPE —
+ * demonstrably not this audit's concern, by module-owned policy, never by
+ * a caller-suppliable pathspec. A path INSIDE scope that isn't otherwise
+ * recognized — including a real file this map simply hasn't been updated
+ * for yet — classifies as UNKNOWN, which `decideIncrementalAudit` always
+ * escalates.
  * @param {string} relPath
  * @returns {string} one of COMPONENT_CLASSES
  */
@@ -92,6 +164,7 @@ export function classifyFile(relPath) {
   if (typeof relPath !== 'string' || relPath.length === 0) return 'UNKNOWN';
   const normalized = relPath.replace(/\\/g, '/');
   if (FILE_CLASS_MAP[normalized]) return FILE_CLASS_MAP[normalized];
+  if (!isWithinCanonicalScope(normalized)) return 'OUT_OF_SCOPE';
   if (normalized.startsWith('tools/night-agent/test/')) return 'TESTS';
   if (normalized.startsWith('tools/night-agent/') && /\.md$/i.test(normalized)) return 'DOCS';
   if (/\/fixtures?\//i.test(normalized)) return 'FIXTURES';
@@ -115,10 +188,16 @@ const COMPONENT_TEST_MAP = Object.freeze({
   EXECUTION: Object.freeze(['tools/night-agent/test/executor.test.mjs', 'tools/night-agent/test/runner.test.mjs']),
   QUEUE: Object.freeze(['tools/night-agent/test/queue.test.mjs', 'tools/night-agent/test/runner.test.mjs']),
   PATH_SAFETY: Object.freeze(['tools/night-agent/test/path-safety.test.mjs', 'tools/night-agent/test/night-guard.test.mjs', 'tools/night-agent/test/queue.test.mjs']),
+  // SECURITY_HOOK/HOOK_REGISTRATION: night-guard.mjs's own dedicated suite,
+  // plus runner.test.mjs (which exercises checkNightGuardInstalled's real
+  // read of .claude/settings.json).
+  SECURITY_HOOK: Object.freeze(['tools/night-agent/test/night-guard.test.mjs', 'tools/night-agent/test/runner.test.mjs']),
+  HOOK_REGISTRATION: Object.freeze(['tools/night-agent/test/runner.test.mjs']),
   TESTS: Object.freeze([]),
   DOCS: Object.freeze([]),
   FIXTURES: Object.freeze([]),
   UNKNOWN: Object.freeze([]),
+  OUT_OF_SCOPE: Object.freeze([]),
 });
 
 // ---------------------------------------------------------------------------
@@ -274,14 +353,21 @@ export function isTrustedBaseline(candidate) {
 // ---------------------------------------------------------------------------
 
 /**
+ * IMP5-SCOPE-BOUNDARY-001 REMEDIATION: this function no longer accepts any
+ * caller-suppliable pathspec/scope parameter. It always computes the
+ * changeset for the WHOLE repository, with no `-- pathspec` argument on
+ * either git call — git itself is never asked to hide anything from this
+ * query. Relevance filtering happens exclusively in `decideIncrementalAudit`
+ * via `classifyFile`'s module-owned, non-caller-controlled
+ * `CANONICAL_SECURITY_ROOTS` policy, applied AFTER this function returns
+ * the complete, real picture — never before.
  * @param {object} params
  * @param {object} params.baseline must be `isTrustedBaseline`
  * @param {string} params.repoRoot
- * @param {string} [params.scopePathspec] restricts BOTH the committed diff and the working-tree status query to this pathspec — changes entirely outside Night Agent's own scope are simply not this tool's concern, never silently treated as "unknown" (which is reserved for an unrecognized path INSIDE scope)
  * @param {typeof spawnSync} [params.spawnSyncFn]
  * @returns {{changeset: object|null, error: string|null}}
  */
-export function computeChangeset({ baseline, repoRoot, scopePathspec = 'tools/night-agent', spawnSyncFn = spawnSync }) {
+export function computeChangeset({ baseline, repoRoot, spawnSyncFn = spawnSync }) {
   if (!isTrustedBaseline(baseline)) {
     return { changeset: null, error: 'UNTRUSTED_BASELINE' };
   }
@@ -293,7 +379,7 @@ export function computeChangeset({ baseline, repoRoot, scopePathspec = 'tools/ni
 
   const files = [];
   if (currentSha !== baseline.sha) {
-    const diffResult = spawnSyncFn('git', ['-C', repoRoot, 'diff', '--name-status', '-M', baseline.sha, currentSha, '--', scopePathspec], { encoding: 'utf8', shell: false });
+    const diffResult = spawnSyncFn('git', ['-C', repoRoot, 'diff', '--name-status', '-M', baseline.sha, currentSha], { encoding: 'utf8', shell: false });
     if (!diffResult || diffResult.status !== 0 || typeof diffResult.stdout !== 'string') {
       return { changeset: null, error: 'DIFF_UNRESOLVED' };
     }
@@ -312,11 +398,12 @@ export function computeChangeset({ baseline, repoRoot, scopePathspec = 'tools/ni
     }
   }
 
-  const statusResult = spawnSyncFn('git', ['-C', repoRoot, 'status', '--porcelain', '--', scopePathspec], { encoding: 'utf8', shell: false });
+  const statusResult = spawnSyncFn('git', ['-C', repoRoot, 'status', '--porcelain'], { encoding: 'utf8', shell: false });
   if (!statusResult || statusResult.status !== 0 || typeof statusResult.stdout !== 'string') {
     return { changeset: null, error: 'STATUS_UNRESOLVED' };
   }
   const untrackedFiles = [];
+  const workingTreeChangedPaths = [];
   let dirty = false;
   for (const line of statusResult.stdout.split('\n').filter((l) => l.length > 0)) {
     const code = line.slice(0, 2);
@@ -326,6 +413,7 @@ export function computeChangeset({ baseline, repoRoot, scopePathspec = 'tools/ni
       dirty = true;
     } else {
       dirty = true;
+      workingTreeChangedPaths.push(filePath);
       if (!files.some((f) => f.path === filePath)) {
         files.push({ path: filePath, oldPath: null, changeType: 'MODIFIED' });
       }
@@ -338,6 +426,7 @@ export function computeChangeset({ baseline, repoRoot, scopePathspec = 'tools/ni
       currentSha,
       files,
       untrackedFiles,
+      workingTreeChangedPaths,
       dirty,
       shaDrift: currentSha !== baseline.sha,
     },
@@ -398,10 +487,15 @@ function fullRequiredResult(baseline, escalationReasons) {
 }
 
 /**
+ * IMP5-SCOPE-BOUNDARY-001 REMEDIATION: no caller-suppliable scope
+ * parameter of any kind. `computeChangeset` always sees the WHOLE
+ * repository; relevance is decided here, exclusively via `classifyFile`'s
+ * module-owned `CANONICAL_SECURITY_ROOTS` policy — a caller cannot narrow,
+ * relocate, or exclude any part of the canonical security scope, because
+ * there is no parameter through which to attempt it.
  * @param {object} params
  * @param {object} params.baseline must be `isTrustedBaseline`
  * @param {string} params.repoRoot
- * @param {string} [params.nightAgentSubdir]
  * @param {typeof spawnSync} [params.spawnSyncFn]
  * @param {typeof readdirSync} [params.readdirSyncFn]
  * @param {typeof readFileSync} [params.readFileSyncFn]
@@ -409,26 +503,39 @@ function fullRequiredResult(baseline, escalationReasons) {
  * @returns {object} the explainable decision
  */
 export function decideIncrementalAudit({
-  baseline, repoRoot, nightAgentSubdir = 'tools/night-agent',
+  baseline, repoRoot,
   spawnSyncFn = spawnSync, readdirSyncFn = readdirSync, readFileSyncFn = readFileSync, existsSyncFn = existsSync,
 }) {
   if (!isTrustedBaseline(baseline)) {
     return fullRequiredResult(baseline, ['UNTRUSTED_BASELINE']);
   }
 
-  const { changeset, error } = computeChangeset({ baseline, repoRoot, scopePathspec: nightAgentSubdir, spawnSyncFn });
+  const { changeset, error } = computeChangeset({ baseline, repoRoot, spawnSyncFn });
   if (changeset === null) {
     return fullRequiredResult(baseline, [`CHANGESET_UNAVAILABLE:${error}`]);
   }
 
   const escalationReasons = [];
-  if (changeset.dirty) escalationReasons.push('DIRTY_WORKTREE');
 
-  const allChangedPaths = [
+  // Whole-repository view, exactly as git reported it — nothing hidden at
+  // the query level. `isInScope` is the ONLY filter, and it is entirely
+  // module-owned (see `classifyFile`/`CANONICAL_SECURITY_ROOTS`).
+  const allRepoChangedPaths = [
     ...changeset.files.map((f) => f.path),
     ...changeset.files.filter((f) => f.oldPath).map((f) => f.oldPath),
     ...changeset.untrackedFiles,
   ];
+  const isInScope = (p) => classifyFile(p) !== 'OUT_OF_SCOPE';
+  const allChangedPaths = allRepoChangedPaths.filter(isInScope);
+
+  // DIRTY_WORKTREE only escalates when the uncommitted/untracked state
+  // itself touches something IN canonical scope — an unrelated dirty file
+  // elsewhere in the repository must not destroy this tool's value
+  // (section 7/22), but any in-scope dirt (including a NEW file the
+  // classifier has never seen — UNKNOWN — which independently escalates
+  // below) always does.
+  const relevantDirty = [...changeset.workingTreeChangedPaths, ...changeset.untrackedFiles].some(isInScope);
+  if (relevantDirty) escalationReasons.push('DIRTY_WORKTREE');
 
   const unsafePaths = allChangedPaths.filter((p) => !isRepoRelativePath(p));
   if (unsafePaths.length > 0) escalationReasons.push(`UNSAFE_PATH:${unsafePaths.join('|')}`);
@@ -438,18 +545,19 @@ export function decideIncrementalAudit({
   if ([...directComponents].some((c) => SECURITY_CRITICAL_COMPONENTS.has(c))) escalationReasons.push('SECURITY_CRITICAL_CHANGE');
   if (directComponents.has('AUDIT_ENGINE')) escalationReasons.push('AUDIT_ENGINE_SELF_CHANGE');
 
-  if (changeset.files.some((f) => f.changeType === 'DELETED' && SECURITY_CRITICAL_COMPONENTS.has(classifyFile(f.path)))) {
+  const inScopeFiles = changeset.files.filter((f) => isInScope(f.path) || (f.oldPath && isInScope(f.oldPath)));
+  if (inScopeFiles.some((f) => f.changeType === 'DELETED' && SECURITY_CRITICAL_COMPONENTS.has(classifyFile(f.path)))) {
     escalationReasons.push('SECURITY_FILE_DELETED');
   }
-  if (changeset.files.some((f) => f.changeType === 'DELETED' && classifyFile(f.path) === 'TESTS')) {
+  if (inScopeFiles.some((f) => f.changeType === 'DELETED' && classifyFile(f.path) === 'TESTS')) {
     escalationReasons.push('TEST_FILE_DELETED');
   }
-  if (changeset.files.some((f) => f.changeType === 'RENAMED'
+  if (inScopeFiles.some((f) => f.changeType === 'RENAMED'
     && (SECURITY_CRITICAL_COMPONENTS.has(classifyFile(f.path)) || SECURITY_CRITICAL_COMPONENTS.has(classifyFile(f.oldPath))))) {
     escalationReasons.push('SECURITY_FILE_RENAMED');
   }
 
-  for (const f of changeset.files) {
+  for (const f of inScopeFiles) {
     if (f.changeType === 'MODIFIED' && classifyFile(f.path) === 'TESTS' && changeset.shaDrift) {
       // only checkable for a real committed range (baseline.sha -> currentSha);
       // uncommitted-only modifications to a test file are still caught by
@@ -469,12 +577,18 @@ export function decideIncrementalAudit({
 
   let transitiveComponents = new Set(directComponents);
   try {
-    const nightAgentDir = path.join(repoRoot, nightAgentSubdir);
+    // The dependency-graph scanner only walks the real .mjs production
+    // files under tools/night-agent/ (CANONICAL_SECURITY_ROOTS[0]) — the
+    // external security dependencies (SECURITY_HOOK/HOOK_REGISTRATION) are
+    // covered directly by FILE_CLASS_MAP/isInScope instead, since they are
+    // each a single, individually-tracked file, not a directory of
+    // interdependent modules to graph.
+    const nightAgentDir = path.join(repoRoot, CANONICAL_SECURITY_ROOTS[0]);
     const reverseGraph = buildReverseDependencyGraph({ nightAgentDir, readdirSyncFn, readFileSyncFn, existsSyncFn });
     const changedBaseNames = allChangedPaths.map((p) => path.basename(p)).filter((bn) => reverseGraph.has(bn));
     const transitiveFiles = computeTransitiveImpact(changedBaseNames, reverseGraph);
     for (const f of transitiveFiles) {
-      transitiveComponents.add(classifyFile(`${nightAgentSubdir}/${f}`));
+      transitiveComponents.add(classifyFile(`${CANONICAL_SECURITY_ROOTS[0]}/${f}`));
     }
   } catch {
     escalationReasons.push('DEPENDENCY_GRAPH_UNAVAILABLE');
