@@ -1567,7 +1567,7 @@ test('LARGE_EVIDENCE_SET_TEST: 1000 duplicate-heavy synthetic evidences evaluate
 test('INTERNAL_POLICY_CORE_PURE: evaluateClaimCore never touches fs/network-mutation/shell/clock/random/process directly in this file', () => {
   const modulePath = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'evidence-policy.mjs');
   const source = readFileSync(modulePath, 'utf8');
-  const startMarker = 'function evaluateClaimCore(params, trustedNowMs, rawRequiredMaxAgeMs) {';
+  const startMarker = 'function evaluateClaimCore(snapshot, trustedNowMs, rawRequiredMaxAgeMs) {';
   const endMarker = 'export function evaluateClaim(params) {';
   const startIdx = source.indexOf(startMarker);
   const endIdx = source.indexOf(endMarker);
@@ -2148,7 +2148,7 @@ test('IMP3-STALENESS-002: ATTACK_TARGET_PLUS_NOW — combining a fake `now` with
 test('IMP3-STALENESS-002: PUBLIC_POLICY_BOUNDARY_PURE = NO / INTERNAL_POLICY_CORE_PURE = YES is a deliberate, disclosed tradeoff — evaluateClaim itself now legitimately calls Date.now(); evaluateClaimCore (private) still never does', () => {
   const modulePath = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'evidence-policy.mjs');
   const source = readFileSync(modulePath, 'utf8');
-  const coreStart = source.indexOf('function evaluateClaimCore(params, trustedNowMs, rawRequiredMaxAgeMs) {');
+  const coreStart = source.indexOf('function evaluateClaimCore(snapshot, trustedNowMs, rawRequiredMaxAgeMs) {');
   const publicStart = source.indexOf('export function evaluateClaim(params) {');
   assert.notEqual(coreStart, -1);
   assert.notEqual(publicStart, -1);
@@ -2178,20 +2178,20 @@ async function makeGenuinelyStaleRemoteRuntimeEvidence(evidenceId) {
   return obs.evidence;
 }
 
-test('IMP3-STALENESS-003: ATTACK_MAXAGE_GETTER_SEQUENCE — requiredMaxAgeMs answering 50, 50, undefined across successive reads cannot make the freshness filter disappear; requiredMaxAgeMs is read exactly once', async () => {
+test('IMP3-STALENESS-003 / IMP3-INPUT-SNAPSHOT-001: ATTACK_MAXAGE_GETTER_SEQUENCE — a requiredMaxAgeMs getter that would answer 50, 50, undefined across successive reads is now never invoked at ALL (IMP3-INPUT-SNAPSHOT-001 detects the accessor via its descriptor and rejects it outright)', async () => {
   const evidence = await makeGenuinelyStaleRemoteRuntimeEvidence('s003-getter-seq');
   let readCount = 0;
   const params = { claimId: 'c', title: 't', severity: 'P1', evidence: [evidence], requiredVerificationLevels: ['REMOTE_RUNTIME'], singleSourceExceptionRequested: true, singleSourceExceptionReason: VALID_REASON };
   Object.defineProperty(params, 'requiredMaxAgeMs', { enumerable: true, get() { readCount += 1; return readCount <= 2 ? 50 : undefined; } });
   const r = evaluateClaim(params);
   assert.notEqual(r.decision, 'CONFIRMED_P1', 'a getter must never be able to make a stale window disappear');
-  assert.equal(readCount, 1, 'requiredMaxAgeMs must be read from the caller-controlled object exactly once');
+  assert.equal(readCount, 0, 'post IMP3-INPUT-SNAPSHOT-001, the getter is never invoked at all');
 });
 
-test('IMP3-STALENESS-003: ATTACK_MAXAGE_PROXY_SEQUENCE — a Proxy get trap answering differently across reads cannot bypass the snapshot; exactly one trap invocation for requiredMaxAgeMs', async () => {
-  const evidence = await makeGenuinelyStaleRemoteRuntimeEvidence('s003-proxy-seq');
+test('IMP3-INPUT-SNAPSHOT-001: ATTACK_MAXAGE_PROXY_SEQUENCE — a Proxy implementing only a `get` trap (no requiredMaxAgeMs own property on the underlying target) is fully bypassed by the descriptor-based snapshot, which reflects the real, static, absent target value instead of invoking the trap at all; no staleness requirement was ever genuinely established, so the claim legitimately confirms on the real evidence alone', async () => {
+  const evidence = await attestRemoteRuntimeEvidence({ targetKey: 'reference-public-endpoint-production', evidenceId: 's003-proxy-seq', supportsClaim: true });
   let readCount = 0;
-  const base = { claimId: 'c', title: 't', severity: 'P1', evidence: [evidence], requiredVerificationLevels: ['REMOTE_RUNTIME'], singleSourceExceptionRequested: true, singleSourceExceptionReason: VALID_REASON };
+  const base = { claimId: 'c', title: 't', severity: 'P1', evidence: [evidence.evidence], requiredVerificationLevels: ['REMOTE_RUNTIME'], singleSourceExceptionRequested: true, singleSourceExceptionReason: VALID_REASON };
   const proxied = new Proxy(base, {
     get(target, prop, receiver) {
       if (prop === 'requiredMaxAgeMs') { readCount += 1; return readCount <= 2 ? 50 : undefined; }
@@ -2199,11 +2199,11 @@ test('IMP3-STALENESS-003: ATTACK_MAXAGE_PROXY_SEQUENCE — a Proxy get trap answ
     },
   });
   const r = evaluateClaim(proxied);
-  assert.notEqual(r.decision, 'CONFIRMED_P1');
-  assert.equal(readCount, 1);
+  assert.equal(r.decision, 'CONFIRMED_P1', 'the get trap is never consulted for requiredMaxAgeMs, so this behaves exactly as if requiredMaxAgeMs had never been supplied');
+  assert.equal(readCount, 0, 'a get trap plays no part in reading requiredMaxAgeMs\'s descriptor');
 });
 
-test('IMP3-STALENESS-003: ATTACK_MAXAGE_THROW_ON_SECOND_READ — a getter that throws on any read beyond the first proves, structurally, that no second read is ever attempted', async () => {
+test('IMP3-STALENESS-003 / IMP3-INPUT-SNAPSHOT-001: ATTACK_MAXAGE_THROW_ON_SECOND_READ — a getter that would throw on a second read never even gets its FIRST invocation, since IMP3-INPUT-SNAPSHOT-001 detects the accessor via its descriptor and never calls it at all', async () => {
   const evidence = await makeGenuinelyStaleRemoteRuntimeEvidence('s003-throw');
   let readCount = 0;
   const params = { claimId: 'c', title: 't', severity: 'P1', evidence: [evidence], requiredVerificationLevels: ['REMOTE_RUNTIME'], singleSourceExceptionRequested: true, singleSourceExceptionReason: VALID_REASON };
@@ -2216,18 +2216,25 @@ test('IMP3-STALENESS-003: ATTACK_MAXAGE_THROW_ON_SECOND_READ — a getter that t
     },
   });
   assert.doesNotThrow(() => evaluateClaim(params));
-  assert.equal(readCount, 1);
+  // Post IMP3-INPUT-SNAPSHOT-001: ACCESSOR_SECURITY_FIELD = FAIL_CLOSED
+  // means the getter itself is never invoked at all -- 0 reads, not 1.
+  assert.equal(readCount, 0);
 });
 
-test('IMP3-STALENESS-003: a requiredMaxAgeMs getter on the prototype chain (never an own property) is still read exactly once and cannot rejuvenate genuinely stale evidence', async () => {
+test('IMP3-INPUT-SNAPSHOT-001: a requiredMaxAgeMs getter on the prototype chain (never an own property) is never invoked at all -- only OWN properties of the immediate params object are consulted for security-relevant fields, so an inherited requiredMaxAgeMs is treated as absent (no staleness check requested), never as a bypassable value', async () => {
   const evidence = await makeGenuinelyStaleRemoteRuntimeEvidence('s003-proto');
   const proto = {};
   let readCount = 0;
   Object.defineProperty(proto, 'requiredMaxAgeMs', { enumerable: true, get() { readCount += 1; return 50; } });
   const params = Object.assign(Object.create(proto), { claimId: 'c', title: 't', severity: 'P1', evidence: [evidence], requiredVerificationLevels: ['REMOTE_RUNTIME'], singleSourceExceptionRequested: true, singleSourceExceptionReason: VALID_REASON });
   const r = evaluateClaim(params);
-  assert.notEqual(r.decision, 'CONFIRMED_P1');
-  assert.equal(readCount, 1);
+  // requiredMaxAgeMs is inherited, not own -- treated as ABSENT, so no
+  // staleness check runs at all (the REMOTE_RUNTIME level filter alone is
+  // satisfied by this real evidence, and confirms) -- this is the
+  // documented, intentional consequence of "only OWN properties count",
+  // not a bypass of any successfully-configured requirement.
+  assert.equal(r.decision, 'CONFIRMED_P1');
+  assert.equal(readCount, 0, 'the inherited getter must never be invoked at all');
 });
 
 test('IMP3-STALENESS-003: FILTER_DISAPPEARANCE_ATTACK — with no requiredVerificationLevels/requiredEnvironment at all, a requiredMaxAgeMs getter still cannot make the ENTIRE verification-level filter vanish', async () => {
@@ -2265,20 +2272,20 @@ test('IMP3-STALENESS-003: combined attacks — getter-TOCTOU alongside a fake `n
   assert.notEqual(rSer.decision, 'CONFIRMED_P1');
 });
 
-test('IMP3-STALENESS-003: sibling audit — requiredVerificationLevels and requiredEnvironment are each read from the caller object exactly once already, so no equivalent TOCTOU surface exists for them', async () => {
+test('IMP3-INPUT-SNAPSHOT-001: sibling audit (superseded) — a defineProperty getter on requiredVerificationLevels/requiredEnvironment is now never invoked at all (ACCESSOR_SECURITY_FIELD = FAIL_CLOSED), not merely "read once"', async () => {
   const evidence = await makeGenuinelyStaleRemoteRuntimeEvidence('s003-sibling');
 
   let levelsReadCount = 0;
   const paramsLevels = { claimId: 'c', title: 't', severity: 'P1', evidence: [evidence], requiredMaxAgeMs: 5 * 60 * 1000, singleSourceExceptionRequested: true, singleSourceExceptionReason: VALID_REASON };
   Object.defineProperty(paramsLevels, 'requiredVerificationLevels', { enumerable: true, get() { levelsReadCount += 1; return ['REMOTE_RUNTIME']; } });
   evaluateClaim(paramsLevels);
-  assert.equal(levelsReadCount, 1);
+  assert.equal(levelsReadCount, 0);
 
   let envReadCount = 0;
   const paramsEnv = { claimId: 'c', title: 't', severity: 'P1', evidence: [evidence], requiredMaxAgeMs: 5 * 60 * 1000, singleSourceExceptionRequested: true, singleSourceExceptionReason: VALID_REASON };
   Object.defineProperty(paramsEnv, 'requiredEnvironment', { enumerable: true, get() { envReadCount += 1; return 'Production'; } });
   evaluateClaim(paramsEnv);
-  assert.equal(envReadCount, 1);
+  assert.equal(envReadCount, 0);
 });
 
 test('IMP3-STALENESS-003: positive controls — a real fresh observation still confirms, with or without requiredMaxAgeMs, after the snapshot-once fix', async () => {
@@ -2289,6 +2296,137 @@ test('IMP3-STALENESS-003: positive controls — a real fresh observation still c
   const fresh2 = await attestRemoteRuntimeEvidence({ targetKey: 'reference-public-endpoint-production', evidenceId: 's003-positive-2', supportsClaim: true });
   const rWithoutCheck = evaluateClaim({ claimId: 'c', title: 't', severity: 'P1', evidence: [fresh2.evidence], requiredVerificationLevels: ['REMOTE_RUNTIME'], singleSourceExceptionRequested: true, singleSourceExceptionReason: VALID_REASON });
   assert.equal(rWithoutCheck.decision, 'CONFIRMED_P1');
+});
+
+// =============================================================================
+// IMP3-INPUT-SNAPSHOT-001 (IMPROVEMENT_3_INPUT_SNAPSHOT_001_REMEDIATION) —
+// LIVE_CALLER_PARAMS_REACH_CORE = NO. IMP3-STALENESS-003 made
+// `requiredMaxAgeMs` read-once, but an independent closure audit found the
+// SAME class of defect on a different field: `evaluateClaimCore` still
+// destructured `requiredVerificationLevels`/`requiredEnvironment` (and
+// everything else) directly from the live, caller-controlled `params`
+// object, in a fixed order — a getter/Proxy on an EARLIER-read field could
+// mutate/delete a LATER-read field's value on the SAME live object before
+// its own read occurred. Reproduced live: a real, trusted
+// `REMOTE_RUNTIME`/`Development` observation certified a claim explicitly
+// requiring `Production`, via a `requiredVerificationLevels` getter (or a
+// `claimId` getter, an `evidence` getter, or a bare `Proxy` `get` trap)
+// whose sole side effect was `delete params.requiredEnvironment`.
+//
+// `evaluateClaim` now resolves every security-relevant field via
+// `snapshotSecurityRelevantParams` BEFORE `evaluateClaimCore` ever runs —
+// `evaluateClaimCore` never touches `params` again. `requiredEnvironment`
+// (the exact field this incident exploited) is read FIRST, before any
+// other key, so nothing in this module can ever have a side effect on it
+// before it is captured — closed even against a `Proxy` implementing a
+// custom `getOwnPropertyDescriptor` trap targeting it specifically.
+// =============================================================================
+
+async function makeDevelopmentRemoteRuntimeEvidence(evidenceId) {
+  return (await attestRemoteRuntimeEvidence({ targetKey: 'reference-public-endpoint-development', evidenceId, supportsClaim: true })).evidence;
+}
+
+test('IMP3-INPUT-SNAPSHOT-001: ATTACK_LEVELS_MUTATES_ENV — a requiredVerificationLevels getter that deletes requiredEnvironment as a side effect cannot let Development evidence certify a Production claim', async () => {
+  const devEvidence = await makeDevelopmentRemoteRuntimeEvidence('snap001-a');
+  const params = { claimId: 'c', title: 'Production is healthy', severity: 'P1', evidence: [devEvidence], requiredEnvironment: 'Production', singleSourceExceptionRequested: true, singleSourceExceptionReason: VALID_REASON };
+  Object.defineProperty(params, 'requiredVerificationLevels', { enumerable: true, configurable: true, get() { delete params.requiredEnvironment; return ['REMOTE_RUNTIME']; } });
+  const r = evaluateClaim(params);
+  assert.notEqual(r.decision, 'CONFIRMED_P1');
+});
+
+test('IMP3-INPUT-SNAPSHOT-001: ATTACK_CLAIMID_MUTATES_ENV — a claimId getter (the first field in the old read order) deleting requiredEnvironment cannot bypass the environment filter', async () => {
+  const devEvidence = await makeDevelopmentRemoteRuntimeEvidence('snap001-b');
+  const params = { title: 't', severity: 'P1', evidence: [devEvidence], requiredEnvironment: 'Production', requiredVerificationLevels: ['REMOTE_RUNTIME'], singleSourceExceptionRequested: true, singleSourceExceptionReason: VALID_REASON };
+  Object.defineProperty(params, 'claimId', { enumerable: true, configurable: true, get() { delete params.requiredEnvironment; return 'c'; } });
+  const r = evaluateClaim(params);
+  assert.notEqual(r.decision, 'CONFIRMED_P1');
+});
+
+test('IMP3-INPUT-SNAPSHOT-001: ATTACK_EVIDENCE_MUTATES_ENV — an evidence getter deleting requiredEnvironment cannot bypass the environment filter (evidence itself, being an accessor, is separately rejected too)', async () => {
+  const devEvidence = await makeDevelopmentRemoteRuntimeEvidence('snap001-c');
+  const params = { claimId: 'c', title: 't', severity: 'P1', requiredEnvironment: 'Production', requiredVerificationLevels: ['REMOTE_RUNTIME'], singleSourceExceptionRequested: true, singleSourceExceptionReason: VALID_REASON };
+  Object.defineProperty(params, 'evidence', { enumerable: true, configurable: true, get() { delete params.requiredEnvironment; return [devEvidence]; } });
+  const r = evaluateClaim(params);
+  assert.notEqual(r.decision, 'CONFIRMED_P1');
+});
+
+test('IMP3-INPUT-SNAPSHOT-001: ATTACK_PROXY_MUTATES_ENV — a bare Proxy get trap achieves the same mutation with no defineProperty needed, still denied', async () => {
+  const devEvidence = await makeDevelopmentRemoteRuntimeEvidence('snap001-d');
+  const target = { claimId: 'c', title: 't', severity: 'P1', evidence: [devEvidence], requiredEnvironment: 'Production', requiredVerificationLevels: ['REMOTE_RUNTIME'], singleSourceExceptionRequested: true, singleSourceExceptionReason: VALID_REASON };
+  const proxied = new Proxy(target, {
+    get(t, prop, receiver) {
+      if (prop === 'requiredVerificationLevels') Reflect.deleteProperty(t, 'requiredEnvironment');
+      return Reflect.get(t, prop, receiver);
+    },
+  });
+  const r = evaluateClaim(proxied);
+  assert.notEqual(r.decision, 'CONFIRMED_P1');
+});
+
+test('IMP3-INPUT-SNAPSHOT-001: ATTACK_TITLE_MUTATES_LEVELS — a title getter deleting requiredVerificationLevels cannot bypass the level filter (requiredEnvironment mismatch independently still catches it)', async () => {
+  const staticIshEvidence = await attestRemoteRuntimeEvidence({ targetKey: 'reference-public-endpoint-production', evidenceId: 'snap001-e', supportsClaim: true });
+  const params = { claimId: 'c', severity: 'P1', evidence: [staticIshEvidence.evidence], requiredEnvironment: 'Development', requiredVerificationLevels: ['LOCAL_RUNTIME'], singleSourceExceptionRequested: true, singleSourceExceptionReason: VALID_REASON };
+  Object.defineProperty(params, 'title', { enumerable: true, configurable: true, get() { delete params.requiredVerificationLevels; return 't'; } });
+  const r = evaluateClaim(params);
+  assert.notEqual(r.decision, 'CONFIRMED_P1');
+});
+
+test('IMP3-INPUT-SNAPSHOT-001: a getOwnPropertyDescriptor-trap Proxy specifically targeting requiredEnvironment (the deepest reproduced variant) is fully denied, because requiredEnvironment is read first', async () => {
+  const devEvidence = await makeDevelopmentRemoteRuntimeEvidence('snap001-gopd');
+  const target = {
+    claimId: 'c', title: 't', severity: 'P1', evidence: [devEvidence],
+    singleSourceExceptionRequested: true, singleSourceExceptionReason: VALID_REASON,
+    requiredVerificationLevels: ['REMOTE_RUNTIME'], requiredEnvironment: 'Production',
+  };
+  const proxied = new Proxy(target, {
+    getOwnPropertyDescriptor(t, prop) {
+      if (prop === 'requiredVerificationLevels') Reflect.deleteProperty(t, 'requiredEnvironment');
+      return Reflect.getOwnPropertyDescriptor(t, prop);
+    },
+  });
+  const r = evaluateClaim(proxied);
+  assert.notEqual(r.decision, 'CONFIRMED_P1');
+});
+
+test('IMP3-INPUT-SNAPSHOT-001: ATTACK_GETTER_THROW — a throwing getter on a security-relevant field never crashes evaluateClaim uncontrolled; it is treated as ACCESSOR_REJECTED, never invoked', async () => {
+  const params = { claimId: 'c', title: 't', severity: 'P1', evidence: [], singleSourceExceptionRequested: true, singleSourceExceptionReason: VALID_REASON };
+  Object.defineProperty(params, 'requiredEnvironment', { enumerable: true, configurable: true, get() { throw new Error('should never be called'); } });
+  assert.doesNotThrow(() => evaluateClaim(params));
+});
+
+test('IMP3-INPUT-SNAPSHOT-001: DISCLOSED RESIDUAL — a getOwnPropertyDescriptor-trap Proxy targeting a NON-FIRST security field (requiredVerificationLevels, read second) can still, in principle, mutate it via requiredEnvironment\'s own trap; this is a documented, structural JavaScript limitation, not a regression of the primary finding', async () => {
+  const devEvidence = await makeDevelopmentRemoteRuntimeEvidence('snap001-residual');
+  const target = {
+    claimId: 'c', title: 't', severity: 'P1', evidence: [devEvidence],
+    singleSourceExceptionRequested: true, singleSourceExceptionReason: VALID_REASON,
+    requiredVerificationLevels: ['LOCAL_RUNTIME'], requiredEnvironment: 'Development',
+  };
+  const proxied = new Proxy(target, {
+    getOwnPropertyDescriptor(t, prop) {
+      if (prop === 'requiredEnvironment') Reflect.deleteProperty(t, 'requiredVerificationLevels');
+      return Reflect.getOwnPropertyDescriptor(t, prop);
+    },
+  });
+  const r = evaluateClaim(proxied);
+  // This is NOT asserted as denied -- it is recorded as a known, disclosed
+  // residual (see this module's own header comment on
+  // snapshotSecurityRelevantParams). The primary, originally-reproduced
+  // incident (Development certifying an EXPLICIT Production requirement)
+  // remains fully closed regardless -- this test exercises a structurally
+  // different, deeper, and far less practically reachable variant.
+  assert.equal(typeof r.decision, 'string');
+});
+
+test('IMP3-INPUT-SNAPSHOT-001: positive control — an ordinary Production claim, with real trusted Production evidence and no attack, still confirms after this remediation', async () => {
+  const prodEvidence = (await attestRemoteRuntimeEvidence({ targetKey: 'reference-public-endpoint-production', evidenceId: 'snap001-positive', supportsClaim: true })).evidence;
+  const r = evaluateClaim({ claimId: 'c', title: 't', severity: 'P1', evidence: [prodEvidence], requiredEnvironment: 'Production', requiredVerificationLevels: ['REMOTE_RUNTIME'], singleSourceExceptionRequested: true, singleSourceExceptionReason: VALID_REASON });
+  assert.equal(r.decision, 'CONFIRMED_P1');
+});
+
+test('IMP3-INPUT-SNAPSHOT-001: ordinary (non-crossfield) Development-to-Production is still denied, unchanged', async () => {
+  const devEvidence = await makeDevelopmentRemoteRuntimeEvidence('snap001-ordinary');
+  const r = evaluateClaim({ claimId: 'c', title: 't', severity: 'P1', evidence: [devEvidence], requiredEnvironment: 'Production', singleSourceExceptionRequested: true, singleSourceExceptionReason: VALID_REASON });
+  assert.equal(r.decision, 'HOLD_INSUFFICIENT_VERIFICATION_LEVEL');
 });
 
 // =============================================================================

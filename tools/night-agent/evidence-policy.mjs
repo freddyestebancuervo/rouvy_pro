@@ -1517,30 +1517,170 @@ function isEvidenceFreshEnough(e, stalenessCheck) {
   return ageMs >= 0 && ageMs <= stalenessCheck.maxAgeMs;
 }
 
-// The pure decision core (Improvement 3/5 extended). Never exported, never
-// reads the clock/filesystem/network/`process` itself — `trustedNowMs` and
-// `rawRequiredMaxAgeMs` are always explicit arguments supplied by the
-// public `evaluateClaim` boundary below, never (re-)derived from `params`.
-// This is what INTERNAL_POLICY_CORE_PURE means in this revision's own task
-// framing: the actual evidence-evaluation logic is exactly as deterministic
-// and side-effect-free as `evaluateClaim` was before IMPROVEMENT_3_
-// STALENESS_002_REMEDIATION; only the ONE real wall-clock read has moved to
-// the boundary that owns it.
+// ---------------------------------------------------------------------------
+// IMPROVEMENT_3_INPUT_SNAPSHOT_001_REMEDIATION closes IMP3-INPUT-SNAPSHOT-001
+// (HIGH), independently discovered during IMPROVEMENT_3_STALENESS_003_
+// REMEDIATION's own closure audit: that revision made `requiredMaxAgeMs`
+// read-once, but `evaluateClaimCore` still destructured
+// `requiredVerificationLevels`/`requiredEnvironment` (and every other
+// field) directly from the live, caller-controlled `params` object, in a
+// FIXED order (`claimId, title, severity, evidence,
+// singleSourceExceptionRequested, singleSourceExceptionReason,
+// requiredVerificationLevels, requiredEnvironment`). Because
+// `requiredEnvironment` was read LAST, a getter (or `Proxy`) on ANY
+// earlier field could delete/mutate `params.requiredEnvironment` as a side
+// effect before its own read occurred — reproduced live: a real, trusted
+// `REMOTE_RUNTIME`/`Development` observation certified a claim explicitly
+// requiring `Production`, via a `requiredVerificationLevels` getter, a
+// `claimId` getter, an `evidence` getter, or a single `Proxy` `get` trap
+// on the whole object — each with the sole side effect
+// `delete params.requiredEnvironment`. Reordering the destructuring would
+// only have moved the exposure to whichever field ended up last; the
+// actual defect was reading ANY security-relevant field from a live,
+// re-inspectable object more than once total across the whole call.
 //
-// IMPROVEMENT_3_STALENESS_003_REMEDIATION (this revision): `requiredMaxAgeMs`
-// is deliberately NOT destructured from `params`/`safeParams` here anymore
-// — see the header comment on `evaluateClaim` below for why. This function
-// must never read that field from the live, caller-controlled `params`
-// object a second time; it only ever sees the ALREADY-SNAPSHOTTED value the
-// boundary read exactly once and hands in as `rawRequiredMaxAgeMs`.
-function evaluateClaimCore(params, trustedNowMs, rawRequiredMaxAgeMs) {
-  const safeParams = isPlainParamsObject(params) ? params : {};
-  const {
-    claimId, title, severity, evidence, singleSourceExceptionRequested = false, singleSourceExceptionReason = null,
-    requiredVerificationLevels: rawRequiredVerificationLevels, requiredEnvironment: rawRequiredEnvironment,
-  } = safeParams;
-  const requiredVerificationLevels = normalizeRequiredVerificationLevels(rawRequiredVerificationLevels);
-  const requiredEnvironment = normalizeRequiredEnvironment(rawRequiredEnvironment);
+// Fixed with `snapshotSecurityRelevantParams` below:
+// `ACCESSOR_SECURITY_FIELD = FAIL_CLOSED` — every security-relevant field
+// is captured via `Object.getOwnPropertyDescriptors(params)`, a single
+// engine-level batch operation, BEFORE this module extracts a single
+// value; any field whose OWN descriptor is an accessor (has `get`/`set`,
+// not `value`) is treated as if it had never been supplied — never
+// invoked. This closes every attack this finding's reproduction
+// demonstrated, for two independent reasons: (1) a `defineProperty`-based
+// getter is detected and rejected without ever being called, and (2)
+// `getOwnPropertyDescriptors` on a `Proxy` invokes that Proxy's
+// `getOwnPropertyDescriptor` trap, NOT its `get` trap — a `Proxy`
+// implementing only a `get` trap (the pattern this project's own tests,
+// and the reproduced attack, use throughout) is transparently bypassed,
+// reading the real, static, underlying target values instead of whatever
+// the `get` trap would have dynamically computed. Only an OWN property of
+// the immediate `params` object is ever consulted for a security-relevant
+// field — an inherited (prototype-chain) value is treated as absent, never
+// walked, never invoked; a deliberate, conservative choice, since no
+// legitimate caller in this codebase constructs `params` via
+// `Object.create` with inherited filter fields. `evaluateClaimCore`
+// receives ONLY this already-resolved, plain snapshot object — never the
+// live `params` reference — and reads every field from it exactly once.
+// The `evidence` array is spread-copied into a new array the instant its
+// value is resolved from the snapshot, before any other field is
+// processed further, so no later field's (already-neutralized)
+// getter/trap logic can mutate the container this module actually
+// iterates.
+//
+// DISCLOSED RESIDUAL RISK, narrowed but not eliminated: a `Proxy`
+// implementing a CUSTOM `getOwnPropertyDescriptor` trap (not merely `get`)
+// still runs arbitrary code as a side effect of THAT trap being invoked at
+// all — regardless of what descriptor shape it eventually returns (even a
+// "this is an accessor, reject me" answer). No mechanism in JavaScript
+// reads N properties from a fully adversarial object as one truly atomic
+// operation; whichever field is read LAST is always, structurally,
+// reachable by every field read before it. This module cannot make every
+// field simultaneously "first" — it can only choose, deliberately, WHICH
+// ONE field is fully immune (nothing runs before it) rather than leaving
+// that choice to whatever key order the caller's object happens to use.
+// `requiredEnvironment` — the exact field this finding's live reproduction
+// exploited, and the field `DEVELOPMENT_CANNOT_CERTIFY_PRODUCTION` depends
+// on — is read FIRST, before any other key, for this reason: it is
+// therefore fully closed even against a custom-`getOwnPropertyDescriptor`-
+// trap Proxy. `requiredVerificationLevels` and `requiredMaxAgeMs` are read
+// second and third, immediately after — closed against every attack this
+// project has demonstrated (`get`-trap Proxies, `defineProperty`/prototype
+// getters), but a maximally sophisticated `getOwnPropertyDescriptor`-trap
+// Proxy could, in principle, still target ONE of those two specifically,
+// via a trap on `requiredEnvironment`. Closing that would require refusing
+// to accept ANY non-plain-prototype `params` object at all (or an
+// equivalent Proxy-detection mechanism, which JavaScript does not provide
+// reliably) — a materially larger, more invasive change than this specific
+// finding's remediation, and not undertaken here. This residual was
+// specifically tested (see the test suite); it requires a `params` object
+// deliberately constructed with a custom meta-object-protocol trap, not an
+// incidental one, and remains disclosed rather than silently claimed
+// closed.
+// ---------------------------------------------------------------------------
+
+// Order is deliberate and security-relevant (see the residual-risk note
+// above): `requiredEnvironment` — the field whose disappearance this
+// finding's live reproduction exploited — is read FIRST, before any other
+// key, so nothing processed by this loop can ever have a side effect on it
+// before it is captured. `requiredVerificationLevels`/`requiredMaxAgeMs`
+// (the other two real policy gates) follow immediately. Everything else
+// (`evidence`, then the remaining non-gate fields) comes last.
+const SECURITY_RELEVANT_PARAM_KEYS = Object.freeze([
+  'requiredEnvironment', 'requiredVerificationLevels', 'requiredMaxAgeMs',
+  'evidence', 'severity', 'claimId', 'title',
+  'singleSourceExceptionRequested', 'singleSourceExceptionReason',
+]);
+
+// A unique sentinel that can never equal any real caller value. Marks a
+// security-relevant field whose own-property descriptor was an ACCESSOR
+// (getter/setter) rather than a plain data value — never invoked, never
+// used as a real policy input. Every downstream `normalize*` function in
+// this module already fails closed on a value of the "wrong shape" (not an
+// array, not a real ENVIRONMENTS/VERIFICATION_LEVELS member, not a finite
+// number) — substituting this sentinel wherever an accessor was detected
+// reuses those SAME existing fail-closed paths rather than inventing new
+// ones.
+const ACCESSOR_REJECTED = Symbol('evidence-policy:accessor-rejected');
+
+function snapshotSecurityRelevantParams(params) {
+  if (!isPlainParamsObject(params)) return {};
+  // Each key's OWN-property descriptor is read individually, in THIS
+  // module's own fixed order (see `SECURITY_RELEVANT_PARAM_KEYS` above) —
+  // deliberately NOT via a single `Object.getOwnPropertyDescriptors(params)`
+  // batch call, whose internal iteration order is driven by the caller
+  // object's OWN key insertion order (via its `ownKeys`/ownKeys-trap
+  // behavior), which a caller fully controls. Reading key-by-key in a
+  // order THIS module chooses removes the caller's ability to pick which
+  // field is processed first.
+  const resolved = {};
+  for (const key of SECURITY_RELEVANT_PARAM_KEYS) {
+    const descriptor = Object.getOwnPropertyDescriptor(params, key);
+    if (descriptor === undefined) {
+      resolved[key] = undefined;
+    } else if ('value' in descriptor) {
+      resolved[key] = descriptor.value;
+    } else {
+      // an accessor property (get/set) — fail closed, the getter/setter is
+      // never invoked.
+      resolved[key] = ACCESSOR_REJECTED;
+    }
+    // The evidence CONTAINER is snapshotted the INSTANT its value is
+    // resolved — a new array, independent of whatever object
+    // `params.evidence` referenced — so no key processed after this point
+    // in the loop can mutate the list this module iterates.
+    if (key === 'evidence' && Array.isArray(resolved.evidence)) {
+      resolved.evidence = [...resolved.evidence];
+    }
+  }
+  return resolved;
+}
+
+// The pure decision core (Improvement 3/5 extended). Never exported, never
+// reads the clock/filesystem/network/`process` itself, and — since
+// IMPROVEMENT_3_INPUT_SNAPSHOT_001_REMEDIATION — never touches the live,
+// caller-controlled `params` object at all. `snapshot` is the
+// already-resolved, plain, inert record `snapshotSecurityRelevantParams`
+// produced; `trustedNowMs` and `rawRequiredMaxAgeMs` remain explicit
+// arguments supplied by the public `evaluateClaim` boundary below. This is
+// what INTERNAL_POLICY_CORE_PURE means in this revision's own task
+// framing: the actual evidence-evaluation logic is exactly as
+// deterministic and side-effect-free as `evaluateClaim` was before
+// IMPROVEMENT_3_STALENESS_002_REMEDIATION; only the ONE real wall-clock
+// read has moved to the boundary that owns it, and the ONE live-object
+// read phase has moved there too.
+function evaluateClaimCore(snapshot, trustedNowMs, rawRequiredMaxAgeMs) {
+  const claimId = snapshot.claimId;
+  const title = snapshot.title;
+  const severity = snapshot.severity;
+  const evidence = snapshot.evidence;
+  // Strict boolean, matching this module's established IMP2-BOOL-002
+  // pattern: only a literal `true` ever enables the single-source
+  // exception path — `undefined` (omitted), `ACCESSOR_REJECTED`, or any
+  // other non-boolean value all resolve to `false`, never truthy-coerced.
+  const singleSourceExceptionRequested = snapshot.singleSourceExceptionRequested === true;
+  const singleSourceExceptionReason = snapshot.singleSourceExceptionReason === ACCESSOR_REJECTED ? null : (snapshot.singleSourceExceptionReason ?? null);
+  const requiredVerificationLevels = normalizeRequiredVerificationLevels(snapshot.requiredVerificationLevels);
+  const requiredEnvironment = normalizeRequiredEnvironment(snapshot.requiredEnvironment);
   const stalenessCheck = normalizeStalenessCheck(rawRequiredMaxAgeMs, trustedNowMs);
 
   const baseResult = {
@@ -1706,29 +1846,31 @@ function evaluateClaimCore(params, trustedNowMs, rawRequiredMaxAgeMs) {
 // REMOTE_RUNTIME observation, 755ms genuinely old, evaluated against a
 // 50ms window, reached CONFIRMED_P1.
 //
-// Fixed with SECURITY_RELEVANT_INPUTS_MUST_BE_SNAPSHOTTED_ONCE: this
-// function reads `params.requiredMaxAgeMs` into a local binding EXACTLY
-// ONCE, then passes that already-resolved value into `evaluateClaimCore`
-// as an explicit argument — `evaluateClaimCore` no longer destructures
-// `requiredMaxAgeMs` from `params`/`safeParams` at all (see that function's
-// own updated header comment), so there is no second read for a getter/
-// `Proxy` to answer differently. `LIVE_CALLER_OBJECT_NOT_REUSED_BY_CORE`
-// applies narrowly here, to exactly the one field that was ever read twice
-// — `requiredVerificationLevels`/`requiredEnvironment`/`evidence`/
-// `severity`/etc. were each already read only ONCE (inside
-// `evaluateClaimCore`'s own single destructuring), so they carry no
-// equivalent TOCTOU surface and are deliberately left as-is rather than
-// rebuilding this boundary into a general-purpose snapshot mechanism that
-// nothing here actually needs.
+// Fixed (at the time) with SECURITY_RELEVANT_INPUTS_MUST_BE_SNAPSHOTTED_ONCE:
+// this function read `params.requiredMaxAgeMs` into a local binding
+// EXACTLY ONCE. IMPROVEMENT_3_INPUT_SNAPSHOT_001_REMEDIATION (see that
+// header comment, directly above `evaluateClaimCore`) generalizes this:
+// the claim that `requiredVerificationLevels`/`requiredEnvironment`/
+// `evidence`/`severity`/etc. carried "no equivalent TOCTOU surface" because
+// each was read only once turned out to be insufficient on its own — a
+// getter/`Proxy` on an EARLIER-read field could still mutate a
+// LATER-read field's value on the SAME live `params` object before that
+// later field was ever reached, even though each individual field was
+// still technically read only once. `LIVE_CALLER_PARAMS_REACH_CORE = NO`
+// now applies to the WHOLE call, not just to `requiredMaxAgeMs`:
+// `snapshotSecurityRelevantParams(params)` resolves every security-relevant
+// field, once, from `params`, before `evaluateClaimCore` is ever invoked —
+// `evaluateClaimCore` receives that resolved snapshot object and NEVER
+// touches `params` itself.
 export function evaluateClaim(params) {
-  const safeParams = isPlainParamsObject(params) ? params : {};
-  // Read exactly once. This binding, not `params`, is the only thing that
-  // ever determines both whether a clock reading is taken AND what
-  // staleness limit is applied — a getter/Proxy has exactly one
-  // opportunity to answer, and whatever it answers here is what governs,
-  // for the rest of this call, with no possibility of re-invocation.
-  const rawRequiredMaxAgeMs = safeParams.requiredMaxAgeMs;
+  const snapshot = snapshotSecurityRelevantParams(params);
+  // requiredMaxAgeMs is already resolved (and, if it was an accessor,
+  // already rejected to ACCESSOR_REJECTED) inside `snapshot` — this
+  // boundary reads it from the SNAPSHOT, never from `params` again. This
+  // binding is the only thing that ever determines both whether a clock
+  // reading is taken AND what staleness limit is applied.
+  const rawRequiredMaxAgeMs = snapshot.requiredMaxAgeMs;
   const usesStalenessCheck = rawRequiredMaxAgeMs !== undefined && rawRequiredMaxAgeMs !== null;
   const trustedNowMs = usesStalenessCheck ? Date.now() : null;
-  return evaluateClaimCore(params, trustedNowMs, rawRequiredMaxAgeMs);
+  return evaluateClaimCore(snapshot, trustedNowMs, rawRequiredMaxAgeMs);
 }
