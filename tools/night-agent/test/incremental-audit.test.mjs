@@ -774,3 +774,262 @@ test('POSITIVE (no-change reuse still functional after remediation): trusted bas
   const reuse = resolveManifestReuse({ filePath: manifestPath, repoRoot: fx.rootDir, baseline, currentSha: decision.currentSha });
   assert.equal(reuse.reusable, true);
 });
+
+// =============================================================================
+// IMP5-MANIFEST-TOCTOU-001 remediation — resolveManifestReuse previously
+// trusted a persisted manifest as long as baseline_sha/current_sha (both
+// derived from COMMITTED git state) matched. It never re-observed the
+// ACTUAL, CURRENT working-tree state, so a security-critical file mutated
+// UNCOMMITTED after the manifest was written, with HEAD unchanged, was
+// invisible to reuse. resolveManifestReuse now always re-runs a fresh
+// decideIncrementalAudit (the same, single, authoritative decision) before
+// permitting reuse — live repository state always wins over a cached
+// manifest.
+// =============================================================================
+
+function writeManifestForFixture(fx, baseline, decision) {
+  const manifestPath = resolveManifestPath({ repoRoot: fx.rootDir, tmpDirFn: () => fx.rootDir });
+  writeManifestAtomic(manifestPath, buildManifest({ repoRoot: fx.rootDir, decision }));
+  return manifestPath;
+}
+
+test('IMP5_MANIFEST_TOCTOU_001: exact original reproduction is now denied -- night-guard.mjs weakened UNCOMMITTED after the manifest was persisted, HEAD unchanged throughout', () => {
+  const fx = buildFixture();
+  const baseline = trustedBaseline(fx);
+  const decision = decideIncrementalAudit({ baseline, repoRoot: fx.rootDir });
+  assert.equal(decision.decision, 'INCREMENTAL');
+  assert.equal(decision.reuseAllowed, true);
+  const manifestPath = writeManifestForFixture(fx, baseline, decision);
+
+  // Mutate night-guard.mjs UNCOMMITTED. HEAD does not move.
+  const headBefore = git(fx.rootDir, ['rev-parse', 'HEAD']);
+  writeFileSync(path.join(fx.hooksDir, 'night-guard.mjs'), "export function checkWrite() { return 'ALLOW'; } // weakened, uncommitted\n");
+  const headAfter = git(fx.rootDir, ['rev-parse', 'HEAD']);
+  assert.equal(headBefore, headAfter, 'HEAD must be unchanged -- this is the whole point of the TOCTOU window');
+
+  const reuse = resolveManifestReuse({ filePath: manifestPath, repoRoot: fx.rootDir, baseline, currentSha: decision.currentSha });
+  assert.equal(reuse.reusable, false, 'IMP5-MANIFEST-TOCTOU-001 regression: a manifest must never survive a post-write, same-HEAD security mutation');
+  assert.ok(reuse.reason.startsWith('LIVE_STATE_REQUIRES_FULL'), `expected LIVE_STATE_REQUIRES_FULL:*, got ${reuse.reason}`);
+
+  // Control: a fresh decision at this exact instant independently agrees.
+  const fresh = decideIncrementalAudit({ baseline, repoRoot: fx.rootDir });
+  assert.equal(fresh.decision, 'FULL_REQUIRED');
+});
+
+test('ATTACK_POST_MANIFEST_SETTINGS_EDIT: .claude/settings.json edited UNCOMMITTED after manifest persisted -> reuse denied', () => {
+  const fx = buildFixture();
+  const baseline = trustedBaseline(fx);
+  const decision = decideIncrementalAudit({ baseline, repoRoot: fx.rootDir });
+  const manifestPath = writeManifestForFixture(fx, baseline, decision);
+  writeFileSync(fx.settingsPath, JSON.stringify({ hooks: {} }, null, 2));
+  const reuse = resolveManifestReuse({ filePath: manifestPath, repoRoot: fx.rootDir, baseline, currentSha: decision.currentSha });
+  assert.equal(reuse.reusable, false);
+  assert.ok(reuse.reason.startsWith('LIVE_STATE_REQUIRES_FULL'));
+});
+
+test('ATTACK_POST_MANIFEST_CORE_SECURITY_EDIT: a tools/night-agent production module edited UNCOMMITTED after manifest persisted -> reuse denied', () => {
+  const fx = buildFixture();
+  const baseline = trustedBaseline(fx);
+  const decision = decideIncrementalAudit({ baseline, repoRoot: fx.rootDir });
+  const manifestPath = writeManifestForFixture(fx, baseline, decision);
+  writeFileSync(path.join(fx.naDir, 'checkpoint.mjs'), 'export const CHECKPOINT = 999; // weakened, uncommitted\n');
+  const reuse = resolveManifestReuse({ filePath: manifestPath, repoRoot: fx.rootDir, baseline, currentSha: decision.currentSha });
+  assert.equal(reuse.reusable, false);
+  assert.ok(reuse.reason.startsWith('LIVE_STATE_REQUIRES_FULL'));
+});
+
+test('ATTACK_POST_MANIFEST_STAGED_SECURITY_CHANGE: night-guard.mjs edited and STAGED (git add, no commit) after manifest persisted -> reuse still denied', () => {
+  const fx = buildFixture();
+  const baseline = trustedBaseline(fx);
+  const decision = decideIncrementalAudit({ baseline, repoRoot: fx.rootDir });
+  const manifestPath = writeManifestForFixture(fx, baseline, decision);
+  writeFileSync(path.join(fx.hooksDir, 'night-guard.mjs'), "export function checkWrite() { return 'ALLOW'; } // staged\n");
+  git(fx.rootDir, ['add', path.join(fx.hooksDir, 'night-guard.mjs')]);
+  const headBefore = git(fx.rootDir, ['rev-parse', 'HEAD']);
+  const reuse = resolveManifestReuse({ filePath: manifestPath, repoRoot: fx.rootDir, baseline, currentSha: decision.currentSha });
+  assert.equal(git(fx.rootDir, ['rev-parse', 'HEAD']), headBefore, 'staging must not itself move HEAD');
+  assert.equal(reuse.reusable, false);
+});
+
+test('ATTACK_POST_MANIFEST_UNTRACKED_SECURITY_CHANGE: settings.json replaced with an untracked file after manifest persisted -> reuse denied', () => {
+  const fx = buildFixture();
+  const baseline = trustedBaseline(fx);
+  const decision = decideIncrementalAudit({ baseline, repoRoot: fx.rootDir });
+  const manifestPath = writeManifestForFixture(fx, baseline, decision);
+  writeFileSync(fx.settingsPath, '{"hooks": {"PreToolUse": []}}');
+  const reuse = resolveManifestReuse({ filePath: manifestPath, repoRoot: fx.rootDir, baseline, currentSha: decision.currentSha });
+  assert.equal(reuse.reusable, false);
+});
+
+test('ATTACK_POST_MANIFEST_SECURITY_DELETE: night-guard.mjs deleted UNCOMMITTED after manifest persisted -> reuse denied', () => {
+  const fx = buildFixture();
+  const baseline = trustedBaseline(fx);
+  const decision = decideIncrementalAudit({ baseline, repoRoot: fx.rootDir });
+  const manifestPath = writeManifestForFixture(fx, baseline, decision);
+  rmSync(path.join(fx.hooksDir, 'night-guard.mjs'));
+  const reuse = resolveManifestReuse({ filePath: manifestPath, repoRoot: fx.rootDir, baseline, currentSha: decision.currentSha });
+  assert.equal(reuse.reusable, false);
+});
+
+test('ATTACK_POST_MANIFEST_SECURITY_RENAME: night-guard.mjs renamed to a harmless-looking name UNCOMMITTED after manifest persisted -> reuse denied', () => {
+  const fx = buildFixture();
+  const baseline = trustedBaseline(fx);
+  const decision = decideIncrementalAudit({ baseline, repoRoot: fx.rootDir });
+  const manifestPath = writeManifestForFixture(fx, baseline, decision);
+  renameSync(path.join(fx.hooksDir, 'night-guard.mjs'), path.join(fx.hooksDir, 'totally-harmless-utility.mjs'));
+  const reuse = resolveManifestReuse({ filePath: manifestPath, repoRoot: fx.rootDir, baseline, currentSha: decision.currentSha });
+  assert.equal(reuse.reusable, false);
+});
+
+test('SAME_STATUS_DIFFERENT_CONTENT_CANNOT_HIDE_SECURITY_DRIFT: two successive resolveManifestReuse calls against two DIFFERENT actual contents of the same "M"-status file both correctly deny -- no stale caching of git-status text', () => {
+  const fx = buildFixture();
+  const baseline = trustedBaseline(fx);
+  const decision = decideIncrementalAudit({ baseline, repoRoot: fx.rootDir });
+  const manifestPath = writeManifestForFixture(fx, baseline, decision);
+
+  writeFileSync(path.join(fx.hooksDir, 'night-guard.mjs'), "export function checkWrite() { return 'ALLOW'; } // content A\n");
+  const reuseA = resolveManifestReuse({ filePath: manifestPath, repoRoot: fx.rootDir, baseline, currentSha: decision.currentSha });
+  assert.equal(reuseA.reusable, false, 'first mutated content must be denied');
+
+  // Overwrite AGAIN with different content -- git status code for this file
+  // remains "M" throughout; only the on-disk bytes changed a second time.
+  writeFileSync(path.join(fx.hooksDir, 'night-guard.mjs'), "export function checkWrite() { return 'ALLOW_EVERYTHING_NOW'; } // content B\n");
+  const reuseB = resolveManifestReuse({ filePath: manifestPath, repoRoot: fx.rootDir, baseline, currentSha: decision.currentSha });
+  assert.equal(reuseB.reusable, false, 'second, different mutated content must independently and freshly be denied too -- never a cached true from the first check');
+});
+
+test('ATTACK_FORGED_MATCHING_MANIFEST_WITH_DIRTY_SECURITY_STATE: a legitimately-built, perfectly-matching INCREMENTAL manifest cannot override a live dirty security state', () => {
+  const fx = buildFixture();
+  const baseline = trustedBaseline(fx);
+  const decision = decideIncrementalAudit({ baseline, repoRoot: fx.rootDir });
+  assert.equal(decision.decision, 'INCREMENTAL');
+  const manifest = buildManifest({ repoRoot: fx.rootDir, decision });
+  assert.equal(manifest.reuse_allowed, true);
+  const manifestPath = resolveManifestPath({ repoRoot: fx.rootDir, tmpDirFn: () => fx.rootDir });
+  writeManifestAtomic(manifestPath, manifest);
+
+  writeFileSync(path.join(fx.hooksDir, 'night-guard.mjs'), "export function checkWrite() { return 'ALLOW'; }\n");
+  const reuse = resolveManifestReuse({ filePath: manifestPath, repoRoot: fx.rootDir, baseline, currentSha: decision.currentSha });
+  assert.equal(reuse.reusable, false, 'manifest cannot overrule live repository state, even when every recorded field matches perfectly');
+});
+
+test('MANIFEST_V2_REJECTED: a manifest structurally shaped like the OLD (IMP5-MANIFEST-TOCTOU-001-vulnerable) schema_version=2 policy is rejected outright', () => {
+  const fx = buildFixture();
+  const baseline = trustedBaseline(fx);
+  const decision = decideIncrementalAudit({ baseline, repoRoot: fx.rootDir });
+  const v2Manifest = { ...buildManifest({ repoRoot: fx.rootDir, decision }), schema_version: 2 };
+  assert.equal(validateManifest(v2Manifest), false, 'schema_version 2 (the vulnerable reuse-contract version) must not validate under the current policy');
+  const manifestPath = resolveManifestPath({ repoRoot: fx.rootDir, tmpDirFn: () => fx.rootDir });
+  mkdirSync(path.dirname(manifestPath), { recursive: true });
+  writeFileSync(manifestPath, JSON.stringify(v2Manifest, null, 2));
+  const reuse = resolveManifestReuse({ filePath: manifestPath, repoRoot: fx.rootDir, baseline, currentSha: decision.currentSha });
+  assert.equal(reuse.reusable, false);
+  assert.equal(reuse.reason, 'MANIFEST_INVALID');
+});
+
+test('MANIFEST_V1_REJECTED: a manifest structurally shaped like the original (IMP5-SCOPE-BOUNDARY-001-vulnerable) schema_version=1 policy is rejected outright', () => {
+  const fx = buildFixture();
+  const baseline = trustedBaseline(fx);
+  const decision = decideIncrementalAudit({ baseline, repoRoot: fx.rootDir });
+  const v1Manifest = { ...buildManifest({ repoRoot: fx.rootDir, decision }), schema_version: 1 };
+  assert.equal(validateManifest(v1Manifest), false);
+  const manifestPath = resolveManifestPath({ repoRoot: fx.rootDir, tmpDirFn: () => fx.rootDir });
+  mkdirSync(path.dirname(manifestPath), { recursive: true });
+  writeFileSync(manifestPath, JSON.stringify(v1Manifest, null, 2));
+  const reuse = resolveManifestReuse({ filePath: manifestPath, repoRoot: fx.rootDir, baseline, currentSha: decision.currentSha });
+  assert.equal(reuse.reusable, false);
+  assert.equal(reuse.reason, 'MANIFEST_INVALID');
+});
+
+test('POSITIVE (UNRELATED_CHANGE_AFTER_MANIFEST): an uncommitted, genuinely out-of-scope change after the manifest was written still allows reuse -- incremental value is preserved even through live revalidation', () => {
+  const fx = buildFixture();
+  const baseline = trustedBaseline(fx);
+  const decision = decideIncrementalAudit({ baseline, repoRoot: fx.rootDir });
+  const manifestPath = writeManifestForFixture(fx, baseline, decision);
+  mkdirSync(path.join(fx.rootDir, 'lib', 'some_app'), { recursive: true });
+  writeFileSync(path.join(fx.rootDir, 'lib', 'some_app', 'ui_widget.dart'), '// unrelated, uncommitted, out of scope, added AFTER the manifest\n');
+  const reuse = resolveManifestReuse({ filePath: manifestPath, repoRoot: fx.rootDir, baseline, currentSha: decision.currentSha });
+  assert.equal(reuse.reusable, true, 'live revalidation must reconfirm safety, not reject merely because the tree became dirty with something irrelevant');
+});
+
+test('LIVE_REVALIDATION_ERROR_FAILS_CLOSED: if the live re-check itself cannot run (spawnSyncFn throws), reuse fails closed, never MATCH', () => {
+  const fx = buildFixture();
+  const baseline = trustedBaseline(fx);
+  const decision = decideIncrementalAudit({ baseline, repoRoot: fx.rootDir });
+  const manifestPath = writeManifestForFixture(fx, baseline, decision);
+  const throwingSpawnSyncFn = () => { throw new Error('simulated git executable failure'); };
+  const reuse = resolveManifestReuse({
+    filePath: manifestPath, repoRoot: fx.rootDir, baseline, currentSha: decision.currentSha, spawnSyncFn: throwingSpawnSyncFn,
+  });
+  assert.equal(reuse.reusable, false);
+  assert.equal(reuse.reason, 'LIVE_REVALIDATION_FAILED');
+});
+
+test('LIVE_STATE_STALE_CURRENT_SHA: caller supplies a stale currentSha matching an old manifest, but real HEAD has genuinely moved since -- reuse denied', () => {
+  const fx = buildFixture();
+  const baseline = trustedBaseline(fx);
+  const decision = decideIncrementalAudit({ baseline, repoRoot: fx.rootDir });
+  const manifestPath = writeManifestForFixture(fx, baseline, decision);
+  const staleSha = decision.currentSha;
+
+  writeFileSync(path.join(fx.rootDir, 'README.md'), '# advanced for real, new commit\n');
+  const realNewSha = commitAll(fx.rootDir, 'advance HEAD for real');
+  assert.notEqual(realNewSha, staleSha);
+
+  // Caller passes the STALE sha (matches the manifest's recorded current_sha,
+  // so the early string-comparison gate would let it through) -- but the
+  // live re-check independently observes the REAL, current HEAD.
+  const reuse = resolveManifestReuse({ filePath: manifestPath, repoRoot: fx.rootDir, baseline, currentSha: staleSha });
+  assert.equal(reuse.reusable, false);
+  assert.equal(reuse.reason, 'LIVE_STATE_STALE_CURRENT_SHA');
+});
+
+test('REPO_IDENTITY_MISMATCH regression (post-fix): a manifest written for repo A is never reusable against repo B, even with matching baseline/current SHAs by coincidence', () => {
+  const fxA = buildFixture();
+  const fxB = buildFixture();
+  const baselineA = trustedBaseline(fxA);
+  const decisionA = decideIncrementalAudit({ baseline: baselineA, repoRoot: fxA.rootDir });
+  const manifestPathA = writeManifestForFixture(fxA, baselineA, decisionA);
+  const reuseCrossRepo = resolveManifestReuse({
+    filePath: manifestPathA, repoRoot: fxB.rootDir, baseline: baselineA, currentSha: decisionA.currentSha,
+  });
+  assert.equal(reuseCrossRepo.reusable, false);
+  assert.equal(reuseCrossRepo.reason, 'MANIFEST_WRONG_REPO');
+});
+
+test('CALLER_CANNOT_SELF_ASSERT_CURRENT_WORKTREE_STATE: forged extra fields (worktreeClean, fingerprint, reuseSafe, dirty) on the call have zero effect -- a genuinely dirty security file is still denied', () => {
+  const fx = buildFixture();
+  const baseline = trustedBaseline(fx);
+  const decision = decideIncrementalAudit({ baseline, repoRoot: fx.rootDir });
+  const manifestPath = writeManifestForFixture(fx, baseline, decision);
+  writeFileSync(path.join(fx.hooksDir, 'night-guard.mjs'), "export function checkWrite() { return 'ALLOW'; }\n");
+  const reuse = resolveManifestReuse({
+    filePath: manifestPath,
+    repoRoot: fx.rootDir,
+    baseline,
+    currentSha: decision.currentSha,
+    // None of the following are real parameters of resolveManifestReuse --
+    // they must be silently ignored, exactly like scopePathspec/nightAgentSubdir
+    // were for decideIncrementalAudit (IMP5-SCOPE-BOUNDARY-001).
+    worktreeClean: true,
+    dirty: false,
+    currentStatus: [],
+    fingerprint: 'trusted',
+    reuseSafe: true,
+    freshDecision: 'INCREMENTAL',
+  });
+  assert.equal(reuse.reusable, false, 'a forged/self-asserted "clean" claim must never override the module\'s own real observation');
+});
+
+test('MANIFEST_REUSE_CANNOT_BE_MORE_PERMISSIVE_THAN_FRESH_DECISION: for every scenario above, resolveManifestReuse.reusable is never true when a fresh decideIncrementalAudit at the same instant would be FULL_REQUIRED', () => {
+  const fx = buildFixture();
+  const baseline = trustedBaseline(fx);
+  const decision = decideIncrementalAudit({ baseline, repoRoot: fx.rootDir });
+  const manifestPath = writeManifestForFixture(fx, baseline, decision);
+  writeFileSync(path.join(fx.hooksDir, 'night-guard.mjs'), "export function checkWrite() { return 'ALLOW'; }\n");
+  const fresh = decideIncrementalAudit({ baseline, repoRoot: fx.rootDir });
+  const reuse = resolveManifestReuse({ filePath: manifestPath, repoRoot: fx.rootDir, baseline, currentSha: decision.currentSha });
+  assert.equal(fresh.decision, 'FULL_REQUIRED');
+  assert.equal(reuse.reusable, false);
+  assert.equal(fresh.reuseAllowed, reuse.reusable);
+});

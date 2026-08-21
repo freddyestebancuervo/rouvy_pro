@@ -55,7 +55,23 @@ export { checkAuditMainDrift };
 // such a manifest must never be treated as current just because its
 // baseline/current SHA still happen to match; the policy that PRODUCED it
 // is no longer trusted, independent of SHA matching.
-export const AUDIT_POLICY_VERSION = 2;
+//
+// Bumped 2 -> 3 by IMP5-MANIFEST-TOCTOU-001's remediation:
+// `resolveManifestReuse` previously trusted a persisted manifest's
+// `reuse_allowed`/`decision` fields as long as `baseline_sha`/`current_sha`
+// (both derived from COMMITTED git state) matched — it never re-observed
+// the actual, current working-tree state, so a security-critical file
+// (`.claude/hooks/night-guard.mjs`, `.claude/settings.json`, or anything
+// under `tools/night-agent/`) mutated UNCOMMITTED after the manifest was
+// written, with HEAD unchanged, was silently invisible to reuse and
+// `resolveManifestReuse` returned `reusable: true`. `resolveManifestReuse`
+// now always re-runs a fresh `decideIncrementalAudit` (the same, single,
+// authoritative decision function — no second policy is invented) before
+// permitting reuse, so live repository state always wins over a cached
+// manifest. A manifest computed under version 2's vulnerable reuse
+// contract must never be treated as current merely because SHAs match —
+// the policy that PRODUCED and CONSUMED it is no longer trusted.
+export const AUDIT_POLICY_VERSION = 3;
 
 const FROZEN_SHA_PATTERN = /^[0-9a-f]{40}$/;
 
@@ -770,22 +786,41 @@ export function readManifestForReuse(filePath, { existsSyncFn = existsSync, read
  * AUDIT_CACHE_CAN_CREATE_AUTHORITY = NO: this function never answers "is
  * the code safe" — it answers "can THIS ALREADY-VALID manifest still
  * stand in for a fresh `decideIncrementalAudit` call, right now, for this
- * exact repo/baseline/HEAD/policy version." Any mismatch — wrong repo,
- * wrong baseline SHA, wrong current SHA (HEAD has moved — section 15/16),
- * wrong policy version (section 13/14 — the audit engine's own logic
- * changed since this manifest was written), a manifest that was itself
- * `FULL_REQUIRED` (nothing to reuse), or a corrupt/forged/missing file —
- * fails closed to "not reusable," never silently treated as a PASS.
+ * exact repo/baseline/HEAD/policy version, AND does the repository's
+ * ACTUAL CURRENT state (not just its last-known committed SHA) still
+ * agree with that." Any mismatch — wrong repo, wrong baseline SHA, wrong
+ * current SHA (HEAD has moved — section 15/16), wrong policy version
+ * (section 13/14 — the audit engine's own logic changed since this
+ * manifest was written), a manifest that was itself `FULL_REQUIRED`
+ * (nothing to reuse), a corrupt/forged/missing file, OR a live repository
+ * state that a FRESH decision would no longer consider safe (IMP5-
+ * MANIFEST-TOCTOU-001 — section below) — fails closed to "not reusable,"
+ * never silently treated as a PASS.
+ *
+ * IMP5-MANIFEST-TOCTOU-001 REMEDIATION: matching `baseline_sha`/
+ * `current_sha` (both derived from COMMITTED git state) is necessary but
+ * NOT sufficient — a security-critical file can be mutated UNCOMMITTED
+ * after the manifest was written without moving HEAD at all. This
+ * function therefore always re-runs a genuinely fresh `decideIncrementalAudit`
+ * (the SAME, single, authoritative decision — no second, cache-specific
+ * policy is invented here) over the repository's live state immediately
+ * before permitting reuse. LIVE REPOSITORY STATE always wins: if that
+ * fresh decision would itself require `FULL_REQUIRED`, the manifest is
+ * refused regardless of how perfectly its recorded SHAs match. The caller
+ * cannot short-circuit this by asserting its own worktree/dirty/fingerprint
+ * state — no such parameter exists; the module always observes Git and the
+ * filesystem itself.
  * @param {object} params
  * @param {string} params.filePath
  * @param {string} params.repoRoot
  * @param {object} params.baseline must be `isTrustedBaseline`
  * @param {string} params.currentSha
- * @param {{existsSyncFn?: typeof existsSync, readFileSyncFn?: typeof readFileSync}} [params]
+ * @param {{existsSyncFn?: typeof existsSync, readFileSyncFn?: typeof readFileSync, spawnSyncFn?: typeof spawnSync, readdirSyncFn?: typeof readdirSync}} [params]
  * @returns {{reusable: boolean, manifest?: object, reason: string}}
  */
 export function resolveManifestReuse({
-  filePath, repoRoot, baseline, currentSha, existsSyncFn = existsSync, readFileSyncFn = readFileSync,
+  filePath, repoRoot, baseline, currentSha,
+  existsSyncFn = existsSync, readFileSyncFn = readFileSync, spawnSyncFn = spawnSync, readdirSyncFn = readdirSync,
 }) {
   if (!isTrustedBaseline(baseline)) return { reusable: false, reason: 'UNTRUSTED_BASELINE' };
   const readResult = readManifestForReuse(filePath, { existsSyncFn, readFileSyncFn });
@@ -796,5 +831,35 @@ export function resolveManifestReuse({
   if (m.baseline_sha !== baseline.sha) return { reusable: false, reason: 'MANIFEST_WRONG_BASELINE_SHA' };
   if (m.current_sha !== currentSha) return { reusable: false, reason: 'MANIFEST_STALE_CURRENT_SHA' };
   if (!m.reuse_allowed || m.decision === 'FULL_REQUIRED') return { reusable: false, reason: 'MANIFEST_WAS_FULL_REQUIRED' };
+
+  // Live revalidation (IMP5-MANIFEST-TOCTOU-001): everything above only
+  // proves the manifest is internally consistent with the repo's last
+  // known COMMITTED identity. It proves nothing about what is on disk
+  // right now. Re-derive the decision from scratch, from real, current
+  // Git/filesystem state, exactly as any first-time caller would.
+  let freshDecision;
+  try {
+    freshDecision = decideIncrementalAudit({
+      baseline, repoRoot, spawnSyncFn, readdirSyncFn, readFileSyncFn, existsSyncFn,
+    });
+  } catch {
+    return { reusable: false, reason: 'LIVE_REVALIDATION_FAILED' };
+  }
+  if (!freshDecision || typeof freshDecision !== 'object' || !AUDIT_DECISIONS.includes(freshDecision.decision)) {
+    return { reusable: false, reason: 'LIVE_REVALIDATION_FAILED' };
+  }
+  if (freshDecision.currentSha !== currentSha) {
+    // HEAD itself moved between the caller resolving `currentSha` and this
+    // live check running — the classic staleness case, caught again here
+    // defense-in-depth.
+    return { reusable: false, reason: 'LIVE_STATE_STALE_CURRENT_SHA' };
+  }
+  if (!freshDecision.reuseAllowed || freshDecision.decision === 'FULL_REQUIRED') {
+    return {
+      reusable: false,
+      reason: `LIVE_STATE_REQUIRES_FULL:${freshDecision.escalationReasons.join(',') || 'UNSPECIFIED'}`,
+    };
+  }
+
   return { reusable: true, manifest: m, reason: 'MATCH' };
 }
