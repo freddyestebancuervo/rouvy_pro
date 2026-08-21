@@ -1518,20 +1518,26 @@ function isEvidenceFreshEnough(e, stalenessCheck) {
 }
 
 // The pure decision core (Improvement 3/5 extended). Never exported, never
-// reads the clock/filesystem/network/`process` itself — `trustedNowMs` is
-// always an explicit argument supplied by the public `evaluateClaim`
-// boundary below, never derived from `params`. This is what
-// INTERNAL_POLICY_CORE_PURE means in this revision's own task framing: the
-// actual evidence-evaluation logic is exactly as deterministic and
-// side-effect-free as `evaluateClaim` was before IMPROVEMENT_3_STALENESS_002
-// _REMEDIATION; only the ONE real wall-clock read has moved to the
-// boundary that owns it.
-function evaluateClaimCore(params, trustedNowMs) {
+// reads the clock/filesystem/network/`process` itself — `trustedNowMs` and
+// `rawRequiredMaxAgeMs` are always explicit arguments supplied by the
+// public `evaluateClaim` boundary below, never (re-)derived from `params`.
+// This is what INTERNAL_POLICY_CORE_PURE means in this revision's own task
+// framing: the actual evidence-evaluation logic is exactly as deterministic
+// and side-effect-free as `evaluateClaim` was before IMPROVEMENT_3_
+// STALENESS_002_REMEDIATION; only the ONE real wall-clock read has moved to
+// the boundary that owns it.
+//
+// IMPROVEMENT_3_STALENESS_003_REMEDIATION (this revision): `requiredMaxAgeMs`
+// is deliberately NOT destructured from `params`/`safeParams` here anymore
+// — see the header comment on `evaluateClaim` below for why. This function
+// must never read that field from the live, caller-controlled `params`
+// object a second time; it only ever sees the ALREADY-SNAPSHOTTED value the
+// boundary read exactly once and hands in as `rawRequiredMaxAgeMs`.
+function evaluateClaimCore(params, trustedNowMs, rawRequiredMaxAgeMs) {
   const safeParams = isPlainParamsObject(params) ? params : {};
   const {
     claimId, title, severity, evidence, singleSourceExceptionRequested = false, singleSourceExceptionReason = null,
     requiredVerificationLevels: rawRequiredVerificationLevels, requiredEnvironment: rawRequiredEnvironment,
-    requiredMaxAgeMs: rawRequiredMaxAgeMs,
   } = safeParams;
   const requiredVerificationLevels = normalizeRequiredVerificationLevels(rawRequiredVerificationLevels);
   const requiredEnvironment = normalizeRequiredEnvironment(rawRequiredEnvironment);
@@ -1682,9 +1688,47 @@ function evaluateClaimCore(params, trustedNowMs) {
 // the trusted reading always comes from this function's own direct system
 // clock call below, taken exactly once, only when `requiredMaxAgeMs` is
 // actually present.
+//
+// IMPROVEMENT_3_STALENESS_003_REMEDIATION (this revision) closes
+// IMP3-STALENESS-003 (MEDIUM-HIGH), independently discovered during
+// IMPROVEMENT_3_STALENESS_002_REMEDIATION's own closure audit:
+// `requiredMaxAgeMs` itself — not `now` — was the live, caller-controlled
+// TOCTOU surface. The R002 design read `params.requiredMaxAgeMs` HERE (to
+// decide whether a real clock reading was needed) and then let
+// `evaluateClaimCore` read the SAME field a second time, from the SAME
+// live `params` reference, to get the value actually used for the
+// comparison. A `params` object with a getter (or a `Proxy`) for
+// `requiredMaxAgeMs` could answer the first read with a real, small number
+// (making this boundary spend its one trusted-clock read) and the second
+// read with `undefined` (making `evaluateClaimCore` see NO staleness
+// requirement at all) — silently discarding the entire freshness filter
+// for a genuinely, really stale observation. Live-reproduced: a real
+// REMOTE_RUNTIME observation, 755ms genuinely old, evaluated against a
+// 50ms window, reached CONFIRMED_P1.
+//
+// Fixed with SECURITY_RELEVANT_INPUTS_MUST_BE_SNAPSHOTTED_ONCE: this
+// function reads `params.requiredMaxAgeMs` into a local binding EXACTLY
+// ONCE, then passes that already-resolved value into `evaluateClaimCore`
+// as an explicit argument — `evaluateClaimCore` no longer destructures
+// `requiredMaxAgeMs` from `params`/`safeParams` at all (see that function's
+// own updated header comment), so there is no second read for a getter/
+// `Proxy` to answer differently. `LIVE_CALLER_OBJECT_NOT_REUSED_BY_CORE`
+// applies narrowly here, to exactly the one field that was ever read twice
+// — `requiredVerificationLevels`/`requiredEnvironment`/`evidence`/
+// `severity`/etc. were each already read only ONCE (inside
+// `evaluateClaimCore`'s own single destructuring), so they carry no
+// equivalent TOCTOU surface and are deliberately left as-is rather than
+// rebuilding this boundary into a general-purpose snapshot mechanism that
+// nothing here actually needs.
 export function evaluateClaim(params) {
   const safeParams = isPlainParamsObject(params) ? params : {};
-  const usesStalenessCheck = safeParams.requiredMaxAgeMs !== undefined && safeParams.requiredMaxAgeMs !== null;
+  // Read exactly once. This binding, not `params`, is the only thing that
+  // ever determines both whether a clock reading is taken AND what
+  // staleness limit is applied — a getter/Proxy has exactly one
+  // opportunity to answer, and whatever it answers here is what governs,
+  // for the rest of this call, with no possibility of re-invocation.
+  const rawRequiredMaxAgeMs = safeParams.requiredMaxAgeMs;
+  const usesStalenessCheck = rawRequiredMaxAgeMs !== undefined && rawRequiredMaxAgeMs !== null;
   const trustedNowMs = usesStalenessCheck ? Date.now() : null;
-  return evaluateClaimCore(params, trustedNowMs);
+  return evaluateClaimCore(params, trustedNowMs, rawRequiredMaxAgeMs);
 }

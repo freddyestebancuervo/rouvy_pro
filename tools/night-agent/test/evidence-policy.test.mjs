@@ -1567,7 +1567,7 @@ test('LARGE_EVIDENCE_SET_TEST: 1000 duplicate-heavy synthetic evidences evaluate
 test('INTERNAL_POLICY_CORE_PURE: evaluateClaimCore never touches fs/network-mutation/shell/clock/random/process directly in this file', () => {
   const modulePath = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'evidence-policy.mjs');
   const source = readFileSync(modulePath, 'utf8');
-  const startMarker = 'function evaluateClaimCore(params, trustedNowMs) {';
+  const startMarker = 'function evaluateClaimCore(params, trustedNowMs, rawRequiredMaxAgeMs) {';
   const endMarker = 'export function evaluateClaim(params) {';
   const startIdx = source.indexOf(startMarker);
   const endIdx = source.indexOf(endMarker);
@@ -2148,12 +2148,147 @@ test('IMP3-STALENESS-002: ATTACK_TARGET_PLUS_NOW — combining a fake `now` with
 test('IMP3-STALENESS-002: PUBLIC_POLICY_BOUNDARY_PURE = NO / INTERNAL_POLICY_CORE_PURE = YES is a deliberate, disclosed tradeoff — evaluateClaim itself now legitimately calls Date.now(); evaluateClaimCore (private) still never does', () => {
   const modulePath = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'evidence-policy.mjs');
   const source = readFileSync(modulePath, 'utf8');
-  const coreStart = source.indexOf('function evaluateClaimCore(params, trustedNowMs) {');
+  const coreStart = source.indexOf('function evaluateClaimCore(params, trustedNowMs, rawRequiredMaxAgeMs) {');
   const publicStart = source.indexOf('export function evaluateClaim(params) {');
   assert.notEqual(coreStart, -1);
   assert.notEqual(publicStart, -1);
   assert.equal(source.slice(coreStart, publicStart).includes('Date.now'), false, 'evaluateClaimCore must stay pure');
   assert.equal(source.slice(publicStart).includes('Date.now()'), true, 'evaluateClaim must read the trusted clock itself');
+});
+
+// =============================================================================
+// IMP3-STALENESS-003 (IMPROVEMENT_3_STALENESS_003_REMEDIATION) —
+// SECURITY_RELEVANT_INPUTS_MUST_BE_SNAPSHOTTED_ONCE. IMP3-STALENESS-002
+// closed the caller-controlled `now` vector, but an independent closure
+// audit found a DIFFERENT live bypass of the same `requiredMaxAgeMs`
+// guarantee: the OLD design read `params.requiredMaxAgeMs` once in
+// `evaluateClaim` (to decide whether to spend a real clock read) and again
+// in `evaluateClaimCore` (to get the value actually used) — a getter or
+// `Proxy` could answer those two reads differently, making the entire
+// freshness filter silently vanish for genuinely, really stale evidence.
+// `evaluateClaim` now reads `requiredMaxAgeMs` from `params` EXACTLY ONCE
+// and hands the resolved value into `evaluateClaimCore` as an explicit
+// argument — these tests prove that read count structurally, not just the
+// resulting decision, using real fixtures (no mocked clock/evidence).
+// =============================================================================
+
+async function makeGenuinelyStaleRemoteRuntimeEvidence(evidenceId) {
+  const obs = await attestRemoteRuntimeEvidence({ targetKey: 'reference-public-endpoint-production', evidenceId, supportsClaim: true });
+  await sleep(150);
+  return obs.evidence;
+}
+
+test('IMP3-STALENESS-003: ATTACK_MAXAGE_GETTER_SEQUENCE — requiredMaxAgeMs answering 50, 50, undefined across successive reads cannot make the freshness filter disappear; requiredMaxAgeMs is read exactly once', async () => {
+  const evidence = await makeGenuinelyStaleRemoteRuntimeEvidence('s003-getter-seq');
+  let readCount = 0;
+  const params = { claimId: 'c', title: 't', severity: 'P1', evidence: [evidence], requiredVerificationLevels: ['REMOTE_RUNTIME'], singleSourceExceptionRequested: true, singleSourceExceptionReason: VALID_REASON };
+  Object.defineProperty(params, 'requiredMaxAgeMs', { enumerable: true, get() { readCount += 1; return readCount <= 2 ? 50 : undefined; } });
+  const r = evaluateClaim(params);
+  assert.notEqual(r.decision, 'CONFIRMED_P1', 'a getter must never be able to make a stale window disappear');
+  assert.equal(readCount, 1, 'requiredMaxAgeMs must be read from the caller-controlled object exactly once');
+});
+
+test('IMP3-STALENESS-003: ATTACK_MAXAGE_PROXY_SEQUENCE — a Proxy get trap answering differently across reads cannot bypass the snapshot; exactly one trap invocation for requiredMaxAgeMs', async () => {
+  const evidence = await makeGenuinelyStaleRemoteRuntimeEvidence('s003-proxy-seq');
+  let readCount = 0;
+  const base = { claimId: 'c', title: 't', severity: 'P1', evidence: [evidence], requiredVerificationLevels: ['REMOTE_RUNTIME'], singleSourceExceptionRequested: true, singleSourceExceptionReason: VALID_REASON };
+  const proxied = new Proxy(base, {
+    get(target, prop, receiver) {
+      if (prop === 'requiredMaxAgeMs') { readCount += 1; return readCount <= 2 ? 50 : undefined; }
+      return Reflect.get(target, prop, receiver);
+    },
+  });
+  const r = evaluateClaim(proxied);
+  assert.notEqual(r.decision, 'CONFIRMED_P1');
+  assert.equal(readCount, 1);
+});
+
+test('IMP3-STALENESS-003: ATTACK_MAXAGE_THROW_ON_SECOND_READ — a getter that throws on any read beyond the first proves, structurally, that no second read is ever attempted', async () => {
+  const evidence = await makeGenuinelyStaleRemoteRuntimeEvidence('s003-throw');
+  let readCount = 0;
+  const params = { claimId: 'c', title: 't', severity: 'P1', evidence: [evidence], requiredVerificationLevels: ['REMOTE_RUNTIME'], singleSourceExceptionRequested: true, singleSourceExceptionReason: VALID_REASON };
+  Object.defineProperty(params, 'requiredMaxAgeMs', {
+    enumerable: true,
+    get() {
+      readCount += 1;
+      if (readCount > 1) throw new Error('SECOND_READ_OCCURRED');
+      return 50;
+    },
+  });
+  assert.doesNotThrow(() => evaluateClaim(params));
+  assert.equal(readCount, 1);
+});
+
+test('IMP3-STALENESS-003: a requiredMaxAgeMs getter on the prototype chain (never an own property) is still read exactly once and cannot rejuvenate genuinely stale evidence', async () => {
+  const evidence = await makeGenuinelyStaleRemoteRuntimeEvidence('s003-proto');
+  const proto = {};
+  let readCount = 0;
+  Object.defineProperty(proto, 'requiredMaxAgeMs', { enumerable: true, get() { readCount += 1; return 50; } });
+  const params = Object.assign(Object.create(proto), { claimId: 'c', title: 't', severity: 'P1', evidence: [evidence], requiredVerificationLevels: ['REMOTE_RUNTIME'], singleSourceExceptionRequested: true, singleSourceExceptionReason: VALID_REASON });
+  const r = evaluateClaim(params);
+  assert.notEqual(r.decision, 'CONFIRMED_P1');
+  assert.equal(readCount, 1);
+});
+
+test('IMP3-STALENESS-003: FILTER_DISAPPEARANCE_ATTACK — with no requiredVerificationLevels/requiredEnvironment at all, a requiredMaxAgeMs getter still cannot make the ENTIRE verification-level filter vanish', async () => {
+  const evidence = await makeGenuinelyStaleRemoteRuntimeEvidence('s003-filter-vanish');
+  let readCount = 0;
+  const params = { claimId: 'c', title: 't', severity: 'P1', evidence: [evidence], singleSourceExceptionRequested: true, singleSourceExceptionReason: VALID_REASON };
+  Object.defineProperty(params, 'requiredMaxAgeMs', { enumerable: true, get() { readCount += 1; return readCount <= 2 ? 50 : undefined; } });
+  const r = evaluateClaim(params);
+  assert.notEqual(r.decision, 'CONFIRMED_P1', 'the freshness requirement snapshotted on the first (only) read must still apply');
+});
+
+test('IMP3-STALENESS-003: combined attacks — getter-TOCTOU alongside a fake `now`, raw AUTHORITATIVE evidence, INFERRED metadata, and serialized stale evidence all still fail safely', async () => {
+  const withGetter = (base) => {
+    let readCount = 0;
+    const p = { ...base };
+    Object.defineProperty(p, 'requiredMaxAgeMs', { enumerable: true, get() { readCount += 1; return readCount <= 2 ? 50 : undefined; } });
+    return p;
+  };
+
+  const staleEvidence = await makeGenuinelyStaleRemoteRuntimeEvidence('s003-combo-now');
+  const lyingNow = Date.parse(staleEvidence.observedAt) + 1;
+  const rNow = evaluateClaim(withGetter({ claimId: 'c', title: 't', severity: 'P1', evidence: [staleEvidence], requiredVerificationLevels: ['REMOTE_RUNTIME'], now: lyingNow, singleSourceExceptionRequested: true, singleSourceExceptionReason: VALID_REASON }));
+  assert.notEqual(rNow.decision, 'CONFIRMED_P1', 'getter-TOCTOU + fake now must not compound into a bypass');
+
+  const rawAuthority = { evidenceId: 's003-combo-auth', sourceClass: 'REMOTE_REPOSITORY', strength: 'AUTHORITATIVE', verificationLevel: 'REMOTE_RUNTIME', supportsClaim: true, sourceFingerprint: 'fp-s003-combo-auth', observedAt: new Date(Date.now() - 999999).toISOString() };
+  const rAuth = evaluateClaim(withGetter({ claimId: 'c', title: 't', severity: 'P0', evidence: [rawAuthority], requiredVerificationLevels: ['REMOTE_RUNTIME'], singleSourceExceptionRequested: true, singleSourceExceptionReason: VALID_REASON }));
+  assert.equal(rAuth.decision, 'HOLD_UNTRUSTED_EVIDENCE');
+
+  const inferred = { evidenceId: 's003-combo-inf', sourceClass: 'CLOUD_RUNTIME', strength: 'DIRECT', verificationLevel: 'INFERRED', environment: 'Production', supportsClaim: true, sourceFingerprint: 'fp-s003-combo-inf', observedAt: new Date().toISOString() };
+  const rInf = evaluateClaim(withGetter({ claimId: 'c', title: 't', severity: 'P1', evidence: [inferred], requiredVerificationLevels: ['REMOTE_RUNTIME'], singleSourceExceptionRequested: true, singleSourceExceptionReason: VALID_REASON }));
+  assert.notEqual(rInf.decision, 'CONFIRMED_P1');
+
+  const serialized = JSON.parse(JSON.stringify(staleEvidence));
+  const rSer = evaluateClaim(withGetter({ claimId: 'c', title: 't', severity: 'P1', evidence: [serialized], requiredVerificationLevels: ['REMOTE_RUNTIME'], singleSourceExceptionRequested: true, singleSourceExceptionReason: VALID_REASON }));
+  assert.notEqual(rSer.decision, 'CONFIRMED_P1');
+});
+
+test('IMP3-STALENESS-003: sibling audit — requiredVerificationLevels and requiredEnvironment are each read from the caller object exactly once already, so no equivalent TOCTOU surface exists for them', async () => {
+  const evidence = await makeGenuinelyStaleRemoteRuntimeEvidence('s003-sibling');
+
+  let levelsReadCount = 0;
+  const paramsLevels = { claimId: 'c', title: 't', severity: 'P1', evidence: [evidence], requiredMaxAgeMs: 5 * 60 * 1000, singleSourceExceptionRequested: true, singleSourceExceptionReason: VALID_REASON };
+  Object.defineProperty(paramsLevels, 'requiredVerificationLevels', { enumerable: true, get() { levelsReadCount += 1; return ['REMOTE_RUNTIME']; } });
+  evaluateClaim(paramsLevels);
+  assert.equal(levelsReadCount, 1);
+
+  let envReadCount = 0;
+  const paramsEnv = { claimId: 'c', title: 't', severity: 'P1', evidence: [evidence], requiredMaxAgeMs: 5 * 60 * 1000, singleSourceExceptionRequested: true, singleSourceExceptionReason: VALID_REASON };
+  Object.defineProperty(paramsEnv, 'requiredEnvironment', { enumerable: true, get() { envReadCount += 1; return 'Production'; } });
+  evaluateClaim(paramsEnv);
+  assert.equal(envReadCount, 1);
+});
+
+test('IMP3-STALENESS-003: positive controls — a real fresh observation still confirms, with or without requiredMaxAgeMs, after the snapshot-once fix', async () => {
+  const fresh = await attestRemoteRuntimeEvidence({ targetKey: 'reference-public-endpoint-production', evidenceId: 's003-positive', supportsClaim: true });
+  const rWithCheck = evaluateClaim({ claimId: 'c', title: 't', severity: 'P1', evidence: [fresh.evidence], requiredVerificationLevels: ['REMOTE_RUNTIME'], requiredMaxAgeMs: 5 * 60 * 1000, singleSourceExceptionRequested: true, singleSourceExceptionReason: VALID_REASON });
+  assert.equal(rWithCheck.decision, 'CONFIRMED_P1');
+
+  const fresh2 = await attestRemoteRuntimeEvidence({ targetKey: 'reference-public-endpoint-production', evidenceId: 's003-positive-2', supportsClaim: true });
+  const rWithoutCheck = evaluateClaim({ claimId: 'c', title: 't', severity: 'P1', evidence: [fresh2.evidence], requiredVerificationLevels: ['REMOTE_RUNTIME'], singleSourceExceptionRequested: true, singleSourceExceptionReason: VALID_REASON });
+  assert.equal(rWithoutCheck.decision, 'CONFIRMED_P1');
 });
 
 // =============================================================================
