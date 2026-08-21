@@ -1558,22 +1558,55 @@ test('LARGE_EVIDENCE_SET_TEST: 1000 duplicate-heavy synthetic evidences evaluate
 // Module purity / I/O boundary
 // ---------------------------------------------------------------------------
 
-test('POLICY_EVALUATOR_PURE: evaluateClaim never touches fs/network-mutation/shell/clock/random directly in this file', () => {
+// IMPROVEMENT_3_STALENESS_002_REMEDIATION split the old single-function
+// POLICY_EVALUATOR_PURE test in two, matching the new architecture:
+// `evaluateClaimCore` (private, still fully pure) and `evaluateClaim`
+// (public, now legitimately reads the real clock exactly once, only when
+// `requiredMaxAgeMs` is used, and nothing else).
+
+test('INTERNAL_POLICY_CORE_PURE: evaluateClaimCore never touches fs/network-mutation/shell/clock/random/process directly in this file', () => {
+  const modulePath = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'evidence-policy.mjs');
+  const source = readFileSync(modulePath, 'utf8');
+  const startMarker = 'function evaluateClaimCore(params, trustedNowMs) {';
+  const endMarker = 'export function evaluateClaim(params) {';
+  const startIdx = source.indexOf(startMarker);
+  const endIdx = source.indexOf(endMarker);
+  assert.notEqual(startIdx, -1, 'evaluateClaimCore function not found');
+  assert.notEqual(endIdx, -1, 'evaluateClaim function not found');
+  assert.ok(endIdx > startIdx, 'evaluateClaimCore must be defined before evaluateClaim');
+  const body = source.slice(startIdx, endIdx);
+  const forbidden = [
+    'writeFileSync', 'appendFileSync', 'unlinkSync', 'rmSync', 'mkdirSync', 'renameSync',
+    'execSync', 'spawnSync(', 'spawn(', 'exec(', 'fork(',
+    'fetch(', 'XMLHttpRequest', "from 'node:http", "from 'node:https", "from 'node:net", "from 'node:dgram",
+    'Date.now', 'Math.random', 'process.',
+  ];
+  for (const token of forbidden) {
+    assert.equal(body.includes(token), false, `forbidden token found inside evaluateClaimCore: ${token}`);
+  }
+});
+
+test('PUBLIC_POLICY_BOUNDARY_CLOCK_SCOPED: evaluateClaim\'s only side effect is one real Date.now() read, gated by requiredMaxAgeMs; every other forbidden token remains absent', () => {
   const modulePath = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'evidence-policy.mjs');
   const source = readFileSync(modulePath, 'utf8');
   const startMarker = 'export function evaluateClaim(params) {';
   const startIdx = source.indexOf(startMarker);
   assert.notEqual(startIdx, -1, 'evaluateClaim function not found');
   // evaluateClaim is, by construction, the LAST function in this file --
-  // slicing to end-of-file is exactly its body (R4: the real I/O now
-  // legitimately present elsewhere in the module, in the attestation
-  // layer, must not make this scan too broad to mean anything).
+  // slicing to end-of-file is exactly its body.
   const body = source.slice(startIdx);
+  // The one, deliberate, disclosed exception (IMPROVEMENT_3_STALENESS_002_
+  // REMEDIATION): evaluateClaim MUST call Date.now() itself now -- a
+  // regression back to a caller-suppliable `now` would silently reopen
+  // IMP3-STALENESS-002.
+  assert.equal(body.includes('Date.now()'), true, 'evaluateClaim must read the real wall clock itself');
+  // But nothing else -- no filesystem writes, no process execution, no
+  // network I/O, no randomness, no `process.*` access of any kind.
   const forbidden = [
     'writeFileSync', 'appendFileSync', 'unlinkSync', 'rmSync', 'mkdirSync', 'renameSync',
     'execSync', 'spawnSync(', 'spawn(', 'exec(', 'fork(',
     'fetch(', 'XMLHttpRequest', "from 'node:http", "from 'node:https", "from 'node:net", "from 'node:dgram",
-    'Date.now', 'Math.random', 'process.',
+    'Math.random', 'process.',
   ];
   for (const token of forbidden) {
     assert.equal(body.includes(token), false, `forbidden token found inside evaluateClaim: ${token}`);
@@ -1956,31 +1989,37 @@ test('IMP3 INCIDENT: STATIC + LOCAL_RUNTIME evidence cannot confirm "Production 
 });
 
 // =============================================================================
-// IMP3-STALENESS-001 regression (NIGHT_REMEDIATION_1) — a real REMOTE_RUNTIME
+// IMP3-STALENESS-001 / IMP3-STALENESS-002 regression — a real REMOTE_RUNTIME
 // observation from arbitrarily long ago must not be reusable, unchanged, to
-// certify a "right now" claim. `evaluateClaim` stays pure (never reads the
-// clock itself, per POLICY_EVALUATOR_PURE below) — `now` is always supplied
-// by the caller, so these tests supply it explicitly rather than relying on
-// real elapsed wall-clock time.
+// certify a "right now" claim, AND a caller must not be able to defeat that
+// protection by asserting a false `now`. Since IMPROVEMENT_3_STALENESS_002_
+// REMEDIATION, `evaluateClaim` reads the REAL wall clock itself whenever
+// `requiredMaxAgeMs` is used — these tests therefore use genuine, short,
+// real elapsed wall-clock time (via real `setTimeout`) rather than a
+// caller-supplied `now`, consistent with this project's real-fixture-only
+// testing discipline (no mocked clocks, same as no mocked git/fs/network).
 // =============================================================================
 
-test('IMP3-STALENESS-001 regression: a fresh real observation, evaluated with a matching requiredMaxAgeMs window, still confirms', async () => {
+function sleep(ms) {
+  return new Promise((resolve) => { setTimeout(resolve, ms); });
+}
+
+test('IMP3-STALENESS-001/002 regression: a fresh real observation, evaluated immediately with a generous requiredMaxAgeMs window, still confirms', async () => {
   const fresh = await attestRemoteRuntimeEvidence({ targetKey: 'reference-public-endpoint-production', evidenceId: 'staleness-fresh', supportsClaim: true });
-  const nowMs = Date.now();
   const r = evaluateClaim({
     claimId: 'c', title: 't', severity: 'P1', evidence: [fresh.evidence],
-    requiredVerificationLevels: ['REMOTE_RUNTIME'], requiredMaxAgeMs: 5 * 60 * 1000, now: nowMs,
+    requiredVerificationLevels: ['REMOTE_RUNTIME'], requiredMaxAgeMs: 5 * 60 * 1000,
     singleSourceExceptionRequested: true, singleSourceExceptionReason: VALID_REASON,
   });
   assert.equal(r.decision, 'CONFIRMED_P1');
 });
 
-test('IMP3-STALENESS-001 regression: the SAME real observation, evaluated with `now` shifted 10 minutes later against a 5-minute window, is rejected as stale', async () => {
+test('IMP3-STALENESS-001/002 regression: the SAME real observation, evaluated after real elapsed time exceeds a tiny requiredMaxAgeMs window, is rejected as stale — using the REAL wall clock, no caller `now` involved at all', async () => {
   const observation = await attestRemoteRuntimeEvidence({ targetKey: 'reference-public-endpoint-production', evidenceId: 'staleness-old', supportsClaim: true });
-  const laterNowMs = Date.now() + 10 * 60 * 1000;
+  await sleep(150);
   const r = evaluateClaim({
     claimId: 'c', title: 'Production is healthy RIGHT NOW', severity: 'P1', evidence: [observation.evidence],
-    requiredVerificationLevels: ['REMOTE_RUNTIME'], requiredMaxAgeMs: 5 * 60 * 1000, now: laterNowMs,
+    requiredVerificationLevels: ['REMOTE_RUNTIME'], requiredMaxAgeMs: 50,
     singleSourceExceptionRequested: true, singleSourceExceptionReason: VALID_REASON,
   });
   assert.equal(r.decision, 'HOLD_INSUFFICIENT_VERIFICATION_LEVEL', 'a stale observation must never certify a current-state claim');
@@ -1996,21 +2035,11 @@ test('IMP3-STALENESS-001 regression: without requiredMaxAgeMs, no staleness chec
   assert.equal(r.decision, 'CONFIRMED_P1');
 });
 
-test('IMP3-STALENESS-001 regression: requiredMaxAgeMs supplied without a valid `now` fails closed (unsatisfiable), never silently skips the check', async () => {
-  const observation = await attestRemoteRuntimeEvidence({ targetKey: 'reference-public-endpoint-production', evidenceId: 'staleness-no-now', supportsClaim: true });
-  const r = evaluateClaim({
-    claimId: 'c', title: 't', severity: 'P1', evidence: [observation.evidence],
-    requiredVerificationLevels: ['REMOTE_RUNTIME'], requiredMaxAgeMs: 5 * 60 * 1000,
-    singleSourceExceptionRequested: true, singleSourceExceptionReason: VALID_REASON,
-  });
-  assert.equal(r.decision, 'HOLD_INSUFFICIENT_VERIFICATION_LEVEL');
-});
-
 test('IMP3-STALENESS-001 regression: a malformed requiredMaxAgeMs (negative) fails closed, never treated as "no limit"', async () => {
   const observation = await attestRemoteRuntimeEvidence({ targetKey: 'reference-public-endpoint-production', evidenceId: 'staleness-negative', supportsClaim: true });
   const r = evaluateClaim({
     claimId: 'c', title: 't', severity: 'P1', evidence: [observation.evidence],
-    requiredVerificationLevels: ['REMOTE_RUNTIME'], requiredMaxAgeMs: -1, now: Date.now(),
+    requiredVerificationLevels: ['REMOTE_RUNTIME'], requiredMaxAgeMs: -1,
     singleSourceExceptionRequested: true, singleSourceExceptionReason: VALID_REASON,
   });
   assert.equal(r.decision, 'HOLD_INSUFFICIENT_VERIFICATION_LEVEL');
@@ -2020,20 +2049,111 @@ test('IMP3-STALENESS-001 regression: a raw/untrusted evidence object cannot fabr
   const fake = { evidenceId: 'staleness-fake', sourceClass: 'CLOUD_RUNTIME', strength: 'DIRECT', verificationLevel: 'REMOTE_RUNTIME', environment: 'Production', targetIdentity: 'fake', observedAt: new Date().toISOString(), supportsClaim: true, sourceFingerprint: 'fp-staleness-fake' };
   const r = evaluateClaim({
     claimId: 'c', title: 't', severity: 'P1', evidence: [fake],
-    requiredVerificationLevels: ['REMOTE_RUNTIME'], requiredMaxAgeMs: 5 * 60 * 1000, now: Date.now(),
+    requiredVerificationLevels: ['REMOTE_RUNTIME'], requiredMaxAgeMs: 5 * 60 * 1000,
     singleSourceExceptionRequested: true, singleSourceExceptionReason: VALID_REASON,
   });
   assert.equal(r.decision, 'HOLD_UNTRUSTED_EVIDENCE');
   assert.equal(r.evidence[0].observedAt, null);
 });
 
-test('POLICY_EVALUATOR_PURE still holds with the staleness feature: evaluateClaim never calls Date.now() itself — `now` is always caller-supplied', () => {
+// =============================================================================
+// IMP3-STALENESS-002 remediation — CALLER_CANNOT_CONTROL_STALENESS_CLOCK.
+// The core reproduction: a genuinely, really stale observation (proven
+// stale by REAL elapsed wall-clock time) must be rejected NO MATTER WHAT
+// value, under no matter what key name, a caller asserts for "now". Every
+// test below independently lets real time pass (`sleep`) past a tiny
+// `requiredMaxAgeMs`, then attacks with a fabricated clock value the OLD
+// (pre-remediation) design would have honored -- and confirms the result
+// is unaffected: still correctly rejected as stale.
+// =============================================================================
+
+test('IMP3-STALENESS-002: ATTACK_NOW_DIRECT — a top-level `now` asserting "no time has passed" has zero effect; real elapsed time still governs', async () => {
+  const observation = await attestRemoteRuntimeEvidence({ targetKey: 'reference-public-endpoint-production', evidenceId: 'atk-now-direct', supportsClaim: true });
+  await sleep(150);
+  const lyingNow = Date.parse(observation.evidence.observedAt) + 1;
+  const r = evaluateClaim({
+    claimId: 'c', title: 't', severity: 'P1', evidence: [observation.evidence],
+    requiredVerificationLevels: ['REMOTE_RUNTIME'], requiredMaxAgeMs: 50, now: lyingNow,
+    singleSourceExceptionRequested: true, singleSourceExceptionReason: VALID_REASON,
+  });
+  assert.equal(r.decision, 'HOLD_INSUFFICIENT_VERIFICATION_LEVEL', 'a caller-asserted now must never rejuvenate genuinely stale evidence');
+});
+
+test('IMP3-STALENESS-002: ATTACK_NOW_PROTOTYPE — a `now` inherited via prototype (never an own property) has zero effect', async () => {
+  const observation = await attestRemoteRuntimeEvidence({ targetKey: 'reference-public-endpoint-production', evidenceId: 'atk-now-proto', supportsClaim: true });
+  await sleep(150);
+  const proto = { now: Date.parse(observation.evidence.observedAt) + 1 };
+  const evilParams = Object.assign(Object.create(proto), {
+    claimId: 'c', title: 't', severity: 'P1', evidence: [observation.evidence],
+    requiredVerificationLevels: ['REMOTE_RUNTIME'], requiredMaxAgeMs: 50,
+    singleSourceExceptionRequested: true, singleSourceExceptionReason: VALID_REASON,
+  });
+  const r = evaluateClaim(evilParams);
+  assert.equal(r.decision, 'HOLD_INSUFFICIENT_VERIFICATION_LEVEL');
+});
+
+test('IMP3-STALENESS-002: ATTACK_NOW_NESTED — a `now` buried under a nested `options`/`clock` object has zero effect (evaluateClaim never reads it from anywhere but its own Date.now() call)', async () => {
+  const observation = await attestRemoteRuntimeEvidence({ targetKey: 'reference-public-endpoint-production', evidenceId: 'atk-now-nested', supportsClaim: true });
+  await sleep(150);
+  const lyingNow = Date.parse(observation.evidence.observedAt) + 1;
+  const r = evaluateClaim({
+    claimId: 'c', title: 't', severity: 'P1', evidence: [observation.evidence],
+    requiredVerificationLevels: ['REMOTE_RUNTIME'], requiredMaxAgeMs: 50,
+    options: { now: lyingNow }, clock: { now: lyingNow, currentTime: lyingNow },
+    singleSourceExceptionRequested: true, singleSourceExceptionReason: VALID_REASON,
+  });
+  assert.equal(r.decision, 'HOLD_INSUFFICIENT_VERIFICATION_LEVEL');
+});
+
+test('IMP3-STALENESS-002: ATTACK_NOW_ALIAS — currentTime/timestamp/clock/wallClock/dateNow/observedNow/trustedNow aliases all have zero effect', async () => {
+  const observation = await attestRemoteRuntimeEvidence({ targetKey: 'reference-public-endpoint-production', evidenceId: 'atk-now-alias', supportsClaim: true });
+  await sleep(150);
+  const lyingNow = Date.parse(observation.evidence.observedAt) + 1;
+  const aliasKeys = ['currentTime', 'timestamp', 'clock', 'wallClock', 'dateNow', 'observedNow', 'trustedNow'];
+  for (const key of aliasKeys) {
+    const r = evaluateClaim({
+      claimId: 'c', title: 't', severity: 'P1', evidence: [observation.evidence],
+      requiredVerificationLevels: ['REMOTE_RUNTIME'], requiredMaxAgeMs: 50,
+      [key]: lyingNow,
+      singleSourceExceptionRequested: true, singleSourceExceptionReason: VALID_REASON,
+    });
+    assert.equal(r.decision, 'HOLD_INSUFFICIENT_VERIFICATION_LEVEL', `alias key "${key}" must have no effect on the staleness clock`);
+  }
+});
+
+test('IMP3-STALENESS-002: ATTACK_SERIALIZED_STALE_EVIDENCE — JSON round-tripping a stale evidence object cannot make it fresh (it also loses trust, so it fails via HOLD_UNTRUSTED_EVIDENCE, never via a rejuvenated clock)', async () => {
+  const observation = await attestRemoteRuntimeEvidence({ targetKey: 'reference-public-endpoint-production', evidenceId: 'atk-serialized', supportsClaim: true });
+  await sleep(150);
+  const serialized = JSON.parse(JSON.stringify(observation.evidence));
+  const r = evaluateClaim({
+    claimId: 'c', title: 't', severity: 'P1', evidence: [serialized],
+    requiredVerificationLevels: ['REMOTE_RUNTIME'], requiredMaxAgeMs: 50,
+    singleSourceExceptionRequested: true, singleSourceExceptionReason: VALID_REASON,
+  });
+  assert.notEqual(r.decision, 'CONFIRMED_P1');
+});
+
+test('IMP3-STALENESS-002: ATTACK_TARGET_PLUS_NOW — combining a fake `now` with the real target-binding registry still fails on staleness (both defenses independently hold)', async () => {
+  const observation = await attestRemoteRuntimeEvidence({ targetKey: 'reference-public-endpoint-production', evidenceId: 'atk-target-now', supportsClaim: true });
+  await sleep(150);
+  const lyingNow = Date.parse(observation.evidence.observedAt) + 1;
+  const r = evaluateClaim({
+    claimId: 'c', title: 't', severity: 'P1', evidence: [observation.evidence],
+    requiredVerificationLevels: ['REMOTE_RUNTIME'], requiredEnvironment: 'Production', requiredMaxAgeMs: 50, now: lyingNow,
+    singleSourceExceptionRequested: true, singleSourceExceptionReason: VALID_REASON,
+  });
+  assert.equal(r.decision, 'HOLD_INSUFFICIENT_VERIFICATION_LEVEL');
+});
+
+test('IMP3-STALENESS-002: PUBLIC_POLICY_BOUNDARY_PURE = NO / INTERNAL_POLICY_CORE_PURE = YES is a deliberate, disclosed tradeoff — evaluateClaim itself now legitimately calls Date.now(); evaluateClaimCore (private) still never does', () => {
   const modulePath = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'evidence-policy.mjs');
   const source = readFileSync(modulePath, 'utf8');
-  const startIdx = source.indexOf('export function evaluateClaim(params) {');
-  assert.notEqual(startIdx, -1);
-  const body = source.slice(startIdx);
-  assert.equal(body.includes('Date.now'), false);
+  const coreStart = source.indexOf('function evaluateClaimCore(params, trustedNowMs) {');
+  const publicStart = source.indexOf('export function evaluateClaim(params) {');
+  assert.notEqual(coreStart, -1);
+  assert.notEqual(publicStart, -1);
+  assert.equal(source.slice(coreStart, publicStart).includes('Date.now'), false, 'evaluateClaimCore must stay pure');
+  assert.equal(source.slice(publicStart).includes('Date.now()'), true, 'evaluateClaim must read the trusted clock itself');
 });
 
 // =============================================================================

@@ -284,6 +284,42 @@
 // is what makes `LOCAL_RUNTIME` structurally unable to certify `Production`
 // and `STATIC` structurally unable to certify anything "is running":
 // neither promotion happens automatically, anywhere, by any mechanism.
+//
+// IMPROVEMENT_3_STALENESS_002_REMEDIATION (this revision) closes
+// IMP3-STALENESS-002 (MEDIUM-HIGH), reproduced by an independent reaudit of
+// NIGHT_REMEDIATION_1's `requiredMaxAgeMs`/`now` staleness fix
+// (IMP3-STALENESS-001): that fix bound freshness to a `now` value, but
+// `now` was ordinary CALLER-SUPPLIED DATA, exactly the class of defect this
+// project's entire Improvement 2 saga exists to close (caller supplies the
+// CONCLUSION, not just the MATERIAL). Live reproduction: a genuinely real,
+// genuinely OLD `REMOTE_RUNTIME` observation was re-certified as
+// CONFIRMED_P1 by simply asserting a `now` close to the evidence's own
+// `observedAt`, regardless of how much real wall-clock time had actually
+// passed — `requiredMaxAgeMs` offered no real guarantee at all against a
+// caller willing to lie about the current time.
+//
+// Fixed by moving the wall-clock read to a PUBLIC SECURITY BOUNDARY that a
+// caller cannot reach: `evaluateClaim` (exported) is now a thin wrapper —
+// when `requiredMaxAgeMs` is used, it reads the REAL current time itself
+// (`Date.now()`), once, and passes that as an explicit `trustedNowMs`
+// argument into `evaluateClaimCore` (module-private, the actual decision
+// logic, otherwise unchanged). No parameter name on `params` — not `now`,
+// `currentTime`, `timestamp`, `clock`, `wallClock`, `dateNow`,
+// `observedNow`, `trustedNow`, nor any nested/aliased/prototype-inherited
+// spelling of any of them — is EVER read for this purpose; the trusted
+// clock reading always comes from this function's own direct call, never
+// from `params` in any shape.
+//
+// This deliberately ends this module's previous end-to-end purity claim for
+// the PUBLIC `evaluateClaim` boundary specifically: `PUBLIC_POLICY_BOUNDARY
+// _PURE = NO` is the honest, disclosed cost of a REAL freshness guarantee.
+// `evaluateClaimCore` remains exactly as pure/deterministic as
+// `evaluateClaim` was before this revision — it never touches the clock,
+// filesystem, network, or `process` itself; it operates purely on its
+// arguments, `trustedNowMs` included. Security took priority over
+// preserving a "pure function" label that was no longer true in substance
+// (a `now` nobody can verify is not a wall clock) — see this revision's own
+// task framing for that explicit call.
 
 import { createHash } from 'node:crypto';
 import { spawnSync } from 'node:child_process';
@@ -1446,36 +1482,28 @@ function normalizeRequiredEnvironment(raw) {
   return ENVIRONMENTS.includes(raw) ? raw : INVALID_REQUIRED_ENVIRONMENT_SENTINEL;
 }
 
-// NIGHT_REMEDIATION_1 (IMP3-STALENESS-001, MEDIUM): closes a finding an
-// independent audit reproduced — a genuinely real REMOTE_RUNTIME
-// observation from arbitrarily long ago could be reused, unchanged, to
-// "confirm" a claim about the CURRENT state, with nothing in the model
-// distinguishing "responded at T" from "is responding now." Fixed with an
-// OPTIONAL `requiredMaxAgeMs` filter, paired with a caller-supplied `now`
-// — deliberately NOT `Date.now()` called from inside this function: this
-// module's own test suite asserts `evaluateClaim` never touches the clock
-// directly (`POLICY_EVALUATOR_PURE`), and that purity is worth preserving
-// — a pure function of (evidence, now) is exactly as capable of rejecting
-// stale evidence as one that reads the clock itself, without sacrificing
-// determinism/testability. Absent `requiredMaxAgeMs`, no staleness check
-// runs (existing callers are unaffected); if `requiredMaxAgeMs` is supplied
-// without a valid `now`, or `now` cannot be parsed, the check fails closed
-// (treated as if every observation were infinitely stale) rather than
-// silently skipping the requirement the caller explicitly asked for.
-function normalizeStalenessCheck(rawMaxAgeMs, rawNow) {
+// NIGHT_REMEDIATION_1 (IMP3-STALENESS-001, MEDIUM), then hardened by
+// IMPROVEMENT_3_STALENESS_002_REMEDIATION (see that header comment above):
+// a genuinely real REMOTE_RUNTIME observation from arbitrarily long ago
+// must not be reusable, unchanged, to "confirm" a claim about the CURRENT
+// state. `trustedNowMs` here is NEVER caller-supplied `params` data — it is
+// always either `null` (no staleness check requested) or a real
+// `Date.now()` reading taken by the public `evaluateClaim` boundary, passed
+// down as an explicit argument. This function itself stays pure: it makes
+// no clock call of its own, it only validates/uses the value it was given.
+// Absent `requiredMaxAgeMs`, no staleness check runs (existing callers are
+// unaffected); a malformed `requiredMaxAgeMs` (negative, NaN, Infinity,
+// non-number) fails closed (treated as if every observation were
+// infinitely stale) rather than silently skipping the requirement the
+// caller explicitly asked for.
+function normalizeStalenessCheck(rawMaxAgeMs, trustedNowMs) {
   if (rawMaxAgeMs === undefined || rawMaxAgeMs === null) return null;
   const maxAgeMs = typeof rawMaxAgeMs === 'number' && Number.isFinite(rawMaxAgeMs) && rawMaxAgeMs >= 0 ? rawMaxAgeMs : -1;
-  const nowMs = (() => {
-    if (typeof rawNow === 'number' && Number.isFinite(rawNow)) return rawNow;
-    if (typeof rawNow === 'string') {
-      const parsed = Date.parse(rawNow);
-      return Number.isNaN(parsed) ? NaN : parsed;
-    }
-    return NaN;
-  })();
-  // maxAgeMs<0 (malformed) or nowMs NaN (missing/malformed `now`) both fail
-  // closed via an unsatisfiable check (nowMs NaN makes every comparison
-  // below false, matching "requirement present but cannot be verified").
+  const nowMs = typeof trustedNowMs === 'number' && Number.isFinite(trustedNowMs) ? trustedNowMs : NaN;
+  // maxAgeMs<0 (malformed) or nowMs NaN (no valid trusted clock reading was
+  // taken) both fail closed via an unsatisfiable check (nowMs NaN makes
+  // every comparison below false, matching "requirement present but cannot
+  // be verified").
   return { maxAgeMs, nowMs };
 }
 
@@ -1489,16 +1517,25 @@ function isEvidenceFreshEnough(e, stalenessCheck) {
   return ageMs >= 0 && ageMs <= stalenessCheck.maxAgeMs;
 }
 
-export function evaluateClaim(params) {
+// The pure decision core (Improvement 3/5 extended). Never exported, never
+// reads the clock/filesystem/network/`process` itself — `trustedNowMs` is
+// always an explicit argument supplied by the public `evaluateClaim`
+// boundary below, never derived from `params`. This is what
+// INTERNAL_POLICY_CORE_PURE means in this revision's own task framing: the
+// actual evidence-evaluation logic is exactly as deterministic and
+// side-effect-free as `evaluateClaim` was before IMPROVEMENT_3_STALENESS_002
+// _REMEDIATION; only the ONE real wall-clock read has moved to the
+// boundary that owns it.
+function evaluateClaimCore(params, trustedNowMs) {
   const safeParams = isPlainParamsObject(params) ? params : {};
   const {
     claimId, title, severity, evidence, singleSourceExceptionRequested = false, singleSourceExceptionReason = null,
     requiredVerificationLevels: rawRequiredVerificationLevels, requiredEnvironment: rawRequiredEnvironment,
-    requiredMaxAgeMs: rawRequiredMaxAgeMs, now: rawNow,
+    requiredMaxAgeMs: rawRequiredMaxAgeMs,
   } = safeParams;
   const requiredVerificationLevels = normalizeRequiredVerificationLevels(rawRequiredVerificationLevels);
   const requiredEnvironment = normalizeRequiredEnvironment(rawRequiredEnvironment);
-  const stalenessCheck = normalizeStalenessCheck(rawRequiredMaxAgeMs, rawNow);
+  const stalenessCheck = normalizeStalenessCheck(rawRequiredMaxAgeMs, trustedNowMs);
 
   const baseResult = {
     claimId: typeof claimId === 'string' ? claimId : null,
@@ -1630,4 +1667,24 @@ export function evaluateClaim(params) {
     singleSourceExceptionUsed: outcome.singleSourceExceptionUsed,
     singleSourceExceptionReason: outcome.singleSourceExceptionUsed ? singleSourceExceptionReason : null,
   };
+}
+
+// IMPROVEMENT_3_STALENESS_002_REMEDIATION: the PUBLIC boundary. The only
+// place in this module allowed to read the real system clock for a
+// security purpose. Deliberately NOT pure — see this revision's header
+// comment for why that tradeoff was made deliberately, in favor of a REAL
+// guarantee that `requiredMaxAgeMs` cannot be defeated by a caller
+// asserting a false `now`. `params` is never read for a clock value under
+// ANY key name — `now`, `currentTime`, `timestamp`, `clock`, `wallClock`,
+// `dateNow`, `observedNow`, `trustedNow`, `options.now`, a nested object, a
+// spread property, or a prototype-inherited property of any of those names
+// all have zero effect on the outcome, because none of them is ever read;
+// the trusted reading always comes from this function's own direct system
+// clock call below, taken exactly once, only when `requiredMaxAgeMs` is
+// actually present.
+export function evaluateClaim(params) {
+  const safeParams = isPlainParamsObject(params) ? params : {};
+  const usesStalenessCheck = safeParams.requiredMaxAgeMs !== undefined && safeParams.requiredMaxAgeMs !== null;
+  const trustedNowMs = usesStalenessCheck ? Date.now() : null;
+  return evaluateClaimCore(params, trustedNowMs);
 }
