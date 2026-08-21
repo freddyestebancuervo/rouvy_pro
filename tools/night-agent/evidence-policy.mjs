@@ -439,8 +439,38 @@ function canonicalGitQueryEnv(isolatedHome) {
 // above) is created immediately before the subprocess call and removed
 // immediately after, success or failure, via `finally` — it never persists
 // beyond this one query.
+// IMPROVEMENT_4_5_CRASH_RECOVERY closes IMP4-TEMP-ENOENT-001 (deferred from
+// Improvement 3's own header comment above): `isolatedCanonicalGitHome`'s
+// `mkdtempSync` call was never wrapped — a TEMP/TMP environment variable
+// pointing at a nonexistent (or otherwise unwritable) directory made it
+// throw an UNCAUGHT `ENOENT`, propagating straight through
+// `resolveCanonicalCurrentRemoteMainSha` and `attestRemoteMainEvidence`
+// instead of that function's own documented `{evidence: null, error}`
+// contract — reproduced live: a real, unmodified `attestRemoteMainEvidence`
+// call, in a real child process with `TEMP`/`TMP` pointed at a genuinely
+// nonexistent path, threw a raw `Error` (`code: 'ENOENT'`) instead of
+// returning any structured result at all.
+//
+// Fixed by wrapping ONLY the `isolatedCanonicalGitHome()` call itself: if
+// it throws, nothing was ever created (no directory to clean up), and this
+// function fails closed to `null` — the EXACT same value every other
+// "could not resolve the current tip" path here already returns, which
+// `attestRemoteMainEvidence` already turns into
+// `{evidence: null, error: 'CURRENT_REMOTE_MAIN_UNRESOLVED'}` without any
+// change there at all. No new error code was invented: a TEMP/TMP failure
+// and a real git query failure both mean the same thing to every caller —
+// "the current remote state could not be established" — and both must
+// refuse to mint ANY evidence, AUTHORITATIVE or otherwise. This does not
+// touch `canonicalGitQueryEnv`'s HOME/USERPROFILE/XDG_CONFIG_HOME/
+// GIT_CONFIG_* isolation logic (IMP2-GITGLOBAL-001) at all — that logic
+// only ever runs once a real `isolatedHome` directory already exists.
 function resolveCanonicalCurrentRemoteMainSha() {
-  const isolatedHome = isolatedCanonicalGitHome();
+  let isolatedHome;
+  try {
+    isolatedHome = isolatedCanonicalGitHome();
+  } catch {
+    return null;
+  }
   try {
     const result = spawnSync(
       'git',

@@ -855,6 +855,64 @@ test('IMP2-GITGLOBAL-001 regression (CASE J — malformed env inputs never crash
   }
 });
 
+// =============================================================================
+// IMP4-TEMP-ENOENT-001 (IMPROVEMENT_4_5_CRASH_RECOVERY) — deferred from
+// Improvement 3: `isolatedCanonicalGitHome`'s `mkdtempSync` call was never
+// wrapped, so a TEMP/TMP environment variable pointing at a nonexistent
+// path made it throw an uncaught ENOENT straight through
+// `attestRemoteMainEvidence`, bypassing that function's own documented
+// `{evidence, error}` contract entirely. Note this is a DIFFERENT
+// environment variable than CASE J above (HOME) — `os.tmpdir()` reads
+// TEMP/TMP (Windows) or TMPDIR (POSIX), never HOME, which is exactly why
+// CASE J's "malformed HOME never throws" coverage did not already catch
+// this gap.
+// =============================================================================
+
+test('IMP4-TEMP-ENOENT-001 regression: TEMP/TMP pointed at a genuinely nonexistent path fails closed to a structured error, never an uncaught exception, and mints no evidence', () => {
+  const bogusTemp = path.join(projectClone.repoDir, 'this-path-genuinely-does-not-exist-korixa-imp4-test', 'nested', 'temp');
+  assert.doesNotThrow(() => {
+    const result = withEnvOverrides({ TEMP: bogusTemp, TMP: bogusTemp }, () => attestRemoteMainEvidence({
+      repoRoot: projectClone.repoDir, sha: realCanonicalCurrentSha, relPath: 'PROJECT_STATUS.md', evidenceId: 'imp4-temp-enoent-a', supportsClaim: true,
+    }));
+    assert.equal(result.evidence, null, 'a broken TEMP/TMP must never let evidence be minted');
+    assert.equal(result.error, 'CURRENT_REMOTE_MAIN_UNRESOLVED');
+  });
+});
+
+test('IMP4-TEMP-ENOENT-001 regression: an empty-string TEMP/TMP also fails closed without throwing (not just a nonexistent path)', () => {
+  assert.doesNotThrow(() => {
+    const result = withEnvOverrides({ TEMP: '', TMP: '' }, () => attestRemoteMainEvidence({
+      repoRoot: projectClone.repoDir, sha: realCanonicalCurrentSha, relPath: 'PROJECT_STATUS.md', evidenceId: 'imp4-temp-enoent-b', supportsClaim: true,
+    }));
+    if (result.evidence !== null) {
+      // An empty TEMP/TMP may fall back to a platform default that still
+      // resolves — that is fine (still correct, still isolated); it must
+      // simply never throw and never mint evidence without real
+      // verification actually having succeeded.
+      assert.equal(result.evidence.sourceClass, 'REMOTE_REPOSITORY');
+      assert.equal(result.evidence.strength, 'AUTHORITATIVE');
+    }
+  });
+});
+
+test('IMP4-TEMP-ENOENT-001 combined with IMP2-GITGLOBAL-001: a broken TEMP/TMP AND a simultaneously hostile HOME never combine into false evidence — both fail closed independently', () => {
+  assert.doesNotThrow(() => {
+    const bogusTemp = path.join(projectClone.repoDir, 'this-path-genuinely-does-not-exist-korixa-imp4-combined', 'temp');
+    const result = withEnvOverrides({ TEMP: bogusTemp, TMP: bogusTemp, HOME: gitGlobalConfigAttackFixture.homeDir }, () => attestRemoteMainEvidence({
+      repoRoot: projectClone.repoDir, sha: realCanonicalCurrentSha, relPath: 'PROJECT_STATUS.md', evidenceId: 'imp4-temp-enoent-combined', supportsClaim: true,
+    }));
+    assert.equal(result.evidence, null);
+    assert.equal(result.error, 'CURRENT_REMOTE_MAIN_UNRESOLVED');
+  });
+});
+
+test('IMP4-TEMP-ENOENT-001 positive control: with real, valid TEMP/TMP, canonical attestation still works exactly as before the fix', () => {
+  const result = attestRemoteMainEvidence({ repoRoot: projectClone.repoDir, sha: realCanonicalCurrentSha, relPath: 'PROJECT_STATUS.md', evidenceId: 'imp4-temp-enoent-positive', supportsClaim: true });
+  assert.equal(result.error, null);
+  assert.equal(result.evidence.sourceClass, 'REMOTE_REPOSITORY');
+  assert.equal(result.evidence.strength, 'AUTHORITATIVE');
+});
+
 test('IMP2-TRANSPORT-001 regression: PUBLIC_TRUST_API_ACCEPTS_FUNCTION_DEPENDENCY = NO for attestFilesystemEvidence — every named dependency from the R4 threat model is poisoned and ignored', () => {
   const { evidence, error } = attestFilesystemEvidence({
     sourceClass: 'LOCAL_FILESYSTEM', rootDir: fsFixture.rootDir, relPath: 'a.md', expectedRootCommit: fsFixture.rootCommit,
