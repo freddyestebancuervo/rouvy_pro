@@ -1638,9 +1638,6 @@ test('SOURCE_OF_TRUTH_CONTRACT_CHANGED = NO: source-of-truth.mjs exports used he
 // carry.
 // =============================================================================
 
-const REMOTE_RUNTIME_TEST_URL = 'https://github.com';
-const REMOTE_RUNTIME_UNREACHABLE_URL = 'https://this-domain-genuinely-does-not-exist-korixa-imp3-test.invalid';
-
 test('VERIFICATION_LEVELS is the exact closed catalog: STATIC, LOCAL_RUNTIME, REMOTE_RUNTIME, INFERRED — nothing else', () => {
   assert.deepEqual([...VERIFICATION_LEVELS], ['STATIC', 'LOCAL_RUNTIME', 'REMOTE_RUNTIME', 'INFERRED']);
 });
@@ -1692,21 +1689,21 @@ test('IMP3: attestLocalRuntimeEvidence refuses to execute anything against an un
 
 test('IMP3 CASE C: attestRemoteRuntimeEvidence really performs an HTTPS GET and produces trusted REMOTE_RUNTIME evidence with a real, well-identified target', async () => {
   const r = await attestRemoteRuntimeEvidence({
-    sourceClass: 'CLOUD_RUNTIME', url: REMOTE_RUNTIME_TEST_URL, environment: 'Production', targetIdentity: 'synthetic-production-target-c',
+    targetKey: 'reference-public-endpoint-production',
     evidenceId: 'imp3-c', supportsClaim: true,
   });
   assert.equal(r.error, null);
   assert.equal(r.evidence.verificationLevel, 'REMOTE_RUNTIME');
   assert.equal(r.evidence.strength, 'DIRECT');
   assert.equal(r.evidence.environment, 'Production');
-  assert.equal(r.evidence.targetIdentity, 'synthetic-production-target-c');
+  assert.equal(r.evidence.targetIdentity, 'reference-public-endpoint-production', 'targetIdentity is always the fixed registry key, never caller-suppliable');
   assert.equal(typeof r.evidence.observedStatusCode, 'number');
   assert.equal(typeof r.evidence.observedAt, 'string');
 });
 
 test('IMP3: attestRemoteRuntimeEvidence fails closed (never throws, never fabricates trust) when the target is genuinely unreachable', async () => {
   const r = await attestRemoteRuntimeEvidence({
-    sourceClass: 'CLOUD_RUNTIME', url: REMOTE_RUNTIME_UNREACHABLE_URL, environment: 'Production', targetIdentity: 'unreachable-target',
+    targetKey: 'reference-unreachable-endpoint',
     evidenceId: 'imp3-c-unreachable', supportsClaim: true,
   });
   assert.equal(r.evidence, null);
@@ -1811,17 +1808,17 @@ test('IMP3 CASE K: REMOTE_REPOSITORY/AUTHORITATIVE evidence is always verificati
 // L. CI evidence does not imply Production runtime automatically
 // ---------------------------------------------------------------------------
 
-test('IMP3 CASE L: CI_RUNTIME is not an attestable REMOTE_RUNTIME sourceClass, and a raw CI_RUNTIME/REMOTE_RUNTIME self-declaration gains no trust either', () => {
-  const rejected = attestRemoteRuntimeEvidence;
-  const attemptViaRealAttestor = () => rejected({ sourceClass: 'CI_RUNTIME', url: REMOTE_RUNTIME_TEST_URL, environment: 'Production', targetIdentity: 'ci-run', evidenceId: 'imp3-l-a', supportsClaim: true });
-  return attemptViaRealAttestor().then((r) => {
-    assert.equal(r.evidence, null);
-    assert.equal(r.error, 'UNSUPPORTED_SOURCE_CLASS');
+test('IMP3 CASE L: CI_RUNTIME is not an attestable REMOTE_RUNTIME sourceClass — no registry entry can ever produce it (post-remediation: sourceClass comes from the fixed registry entry, not from params, so there is no longer even a way to ASK for CI_RUNTIME via the real attestor), and a raw CI_RUNTIME/REMOTE_RUNTIME self-declaration gains no trust either', () => {
+  // No entry in KNOWN_REMOTE_RUNTIME_TARGETS has sourceClass CI_RUNTIME —
+  // confirmed structurally, not just by one negative-path call.
+  const source = readFileSync(path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'evidence-policy.mjs'), 'utf8');
+  const registryMatch = source.match(/const KNOWN_REMOTE_RUNTIME_TARGETS = Object\.freeze\(\{[\s\S]*?\n\}\);/);
+  assert.notEqual(registryMatch, null);
+  assert.equal(registryMatch[0].includes('CI_RUNTIME'), false);
 
-    const fakeCi = rawEv({ evidenceId: 'imp3-l-b', sourceClass: 'CI_RUNTIME', verificationLevel: 'REMOTE_RUNTIME', environment: 'Production', targetIdentity: 'ci-run-2', sourceFingerprint: 'fp-imp3-l' });
-    const claim = evaluateClaim({ claimId: 'c', title: 't', severity: 'P0', evidence: [fakeCi], singleSourceExceptionRequested: true, singleSourceExceptionReason: VALID_REASON });
-    assert.equal(claim.decision, 'HOLD_UNTRUSTED_EVIDENCE');
-  });
+  const fakeCi = rawEv({ evidenceId: 'imp3-l-b', sourceClass: 'CI_RUNTIME', verificationLevel: 'REMOTE_RUNTIME', environment: 'Production', targetIdentity: 'ci-run-2', sourceFingerprint: 'fp-imp3-l' });
+  const claim = evaluateClaim({ claimId: 'c', title: 't', severity: 'P0', evidence: [fakeCi], singleSourceExceptionRequested: true, singleSourceExceptionReason: VALID_REASON });
+  assert.equal(claim.decision, 'HOLD_UNTRUSTED_EVIDENCE');
 });
 
 // ---------------------------------------------------------------------------
@@ -1829,7 +1826,7 @@ test('IMP3 CASE L: CI_RUNTIME is not an attestable REMOTE_RUNTIME sourceClass, a
 // ---------------------------------------------------------------------------
 
 test('IMP3 CASE M: a real, trusted REMOTE_RUNTIME/Development observation cannot satisfy a claim requiring Production', async () => {
-  const devEv = await attestRemoteRuntimeEvidence({ sourceClass: 'CLOUD_RUNTIME', url: REMOTE_RUNTIME_TEST_URL, environment: 'Development', targetIdentity: 'dev-target-m', evidenceId: 'imp3-m', supportsClaim: true });
+  const devEv = await attestRemoteRuntimeEvidence({ targetKey: 'reference-public-endpoint-development', evidenceId: 'imp3-m', supportsClaim: true });
   assert.equal(devEv.evidence.environment, 'Development');
   const claim = evaluateClaim({
     claimId: 'c', title: 'Production is healthy', severity: 'P1', evidence: [devEv.evidence],
@@ -1856,7 +1853,7 @@ test('IMP3 CASE N: the same underlying source copied three times with three diff
 // ---------------------------------------------------------------------------
 
 test('IMP3 CASE O: an inference derivedFrom a real REMOTE_RUNTIME evidence stays verificationLevel INFERRED — never auto-promoted', async () => {
-  const remoteEv = await attestRemoteRuntimeEvidence({ sourceClass: 'CLOUD_RUNTIME', url: REMOTE_RUNTIME_TEST_URL, environment: 'Production', targetIdentity: 'imp3-o-source', evidenceId: 'imp3-o-source', supportsClaim: true });
+  const remoteEv = await attestRemoteRuntimeEvidence({ targetKey: 'reference-public-endpoint-production', evidenceId: 'imp3-o-source', supportsClaim: true });
   const inference = { evidenceId: 'imp3-o-inference', verificationLevel: 'INFERRED', derivedFromEvidenceIds: ['imp3-o-source'], sourceFingerprint: 'fp-imp3-o-inference', supportsClaim: true };
   const r = evaluateClaim({ claimId: 'c', title: 't', severity: 'P2', evidence: [remoteEv.evidence, inference] });
   const inferenceResult = r.evidence.find((e) => e.evidenceId === 'imp3-o-inference');
@@ -1943,7 +1940,7 @@ test('IMP3 INCIDENT: STATIC + LOCAL_RUNTIME evidence cannot confirm "Production 
   assert.equal(before.decision, 'HOLD_INSUFFICIENT_VERIFICATION_LEVEL', 'STATIC + LOCAL_RUNTIME must never be able to certify a Production REMOTE_RUNTIME claim');
 
   const remoteEv = await attestRemoteRuntimeEvidence({
-    sourceClass: 'CLOUD_RUNTIME', url: REMOTE_RUNTIME_TEST_URL, environment: 'Production', targetIdentity: 'incident-production-target',
+    targetKey: 'reference-public-endpoint-production',
     evidenceId: 'incident-remote', supportsClaim: true,
   });
   assert.notEqual(remoteEv.evidence, null);
@@ -1959,11 +1956,92 @@ test('IMP3 INCIDENT: STATIC + LOCAL_RUNTIME evidence cannot confirm "Production 
 });
 
 // =============================================================================
+// IMP3-STALENESS-001 regression (NIGHT_REMEDIATION_1) — a real REMOTE_RUNTIME
+// observation from arbitrarily long ago must not be reusable, unchanged, to
+// certify a "right now" claim. `evaluateClaim` stays pure (never reads the
+// clock itself, per POLICY_EVALUATOR_PURE below) — `now` is always supplied
+// by the caller, so these tests supply it explicitly rather than relying on
+// real elapsed wall-clock time.
+// =============================================================================
+
+test('IMP3-STALENESS-001 regression: a fresh real observation, evaluated with a matching requiredMaxAgeMs window, still confirms', async () => {
+  const fresh = await attestRemoteRuntimeEvidence({ targetKey: 'reference-public-endpoint-production', evidenceId: 'staleness-fresh', supportsClaim: true });
+  const nowMs = Date.now();
+  const r = evaluateClaim({
+    claimId: 'c', title: 't', severity: 'P1', evidence: [fresh.evidence],
+    requiredVerificationLevels: ['REMOTE_RUNTIME'], requiredMaxAgeMs: 5 * 60 * 1000, now: nowMs,
+    singleSourceExceptionRequested: true, singleSourceExceptionReason: VALID_REASON,
+  });
+  assert.equal(r.decision, 'CONFIRMED_P1');
+});
+
+test('IMP3-STALENESS-001 regression: the SAME real observation, evaluated with `now` shifted 10 minutes later against a 5-minute window, is rejected as stale', async () => {
+  const observation = await attestRemoteRuntimeEvidence({ targetKey: 'reference-public-endpoint-production', evidenceId: 'staleness-old', supportsClaim: true });
+  const laterNowMs = Date.now() + 10 * 60 * 1000;
+  const r = evaluateClaim({
+    claimId: 'c', title: 'Production is healthy RIGHT NOW', severity: 'P1', evidence: [observation.evidence],
+    requiredVerificationLevels: ['REMOTE_RUNTIME'], requiredMaxAgeMs: 5 * 60 * 1000, now: laterNowMs,
+    singleSourceExceptionRequested: true, singleSourceExceptionReason: VALID_REASON,
+  });
+  assert.equal(r.decision, 'HOLD_INSUFFICIENT_VERIFICATION_LEVEL', 'a stale observation must never certify a current-state claim');
+});
+
+test('IMP3-STALENESS-001 regression: without requiredMaxAgeMs, no staleness check runs at all — existing callers are unaffected', async () => {
+  const observation = await attestRemoteRuntimeEvidence({ targetKey: 'reference-public-endpoint-production', evidenceId: 'staleness-no-check', supportsClaim: true });
+  const r = evaluateClaim({
+    claimId: 'c', title: 't', severity: 'P1', evidence: [observation.evidence],
+    requiredVerificationLevels: ['REMOTE_RUNTIME'],
+    singleSourceExceptionRequested: true, singleSourceExceptionReason: VALID_REASON,
+  });
+  assert.equal(r.decision, 'CONFIRMED_P1');
+});
+
+test('IMP3-STALENESS-001 regression: requiredMaxAgeMs supplied without a valid `now` fails closed (unsatisfiable), never silently skips the check', async () => {
+  const observation = await attestRemoteRuntimeEvidence({ targetKey: 'reference-public-endpoint-production', evidenceId: 'staleness-no-now', supportsClaim: true });
+  const r = evaluateClaim({
+    claimId: 'c', title: 't', severity: 'P1', evidence: [observation.evidence],
+    requiredVerificationLevels: ['REMOTE_RUNTIME'], requiredMaxAgeMs: 5 * 60 * 1000,
+    singleSourceExceptionRequested: true, singleSourceExceptionReason: VALID_REASON,
+  });
+  assert.equal(r.decision, 'HOLD_INSUFFICIENT_VERIFICATION_LEVEL');
+});
+
+test('IMP3-STALENESS-001 regression: a malformed requiredMaxAgeMs (negative) fails closed, never treated as "no limit"', async () => {
+  const observation = await attestRemoteRuntimeEvidence({ targetKey: 'reference-public-endpoint-production', evidenceId: 'staleness-negative', supportsClaim: true });
+  const r = evaluateClaim({
+    claimId: 'c', title: 't', severity: 'P1', evidence: [observation.evidence],
+    requiredVerificationLevels: ['REMOTE_RUNTIME'], requiredMaxAgeMs: -1, now: Date.now(),
+    singleSourceExceptionRequested: true, singleSourceExceptionReason: VALID_REASON,
+  });
+  assert.equal(r.decision, 'HOLD_INSUFFICIENT_VERIFICATION_LEVEL');
+});
+
+test('IMP3-STALENESS-001 regression: a raw/untrusted evidence object cannot fabricate a fresh observedAt to slip past the staleness filter — it is untrusted regardless', () => {
+  const fake = { evidenceId: 'staleness-fake', sourceClass: 'CLOUD_RUNTIME', strength: 'DIRECT', verificationLevel: 'REMOTE_RUNTIME', environment: 'Production', targetIdentity: 'fake', observedAt: new Date().toISOString(), supportsClaim: true, sourceFingerprint: 'fp-staleness-fake' };
+  const r = evaluateClaim({
+    claimId: 'c', title: 't', severity: 'P1', evidence: [fake],
+    requiredVerificationLevels: ['REMOTE_RUNTIME'], requiredMaxAgeMs: 5 * 60 * 1000, now: Date.now(),
+    singleSourceExceptionRequested: true, singleSourceExceptionReason: VALID_REASON,
+  });
+  assert.equal(r.decision, 'HOLD_UNTRUSTED_EVIDENCE');
+  assert.equal(r.evidence[0].observedAt, null);
+});
+
+test('POLICY_EVALUATOR_PURE still holds with the staleness feature: evaluateClaim never calls Date.now() itself — `now` is always caller-supplied', () => {
+  const modulePath = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'evidence-policy.mjs');
+  const source = readFileSync(modulePath, 'utf8');
+  const startIdx = source.indexOf('export function evaluateClaim(params) {');
+  assert.notEqual(startIdx, -1);
+  const body = source.slice(startIdx);
+  assert.equal(body.includes('Date.now'), false);
+});
+
+// =============================================================================
 // Fase 14 — adversarial self-audit
 // =============================================================================
 
 test('IMP3 ADVERSARIAL: prototype/clone tricks on a real trusted REMOTE_RUNTIME object never carry trust or verificationLevel forward', async () => {
-  const real = await attestRemoteRuntimeEvidence({ sourceClass: 'CLOUD_RUNTIME', url: REMOTE_RUNTIME_TEST_URL, environment: 'Production', targetIdentity: 'clone-source', evidenceId: 'imp3-adv-clone', supportsClaim: true });
+  const real = await attestRemoteRuntimeEvidence({ targetKey: 'reference-public-endpoint-production', evidenceId: 'imp3-adv-clone', supportsClaim: true });
   const clones = {
     spread: { ...real.evidence },
     jsonRoundTrip: JSON.parse(JSON.stringify(real.evidence)),
@@ -1975,22 +2053,40 @@ test('IMP3 ADVERSARIAL: prototype/clone tricks on a real trusted REMOTE_RUNTIME 
   }
 });
 
-test('IMP3 ADVERSARIAL: missing targetIdentity is rejected before any network call', async () => {
-  const r = await attestRemoteRuntimeEvidence({ sourceClass: 'CLOUD_RUNTIME', url: REMOTE_RUNTIME_TEST_URL, environment: 'Production', evidenceId: 'imp3-adv-notarget', supportsClaim: true });
+test('IMP3-TARGET-BINDING-001 regression: an unknown targetKey is rejected before any network call', async () => {
+  const r = await attestRemoteRuntimeEvidence({ targetKey: 'totally-made-up-key-not-in-the-registry', evidenceId: 'imp3-adv-unknown-key', supportsClaim: true });
   assert.equal(r.evidence, null);
-  assert.equal(r.error, 'INVALID_TARGET_IDENTITY');
+  assert.equal(r.error, 'UNKNOWN_REMOTE_RUNTIME_TARGET');
 });
 
-test('IMP3 ADVERSARIAL: a plain http:// URL (not https://) is rejected, never attested', async () => {
-  const r = await attestRemoteRuntimeEvidence({ sourceClass: 'CLOUD_RUNTIME', url: 'http://example.com', environment: 'Production', targetIdentity: 'plain-http', evidenceId: 'imp3-adv-http', supportsClaim: true });
-  assert.equal(r.evidence, null);
-  assert.equal(r.error, 'INVALID_URL');
+test('IMP3-TARGET-BINDING-001 regression: the pre-remediation call shape (caller-supplied url/environment/targetIdentity/sourceClass, no targetKey) is rejected outright — the exact reproduced attack', async () => {
+  const r = await attestRemoteRuntimeEvidence({
+    sourceClass: 'CLOUD_RUNTIME', url: 'https://example.com', environment: 'Production', targetIdentity: 'rouvy-backend-production-cloud-run',
+    evidenceId: 'imp3-adv-old-shape', supportsClaim: true,
+  });
+  assert.equal(r.evidence, null, 'FAKE_PRODUCTION_LABEL_ATTACK must be DENIED');
+  assert.equal(r.error, 'UNKNOWN_REMOTE_RUNTIME_TARGET');
 });
 
-test('IMP3 ADVERSARIAL: invalid environment value is rejected, never silently coerced to a valid one', async () => {
-  const r = await attestRemoteRuntimeEvidence({ sourceClass: 'CLOUD_RUNTIME', url: REMOTE_RUNTIME_TEST_URL, environment: 'production', targetIdentity: 'lowercase-env', evidenceId: 'imp3-adv-env', supportsClaim: true });
-  assert.equal(r.evidence, null);
-  assert.equal(r.error, 'INVALID_ENVIRONMENT');
+test('IMP3-TARGET-BINDING-001 regression: url/environment/sourceClass on a real trusted evidence object always match the FIXED registry entry, never anything a caller could have supplied alongside a valid targetKey', async () => {
+  const r = await attestRemoteRuntimeEvidence({
+    targetKey: 'reference-public-endpoint-production',
+    evidenceId: 'imp3-adv-ignored-extras', supportsClaim: true,
+    // All of these must be silently ignored -- the registry entry wins.
+    url: 'https://attacker-controlled.example.invalid', environment: 'Development', targetIdentity: 'spoofed-identity', sourceClass: 'APPLICATION_RUNTIME',
+  });
+  assert.equal(r.error, null);
+  assert.equal(r.evidence.environment, 'Production');
+  assert.equal(r.evidence.targetIdentity, 'reference-public-endpoint-production');
+  assert.equal(r.evidence.sourceClass, 'CLOUD_RUNTIME');
+});
+
+test('IMP3-TARGET-BINDING-001 regression: the SAME registry key always produces the SAME environment — it cannot be relabeled call-to-call the way the pre-remediation url+environment pair could', async () => {
+  const a = await attestRemoteRuntimeEvidence({ targetKey: 'reference-public-endpoint-production', evidenceId: 'imp3-adv-consistent-a', supportsClaim: true });
+  const b = await attestRemoteRuntimeEvidence({ targetKey: 'reference-public-endpoint-production', evidenceId: 'imp3-adv-consistent-b', supportsClaim: true });
+  assert.equal(a.evidence.environment, 'Production');
+  assert.equal(b.evidence.environment, 'Production');
+  assert.equal(a.evidence.targetIdentity, b.evidence.targetIdentity);
 });
 
 test('IMP3 ADVERSARIAL: malformed requiredVerificationLevels (a bare string, not an array) fails closed to unsatisfiable, never silently treated as "no requirement"', () => {
@@ -2023,7 +2119,7 @@ test('IMP3 ADVERSARIAL: PUBLIC_TRUST_API_INJECTABLE_DEPENDENCIES = NONE extended
   assert.equal(local.evidence.verificationLevel, 'LOCAL_RUNTIME');
 
   const remote = await attestRemoteRuntimeEvidence({
-    sourceClass: 'CLOUD_RUNTIME', url: REMOTE_RUNTIME_TEST_URL, environment: 'Production', targetIdentity: 'poison-remote', evidenceId: 'imp3-adv-poison-remote', supportsClaim: true,
+    targetKey: 'reference-public-endpoint-production', evidenceId: 'imp3-adv-poison-remote', supportsClaim: true,
     fetchFn: poisonFn, transport: poisonFn,
   });
   assert.equal(remote.error, null);

@@ -634,6 +634,11 @@ function normalizeEvidence(raw, index, isTrusted) {
     declaredVerificationLevel: verificationLevelResult.declared,
     environment: normalizeTrustGatedString(raw?.environment, isTrusted),
     targetIdentity: normalizeTrustGatedString(raw?.targetIdentity, isTrusted),
+    // NIGHT_REMEDIATION_1 (IMP3-STALENESS-001): trust-gated exactly like
+    // environment/targetIdentity — an untrusted/raw caller must never be
+    // able to fabricate a fresh-looking `observedAt` to slip past
+    // `evaluateClaim`'s `requiredMaxAgeMs` staleness filter.
+    observedAt: normalizeTrustGatedString(raw?.observedAt, isTrusted),
     sourceId: typeof raw?.sourceId === 'string' ? raw.sourceId : null,
     sourceFingerprint: fingerprint,
     supportsClaim: supportsClaimResult.value,
@@ -1284,24 +1289,57 @@ export function attestLocalRuntimeEvidence(params) {
 }
 
 // ---------------------------------------------------------------------------
-// Improvement 3/5 — the ONLY way to produce REMOTE_RUNTIME trusted evidence.
-// Performs a REAL HTTPS GET against a caller-supplied `url` — `url` is
-// OBSERVATION DATA (like `repoRoot`/`sha` elsewhere in this file), never the
-// CONCLUSION; `environment`/`targetIdentity` are MANDATORY target-binding
-// fields (Improvement 3/5, Fase 6) with no default, so a Development
-// observation can never silently stand in for Production. `strength` is
-// hardcoded to `DIRECT`, never `AUTHORITATIVE` — there is no canonical
-// anchor here the way `CANONICAL_REMOTE_URL` anchors remote-main.
+// NIGHT_REMEDIATION_1 (IMP3-TARGET-BINDING-001, CRITICAL) closes a finding
+// an independent audit reproduced against the original Improvement 3
+// design: `attestRemoteRuntimeEvidence` performed a REAL HTTPS GET, but
+// `environment`/`targetIdentity` were caller-supplied DATA treated as if
+// they were verified CONCLUSIONS — the real fetch only ever proved "this
+// URL responded"; it never proved "this URL IS the claimed environment/
+// target." Live reproduction: the SAME URL was successfully attested as
+// BOTH `Production` and `Development` in two separate calls, and an
+// arbitrary public URL (unrelated to any real Rouvy service) was attested
+// `environment: 'Production'` and used to CONFIRM a "Production Cloud Run
+// is healthy" claim. This is exactly the class of defect Improvement 2's
+// R1->R5 saga repeatedly closed for remote-main (caller supplies the
+// CONCLUSION, not just the MATERIAL) — reintroduced here because
+// REMOTE_RUNTIME, unlike remote-main, has no single canonical target to
+// hardcode.
+//
+// Fixed the same way R5 fixed remote-main: a FIXED, code-defined,
+// never-caller-supplied registry (`KNOWN_REMOTE_RUNTIME_TARGETS`) is the
+// only source of `url`/`environment`/`sourceClass` for a given target. A
+// caller selects WHICH known target to check (`targetKey` — a legitimate,
+// non-privileged choice among a FIXED set), never WHAT that target's
+// url/environment/identity actually are; `targetIdentity` on the resulting
+// evidence is the registry key itself, never a caller-supplied string.
+// This project has no real Development/Staging/Production Cloud Run URLs
+// known to this module — inventing them would be fabricating verification
+// that doesn't exist (this project's own explicit, repeated principle).
+// The registry below therefore holds only clearly-labeled, non-Rouvy
+// reference entries used to exercise this mechanism in tests; real target
+// entries must be added here by whoever configures this module against
+// actual deployed infrastructure. Until an entry exists for a given
+// target, that target simply cannot be attested — the safe state.
 // ---------------------------------------------------------------------------
 
 const REMOTE_RUNTIME_ATTESTABLE_CLASSES = Object.freeze(['APPLICATION_RUNTIME', 'CLOUD_RUNTIME']);
 
+const KNOWN_REMOTE_RUNTIME_TARGETS = Object.freeze({
+  // Reference/test-only entries — real, stable public endpoints used to
+  // exercise the REMOTE_RUNTIME mechanism itself. NOT Rouvy project
+  // targets. Add real entries here (never accept them from a caller).
+  'reference-public-endpoint-development': Object.freeze({ url: 'https://github.com', environment: 'Development', sourceClass: 'CLOUD_RUNTIME' }),
+  'reference-public-endpoint-production': Object.freeze({ url: 'https://github.com', environment: 'Production', sourceClass: 'CLOUD_RUNTIME' }),
+  // A deliberately unreachable domain, for exercising the real
+  // REMOTE_RUNTIME_UNREACHABLE fail-closed path — never resolves, by
+  // construction (`.invalid` is reserved by RFC 2606 to never be
+  // registered).
+  'reference-unreachable-endpoint': Object.freeze({ url: 'https://this-domain-genuinely-does-not-exist-korixa-imp3-test.invalid', environment: 'Production', sourceClass: 'CLOUD_RUNTIME' }),
+});
+
 /**
  * @param {object} params
- * @param {'APPLICATION_RUNTIME'|'CLOUD_RUNTIME'} params.sourceClass
- * @param {string} params.url must start with `https://`
- * @param {'Development'|'Staging'|'Production'} params.environment
- * @param {string} params.targetIdentity non-empty label identifying which resource was observed
+ * @param {string} params.targetKey must be a key in the fixed KNOWN_REMOTE_RUNTIME_TARGETS registry — url/environment/sourceClass are never caller-supplied
  * @param {number[]} [params.expectedStatusCodes] defaults to any 2xx
  * @param {string} params.evidenceId
  * @param {boolean} params.supportsClaim strict boolean, required
@@ -1315,11 +1353,15 @@ export async function attestRemoteRuntimeEvidence(params) {
     return { evidence: null, error: 'INVALID_OBSERVATION' };
   }
   const {
-    sourceClass, url, environment, targetIdentity, expectedStatusCodes,
+    targetKey, expectedStatusCodes,
     evidenceId, supportsClaim, derivedFromEvidenceIds, timestamp, verificationMethod,
   } = params;
 
-  if (!REMOTE_RUNTIME_ATTESTABLE_CLASSES.includes(sourceClass)) {
+  const target = typeof targetKey === 'string' ? KNOWN_REMOTE_RUNTIME_TARGETS[targetKey] : undefined;
+  if (!target) {
+    return { evidence: null, error: 'UNKNOWN_REMOTE_RUNTIME_TARGET' };
+  }
+  if (!REMOTE_RUNTIME_ATTESTABLE_CLASSES.includes(target.sourceClass)) {
     return { evidence: null, error: 'UNSUPPORTED_SOURCE_CLASS' };
   }
   if (!isValidEvidenceId(evidenceId)) {
@@ -1329,16 +1371,10 @@ export async function attestRemoteRuntimeEvidence(params) {
   if (!supportsClaimResult.valid) {
     return { evidence: null, error: 'INVALID_SUPPORTS_CLAIM' };
   }
-  if (!ENVIRONMENTS.includes(environment)) {
-    return { evidence: null, error: 'INVALID_ENVIRONMENT' };
-  }
-  if (typeof targetIdentity !== 'string' || targetIdentity.trim().length === 0) {
-    return { evidence: null, error: 'INVALID_TARGET_IDENTITY' };
-  }
-  if (typeof url !== 'string' || !url.startsWith('https://')) {
-    return { evidence: null, error: 'INVALID_URL' };
-  }
 
+  // From here on, url/environment/sourceClass/targetIdentity all come from
+  // the FIXED registry entry — never from `params`.
+  const { url, environment, sourceClass } = target;
   const observedAt = new Date().toISOString();
   let response;
   try {
@@ -1354,8 +1390,8 @@ export async function attestRemoteRuntimeEvidence(params) {
     strength: 'DIRECT',
     verificationLevel: 'REMOTE_RUNTIME',
     sourceFingerprint: buildRuntimeFingerprint({
-      executionId: `${url}::${observedAt}`,
-      resource: url,
+      executionId: `${targetKey}::${observedAt}`,
+      resource: targetKey,
       observationType: 'https-get-status',
     }),
     supportsClaim: supportsClaimResult.value,
@@ -1363,7 +1399,7 @@ export async function attestRemoteRuntimeEvidence(params) {
     timestamp: timestamp ?? observedAt,
     verificationMethod: typeof verificationMethod === 'string' ? verificationMethod : 'evidence-policy:attestRemoteRuntimeEvidence',
     environment,
-    targetIdentity,
+    targetIdentity: targetKey,
     observedStatusCode,
     observedAt,
   });
@@ -1410,14 +1446,59 @@ function normalizeRequiredEnvironment(raw) {
   return ENVIRONMENTS.includes(raw) ? raw : INVALID_REQUIRED_ENVIRONMENT_SENTINEL;
 }
 
+// NIGHT_REMEDIATION_1 (IMP3-STALENESS-001, MEDIUM): closes a finding an
+// independent audit reproduced — a genuinely real REMOTE_RUNTIME
+// observation from arbitrarily long ago could be reused, unchanged, to
+// "confirm" a claim about the CURRENT state, with nothing in the model
+// distinguishing "responded at T" from "is responding now." Fixed with an
+// OPTIONAL `requiredMaxAgeMs` filter, paired with a caller-supplied `now`
+// — deliberately NOT `Date.now()` called from inside this function: this
+// module's own test suite asserts `evaluateClaim` never touches the clock
+// directly (`POLICY_EVALUATOR_PURE`), and that purity is worth preserving
+// — a pure function of (evidence, now) is exactly as capable of rejecting
+// stale evidence as one that reads the clock itself, without sacrificing
+// determinism/testability. Absent `requiredMaxAgeMs`, no staleness check
+// runs (existing callers are unaffected); if `requiredMaxAgeMs` is supplied
+// without a valid `now`, or `now` cannot be parsed, the check fails closed
+// (treated as if every observation were infinitely stale) rather than
+// silently skipping the requirement the caller explicitly asked for.
+function normalizeStalenessCheck(rawMaxAgeMs, rawNow) {
+  if (rawMaxAgeMs === undefined || rawMaxAgeMs === null) return null;
+  const maxAgeMs = typeof rawMaxAgeMs === 'number' && Number.isFinite(rawMaxAgeMs) && rawMaxAgeMs >= 0 ? rawMaxAgeMs : -1;
+  const nowMs = (() => {
+    if (typeof rawNow === 'number' && Number.isFinite(rawNow)) return rawNow;
+    if (typeof rawNow === 'string') {
+      const parsed = Date.parse(rawNow);
+      return Number.isNaN(parsed) ? NaN : parsed;
+    }
+    return NaN;
+  })();
+  // maxAgeMs<0 (malformed) or nowMs NaN (missing/malformed `now`) both fail
+  // closed via an unsatisfiable check (nowMs NaN makes every comparison
+  // below false, matching "requirement present but cannot be verified").
+  return { maxAgeMs, nowMs };
+}
+
+function isEvidenceFreshEnough(e, stalenessCheck) {
+  if (stalenessCheck === null) return true;
+  if (stalenessCheck.maxAgeMs < 0 || Number.isNaN(stalenessCheck.nowMs)) return false;
+  if (typeof e.observedAt !== 'string') return false;
+  const observedAtMs = Date.parse(e.observedAt);
+  if (Number.isNaN(observedAtMs)) return false;
+  const ageMs = stalenessCheck.nowMs - observedAtMs;
+  return ageMs >= 0 && ageMs <= stalenessCheck.maxAgeMs;
+}
+
 export function evaluateClaim(params) {
   const safeParams = isPlainParamsObject(params) ? params : {};
   const {
     claimId, title, severity, evidence, singleSourceExceptionRequested = false, singleSourceExceptionReason = null,
     requiredVerificationLevels: rawRequiredVerificationLevels, requiredEnvironment: rawRequiredEnvironment,
+    requiredMaxAgeMs: rawRequiredMaxAgeMs, now: rawNow,
   } = safeParams;
   const requiredVerificationLevels = normalizeRequiredVerificationLevels(rawRequiredVerificationLevels);
   const requiredEnvironment = normalizeRequiredEnvironment(rawRequiredEnvironment);
+  const stalenessCheck = normalizeStalenessCheck(rawRequiredMaxAgeMs, rawNow);
 
   const baseResult = {
     claimId: typeof claimId === 'string' ? claimId : null,
@@ -1493,11 +1574,17 @@ export function evaluateClaim(params) {
   // evidence existed and was trusted, it just wasn't observed the way this
   // claim required — via its own decision, never silently falling through
   // to the ordinary strength-based thresholds below.
-  const verificationLevelFilterActive = requiredVerificationLevels !== null || requiredEnvironment !== null;
+  // NIGHT_REMEDIATION_1 (IMP3-STALENESS-001): `stalenessCheck` joins the
+  // same filter — an evidence entry that is the right verificationLevel/
+  // environment but too OLD relative to the caller-supplied `now` is
+  // treated identically to one of the wrong kind: excluded here, never
+  // silently allowed to certify a "right now" claim.
+  const verificationLevelFilterActive = requiredVerificationLevels !== null || requiredEnvironment !== null || stalenessCheck !== null;
   const levelFilteredForCounting = verificationLevelFilterActive
     ? eligibleForCounting.filter((e) =>
       (requiredVerificationLevels === null || requiredVerificationLevels.includes(e.verificationLevel))
-      && (requiredEnvironment === null || e.environment === requiredEnvironment))
+      && (requiredEnvironment === null || e.environment === requiredEnvironment)
+      && isEvidenceFreshEnough(e, stalenessCheck))
     : eligibleForCounting;
 
   if (verificationLevelFilterActive && eligibleForCounting.length > 0 && levelFilteredForCounting.length === 0) {
@@ -1509,7 +1596,7 @@ export function evaluateClaim(params) {
       confidence: 'UNVERIFIED',
       conflicts: [...unresolvedConflicts, ...hierarchyResolutions],
       decision: 'HOLD_INSUFFICIENT_VERIFICATION_LEVEL',
-      decisionReason: 'trusted_supporting_evidence_present_but_wrong_verification_level_or_environment',
+      decisionReason: 'trusted_supporting_evidence_present_but_wrong_verification_level_or_environment_or_too_stale',
       singleSourceExceptionUsed: false,
       singleSourceExceptionReason: null,
     };
