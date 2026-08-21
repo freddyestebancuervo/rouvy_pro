@@ -215,6 +215,75 @@
 // is this module's one narrow, disclosed exception to "never writes": the
 // directory is always empty, is never read from by this module, and exists
 // only to be ABSENT of a `.gitconfig` for the duration of one query.
+//
+// IMPROVEMENT 3/5 (this revision) adds VERIFICATION LEVEL — a new axis,
+// orthogonal to `sourceClass`/`strength`, answering "HOW was this checked?"
+// rather than "WHERE from?" or "how strong?". The incident this closes: a
+// Night Agent could read a `production-deploy.yml` (a STATIC inspection of
+// declared config) and report "Production health check works" — or run
+// `node --test` locally and report "Cloud Run Production responded" — with
+// nothing in the evidence model distinguishing "I inspected an artifact"
+// from "I actually observed this running" from "I only inferred this."
+// `sourceClass`/`strength` alone cannot express this: `REMOTE_REPOSITORY`/
+// `AUTHORITATIVE` evidence (Improvement 2's hardest-won tier) is a perfect
+// example of something that is maximally trustworthy and yet was obtained
+// entirely by STATIC content inspection (`git cat-file`) — it has never
+// executed anything. Conflating "authoritative" with "observed running" was
+// the latent gap.
+//
+// Four closed levels, reusing the enum-plus-strict-normalization pattern
+// already established for `sourceClass`/`strength`/`supportsClaim`:
+//   - `STATIC` — inspected an artifact (code, config, git content) without
+//     executing the target system. Both of Improvement 2's real attestors
+//     (`attestRemoteMainEvidence`, `attestFilesystemEvidence`) are STATIC —
+//     hardcoded by this module, never caller-declared — because neither one
+//     has ever executed anything; they only ever read committed/local
+//     content, however authoritative that content is.
+//   - `LOCAL_RUNTIME` — a real local/disposable execution actually
+//     happened. `attestLocalRuntimeEvidence` (new) is the one real,
+//     narrowly-scoped attestor: it can run exactly one thing —
+//     `node --test <repo-relative-path>` inside an Improvement-1-identity-
+//     verified `rootDir` — and reports the REAL exit code. No caller-
+//     suppliable command, executable, or arguments of any kind; this keeps
+//     the new execution surface as narrow as Improvement 1/2's git-
+//     read-only surface, deliberately not a generic command runner.
+//   - `REMOTE_RUNTIME` — the actual remote target was actually observed,
+//     just now, with enough identity to know WHICH target.
+//     `attestRemoteRuntimeEvidence` (new) performs a REAL HTTPS GET against
+//     a caller-supplied `url` and mandates two target-binding fields that
+//     cannot be omitted: `environment` (closed: `Development`/`Staging`/
+//     `Production`) and `targetIdentity` (a non-empty label). Strength is
+//     hardcoded to `DIRECT`, never `AUTHORITATIVE` — there is no canonical
+//     anchor here the way `CANONICAL_REMOTE_URL` anchors remote-main; this
+//     is a real, direct, but not canonically-pinned observation, and
+//     `strength` must say so honestly.
+//   - `INFERRED` — a reasoned conclusion, not a direct observation, even if
+//     it cites real evidence via `derivedFromEvidenceIds`. No attestor
+//     mints INFERRED — by definition it is never a real attestation, so it
+//     only ever exists as raw, untrusted evidence (P0/P1 already excludes
+//     untrusted evidence via `isTrusted`, so INFERRED structurally can
+//     never confirm a P0/P1 claim on its own).
+//
+// The trust rule (`VERIFICATION_LEVEL_CANNOT_CREATE_AUTHORITY`) is
+// asymmetric by design: a raw/untrusted evidence object claiming
+// `verificationLevel: 'REMOTE_RUNTIME'` has that claim discarded (forced to
+// `null`) exactly like an untrusted `sourceClass`/`strength` claim — but a
+// raw object claiming `verificationLevel: 'INFERRED'` keeps that label,
+// because declaring "I am only an inference" is a self-DOWNGRADE, not a
+// privilege claim; there is nothing to protect against a caller who is
+// honestly admitting their evidence is weaker than an observation.
+//
+// `evaluateClaim` gains two new, optional, orthogonal filters —
+// `requiredVerificationLevels` (e.g. `['REMOTE_RUNTIME']`) and
+// `requiredEnvironment` (e.g. `'Production'`) — applied AFTER the existing
+// trust/supportsClaim/hierarchy filter and BEFORE clustering. Evidence that
+// survives trust but fails this filter never silently falls through to the
+// ordinary strength-based thresholds; it produces the new, explicit
+// `HOLD_INSUFFICIENT_VERIFICATION_LEVEL` decision — evidence existed, just
+// not of the kind (or targeting the environment) the claim required. This
+// is what makes `LOCAL_RUNTIME` structurally unable to certify `Production`
+// and `STATIC` structurally unable to certify anything "is running":
+// neither promotion happens automatically, anywhere, by any mechanism.
 
 import { createHash } from 'node:crypto';
 import { spawnSync } from 'node:child_process';
@@ -384,8 +453,56 @@ export const DECISIONS = Object.freeze([
   'CONFIRMED_P0', 'CONFIRMED_P1', 'POTENTIAL_P0', 'POTENTIAL_P1',
   'P2', 'P3', 'HOLD_INSUFFICIENT_EVIDENCE', 'HOLD_CONFLICTING_EVIDENCE',
   'HOLD_INVALID_EVIDENCE_GRAPH', 'HOLD_UNTRUSTED_EVIDENCE', 'HOLD_DUPLICATE_EVIDENCE_ID',
+  'HOLD_INSUFFICIENT_VERIFICATION_LEVEL',
   'UNVERIFIED',
 ]);
+
+// ---------------------------------------------------------------------------
+// Improvement 3/5 — VERIFICATION LEVEL. Closed catalog, exactly these four,
+// nothing else; a `verificationLevel` of any other value (including common
+// near-misses like `'runtime'`, `'REMOTE'`, `'production'`, `'verified'`, or
+// non-string values like `null`/`{}`/`1`/`true`) is never silently coerced
+// into one of these — see `normalizeVerificationLevel` below.
+// ---------------------------------------------------------------------------
+
+export const VERIFICATION_LEVELS = Object.freeze(['STATIC', 'LOCAL_RUNTIME', 'REMOTE_RUNTIME', 'INFERRED']);
+
+// The subset of VERIFICATION_LEVELS that represent a real, direct
+// OBSERVATION (as opposed to a reasoned conclusion). Only these three are
+// subject to the trust gate below — claiming to have observed something is
+// a privilege claim; admitting a conclusion is merely inferred is not.
+const OBSERVED_VERIFICATION_LEVELS = Object.freeze(['STATIC', 'LOCAL_RUNTIME', 'REMOTE_RUNTIME']);
+
+// Closed catalog for `environment` — only ever set by `attestRemoteRuntimeEvidence`.
+export const ENVIRONMENTS = Object.freeze(['Development', 'Staging', 'Production']);
+
+// R3 (VERIFICATION_LEVEL_CANNOT_CREATE_AUTHORITY): mirrors the
+// sourceClass/strength trust gate exactly, with one deliberate asymmetry.
+// `STATIC`/`LOCAL_RUNTIME`/`REMOTE_RUNTIME` are OBSERVATION claims — an
+// untrusted (raw, non-attested) evidence object self-declaring any of them
+// has that claim discarded (forced to `null`), exactly like an untrusted
+// `sourceClass: 'REMOTE_REPOSITORY'` is forced to `'UNKNOWN'`. `INFERRED`
+// is not an observation claim — it is an admission that no direct
+// observation was made — so it is preserved regardless of trust; there is
+// no authority to fabricate by saying "this is merely inferred."
+function normalizeVerificationLevel(rawValue, isTrusted) {
+  const declared = VERIFICATION_LEVELS.includes(rawValue) ? rawValue : null;
+  if (declared === 'INFERRED') return { declared, governing: 'INFERRED' };
+  if (declared !== null && OBSERVED_VERIFICATION_LEVELS.includes(declared)) {
+    return { declared, governing: isTrusted ? declared : null };
+  }
+  return { declared: null, governing: null };
+}
+
+// `environment`/`targetIdentity` follow the same trust gate as
+// sourceClass/strength — only ever meaningful/preserved for TRUSTED
+// evidence (real attestation via `attestRemoteRuntimeEvidence`); a raw
+// caller cannot fabricate `environment: 'Production'` to slip past
+// `evaluateClaim`'s `requiredEnvironment` filter.
+function normalizeTrustGatedString(rawValue, isTrusted) {
+  if (!isTrusted) return null;
+  return typeof rawValue === 'string' && rawValue.length > 0 ? rawValue : null;
+}
 
 const EVIDENCE_ID_MAX_LENGTH = 256;
 const REASON_MIN_LENGTH = 12;
@@ -497,6 +614,7 @@ function normalizeEvidence(raw, index, isTrusted) {
     ? raw.derivedFromEvidenceIds.filter((x) => typeof x === 'string' && x.length > 0)
     : [];
   const supportsClaimResult = normalizeSupportsClaim(raw?.supportsClaim);
+  const verificationLevelResult = normalizeVerificationLevel(raw?.verificationLevel, isTrusted);
 
   return {
     evidenceId,
@@ -510,6 +628,12 @@ function normalizeEvidence(raw, index, isTrusted) {
     strength: isTrusted ? declaredStrength : 'UNVERIFIED',
     declaredSourceClass,
     declaredStrength,
+    // Improvement 3/5: same trust-gate shape as sourceClass/strength, with
+    // the INFERRED exception documented on `normalizeVerificationLevel`.
+    verificationLevel: verificationLevelResult.governing,
+    declaredVerificationLevel: verificationLevelResult.declared,
+    environment: normalizeTrustGatedString(raw?.environment, isTrusted),
+    targetIdentity: normalizeTrustGatedString(raw?.targetIdentity, isTrusted),
     sourceId: typeof raw?.sourceId === 'string' ? raw.sourceId : null,
     sourceFingerprint: fingerprint,
     supportsClaim: supportsClaimResult.value,
@@ -816,16 +940,33 @@ function isPlainParamsObject(value) {
 // verification logic).
 const FROZEN_SHA_PATTERN = /^[0-9a-f]{40}$/;
 
-function finalizeAttestedEvidence({ evidenceId, sourceClass, strength, sourceFingerprint, supportsClaim, derivedFromEvidenceIds, timestamp, verificationMethod }) {
+function finalizeAttestedEvidence({
+  evidenceId, sourceClass, strength, verificationLevel, sourceFingerprint, supportsClaim,
+  derivedFromEvidenceIds, timestamp, verificationMethod,
+  environment = null, targetIdentity = null, observedStatusCode = null, observedAt = null, observedExitCode = null,
+}) {
   const evidenceObject = Object.freeze({
     evidenceId,
     sourceClass,
     strength,
+    // Improvement 3/5: always assigned here, by the attestor itself, from a
+    // fixed internal value — NEVER from caller input — exactly like
+    // sourceClass/strength above.
+    verificationLevel,
     sourceFingerprint,
     supportsClaim,
     derivedFromEvidenceIds: Array.isArray(derivedFromEvidenceIds) ? derivedFromEvidenceIds.filter((x) => typeof x === 'string' && x.length > 0) : [],
     timestamp: timestamp ?? null,
     verificationMethod,
+    // Target-binding fields (Improvement 3/5) — null except for
+    // attestRemoteRuntimeEvidence (environment/targetIdentity/
+    // observedStatusCode/observedAt) and attestLocalRuntimeEvidence
+    // (observedExitCode).
+    environment,
+    targetIdentity,
+    observedStatusCode,
+    observedAt,
+    observedExitCode,
   });
   TRUSTED_EVIDENCE_REGISTRY.add(evidenceObject);
   return evidenceObject;
@@ -929,6 +1070,9 @@ export function attestRemoteMainEvidence(params) {
     evidenceId,
     sourceClass: 'REMOTE_REPOSITORY',
     strength: 'AUTHORITATIVE',
+    // Improvement 3/5: this is content inspection (`git cat-file`), never
+    // execution — AUTHORITATIVE and STATIC are orthogonal, not synonyms.
+    verificationLevel: 'STATIC',
     sourceFingerprint: buildGitFingerprint({ repositoryIdentity: repoRoot, sha, path: relPath }),
     supportsClaim: supportsClaimResult.value,
     derivedFromEvidenceIds,
@@ -1020,6 +1164,9 @@ export function attestFilesystemEvidence(params) {
     evidenceId,
     sourceClass,
     strength: mapping.strength,
+    // Improvement 3/5: `readFileSync` on a real local path is content
+    // inspection, never execution.
+    verificationLevel: 'STATIC',
     sourceFingerprint: buildFilesystemFingerprint({
       canonicalRepositoryIdentity: typeof expectedRootCommit === 'string' ? expectedRootCommit : '',
       canonicalPath: relPath,
@@ -1029,6 +1176,196 @@ export function attestFilesystemEvidence(params) {
     derivedFromEvidenceIds,
     timestamp,
     verificationMethod: typeof verificationMethod === 'string' ? verificationMethod : 'source-of-truth:gatherFilesystemEvidence',
+  });
+  return { evidence, error: null };
+}
+
+// ---------------------------------------------------------------------------
+// Improvement 3/5 — the ONLY way to produce LOCAL_RUNTIME trusted evidence.
+// Deliberately narrow: the only thing this function can ever execute is
+// `node --test <relPath>`, inside a `rootDir` that must first pass
+// Improvement 1's real repository-identity + path-safety + tracked-file
+// gates (via `gatherFilesystemEvidence`, unmodified) — never a
+// caller-suppliable command, executable, or argument list of any kind. This
+// keeps the new local-execution surface exactly as narrow as Improvement
+// 1/2's git-read-only surface: real, but not a generic command runner.
+// ---------------------------------------------------------------------------
+
+/**
+ * @param {object} params
+ * @param {string} params.rootDir
+ * @param {string} params.relPath repo-relative path to a real, tracked test file — the ONLY thing this function ever executes is `node --test <relPath>`
+ * @param {string} params.expectedRootCommit
+ * @param {string} params.evidenceId
+ * @param {boolean} params.supportsClaim strict boolean, required
+ * @param {string[]} [params.derivedFromEvidenceIds]
+ * @param {unknown} [params.timestamp]
+ * @param {string} [params.verificationMethod]
+ * @returns {{evidence: object|null, error: string|null}}
+ */
+export function attestLocalRuntimeEvidence(params) {
+  if (!isPlainParamsObject(params)) {
+    return { evidence: null, error: 'INVALID_OBSERVATION' };
+  }
+  const {
+    rootDir, relPath, expectedRootCommit, evidenceId, supportsClaim,
+    derivedFromEvidenceIds, timestamp, verificationMethod,
+  } = params;
+
+  if (!isValidEvidenceId(evidenceId)) {
+    return { evidence: null, error: 'INVALID_EVIDENCE_ID' };
+  }
+  const supportsClaimResult = normalizeSupportsClaim(supportsClaim);
+  if (!supportsClaimResult.valid) {
+    return { evidence: null, error: 'INVALID_SUPPORTS_CLAIM' };
+  }
+
+  // Reuse Improvement 1's real identity + path-safety + tracked-file gates
+  // to confirm `relPath` genuinely, safely exists in `rootDir` BEFORE ever
+  // spawning a process — a foreign repository, a path-traversal attempt, or
+  // an untracked path all fail exactly as Improvement 1's own gates dictate,
+  // and nothing is ever executed against an unverified path.
+  const gathered = gatherFilesystemEvidence({ sourceClass: 'LOCAL_ROOT', rootDir, relPath, expectedRootCommit });
+  if (gathered.resolutionStatus !== 'OK') {
+    return { evidence: null, error: `SOURCE_OF_TRUTH_UNVERIFIED:${gathered.resolutionStatus}` };
+  }
+
+  // The ONLY command this function can ever run. No caller-suppliable
+  // command/executable/args of any kind.
+  //
+  // `NODE_TEST_CONTEXT`/`NODE_TEST_WORKER_ID` (and any other `NODE_TEST_*`
+  // variable) are stripped from the child's environment — live-discovered
+  // during this revision's own test suite: when THIS function's caller is
+  // itself already running under `node --test` (exactly what happens when
+  // evidence-policy.test.mjs exercises this attestor), `spawnSync`'s
+  // default env inheritance passes `NODE_TEST_CONTEXT=child-v8` straight
+  // through, and the spawned `node --test` then reports itself as a
+  // coordinated CHILD of the outer run — exiting 0 regardless of whether
+  // its own tests passed. Left unfixed, that would make this attestor
+  // silently report SUCCESS for a real, observed FAILURE whenever it is
+  // invoked from within a `node --test` process — exactly the class of
+  // ambient-environment corruption this project has repeatedly had to
+  // close (see the POST-R5/IMP2-GITGLOBAL-001 header comment above).
+  const childEnv = { ...process.env };
+  for (const key of Object.keys(childEnv)) {
+    if (key.startsWith('NODE_TEST_')) delete childEnv[key];
+  }
+  const observedAt = new Date().toISOString();
+  const result = spawnSync('node', ['--test', relPath], { cwd: rootDir, encoding: 'utf8', shell: false, timeout: 120000, env: childEnv });
+  const timedOut = result.signal !== null && result.signal !== undefined;
+  if (!result || timedOut || typeof result.status !== 'number') {
+    return { evidence: null, error: 'LOCAL_RUNTIME_EXECUTION_UNRESOLVED' };
+  }
+
+  const evidence = finalizeAttestedEvidence({
+    evidenceId,
+    sourceClass: 'TEST_RUNTIME',
+    // A real execution genuinely happened either way — DIRECT reflects
+    // confidence in the OBSERVATION, not the polarity of its outcome
+    // (whether the test passed or failed is carried in `observedExitCode`;
+    // `supportsClaim` is the caller's own semantic judgment of what that
+    // outcome means for the specific claim under evaluation, exactly as
+    // for the other two attestors).
+    strength: 'DIRECT',
+    verificationLevel: 'LOCAL_RUNTIME',
+    sourceFingerprint: buildRuntimeFingerprint({
+      executionId: `${rootDir}::${relPath}::${observedAt}`,
+      resource: relPath,
+      observationType: 'node-test-exit-code',
+    }),
+    supportsClaim: supportsClaimResult.value,
+    derivedFromEvidenceIds,
+    timestamp: timestamp ?? observedAt,
+    verificationMethod: typeof verificationMethod === 'string' ? verificationMethod : 'evidence-policy:attestLocalRuntimeEvidence',
+    observedAt,
+    observedExitCode: result.status,
+  });
+  return { evidence, error: null };
+}
+
+// ---------------------------------------------------------------------------
+// Improvement 3/5 — the ONLY way to produce REMOTE_RUNTIME trusted evidence.
+// Performs a REAL HTTPS GET against a caller-supplied `url` — `url` is
+// OBSERVATION DATA (like `repoRoot`/`sha` elsewhere in this file), never the
+// CONCLUSION; `environment`/`targetIdentity` are MANDATORY target-binding
+// fields (Improvement 3/5, Fase 6) with no default, so a Development
+// observation can never silently stand in for Production. `strength` is
+// hardcoded to `DIRECT`, never `AUTHORITATIVE` — there is no canonical
+// anchor here the way `CANONICAL_REMOTE_URL` anchors remote-main.
+// ---------------------------------------------------------------------------
+
+const REMOTE_RUNTIME_ATTESTABLE_CLASSES = Object.freeze(['APPLICATION_RUNTIME', 'CLOUD_RUNTIME']);
+
+/**
+ * @param {object} params
+ * @param {'APPLICATION_RUNTIME'|'CLOUD_RUNTIME'} params.sourceClass
+ * @param {string} params.url must start with `https://`
+ * @param {'Development'|'Staging'|'Production'} params.environment
+ * @param {string} params.targetIdentity non-empty label identifying which resource was observed
+ * @param {number[]} [params.expectedStatusCodes] defaults to any 2xx
+ * @param {string} params.evidenceId
+ * @param {boolean} params.supportsClaim strict boolean, required
+ * @param {string[]} [params.derivedFromEvidenceIds]
+ * @param {unknown} [params.timestamp]
+ * @param {string} [params.verificationMethod]
+ * @returns {Promise<{evidence: object|null, error: string|null}>}
+ */
+export async function attestRemoteRuntimeEvidence(params) {
+  if (!isPlainParamsObject(params)) {
+    return { evidence: null, error: 'INVALID_OBSERVATION' };
+  }
+  const {
+    sourceClass, url, environment, targetIdentity, expectedStatusCodes,
+    evidenceId, supportsClaim, derivedFromEvidenceIds, timestamp, verificationMethod,
+  } = params;
+
+  if (!REMOTE_RUNTIME_ATTESTABLE_CLASSES.includes(sourceClass)) {
+    return { evidence: null, error: 'UNSUPPORTED_SOURCE_CLASS' };
+  }
+  if (!isValidEvidenceId(evidenceId)) {
+    return { evidence: null, error: 'INVALID_EVIDENCE_ID' };
+  }
+  const supportsClaimResult = normalizeSupportsClaim(supportsClaim);
+  if (!supportsClaimResult.valid) {
+    return { evidence: null, error: 'INVALID_SUPPORTS_CLAIM' };
+  }
+  if (!ENVIRONMENTS.includes(environment)) {
+    return { evidence: null, error: 'INVALID_ENVIRONMENT' };
+  }
+  if (typeof targetIdentity !== 'string' || targetIdentity.trim().length === 0) {
+    return { evidence: null, error: 'INVALID_TARGET_IDENTITY' };
+  }
+  if (typeof url !== 'string' || !url.startsWith('https://')) {
+    return { evidence: null, error: 'INVALID_URL' };
+  }
+
+  const observedAt = new Date().toISOString();
+  let response;
+  try {
+    response = await fetch(url, { method: 'GET', redirect: 'manual', signal: AbortSignal.timeout(10000) });
+  } catch {
+    return { evidence: null, error: 'REMOTE_RUNTIME_UNREACHABLE' };
+  }
+  const observedStatusCode = response.status;
+
+  const evidence = finalizeAttestedEvidence({
+    evidenceId,
+    sourceClass,
+    strength: 'DIRECT',
+    verificationLevel: 'REMOTE_RUNTIME',
+    sourceFingerprint: buildRuntimeFingerprint({
+      executionId: `${url}::${observedAt}`,
+      resource: url,
+      observationType: 'https-get-status',
+    }),
+    supportsClaim: supportsClaimResult.value,
+    derivedFromEvidenceIds,
+    timestamp: timestamp ?? observedAt,
+    verificationMethod: typeof verificationMethod === 'string' ? verificationMethod : 'evidence-policy:attestRemoteRuntimeEvidence',
+    environment,
+    targetIdentity,
+    observedStatusCode,
+    observedAt,
   });
   return { evidence, error: null };
 }
@@ -1052,9 +1389,35 @@ export function attestFilesystemEvidence(params) {
  * @param {string} [params.singleSourceExceptionReason]
  * @returns {object} ClaimEvaluation
  */
+// Improvement 3/5: normalizes `evaluateClaim`'s optional
+// `requiredVerificationLevels` filter. Absent/null -> no filter (`null`).
+// Present but malformed (not an array, or an array whose members are not
+// all recognized VERIFICATION_LEVELS) -> an empty array, which structurally
+// matches NOTHING — a malformed requirement must never silently relax into
+// "no requirement" (fail closed, never fail open on garbage config).
+function normalizeRequiredVerificationLevels(raw) {
+  if (raw === undefined || raw === null) return null;
+  if (!Array.isArray(raw)) return [];
+  return raw.filter((level) => VERIFICATION_LEVELS.includes(level));
+}
+
+// Same fail-closed shape for `requiredEnvironment`: absent/null -> no
+// filter; present but not a real ENVIRONMENTS member -> a sentinel that can
+// never match any real evidence's `.environment`.
+const INVALID_REQUIRED_ENVIRONMENT_SENTINEL = '__INVALID_REQUIRED_ENVIRONMENT__';
+function normalizeRequiredEnvironment(raw) {
+  if (raw === undefined || raw === null) return null;
+  return ENVIRONMENTS.includes(raw) ? raw : INVALID_REQUIRED_ENVIRONMENT_SENTINEL;
+}
+
 export function evaluateClaim(params) {
   const safeParams = isPlainParamsObject(params) ? params : {};
-  const { claimId, title, severity, evidence, singleSourceExceptionRequested = false, singleSourceExceptionReason = null } = safeParams;
+  const {
+    claimId, title, severity, evidence, singleSourceExceptionRequested = false, singleSourceExceptionReason = null,
+    requiredVerificationLevels: rawRequiredVerificationLevels, requiredEnvironment: rawRequiredEnvironment,
+  } = safeParams;
+  const requiredVerificationLevels = normalizeRequiredVerificationLevels(rawRequiredVerificationLevels);
+  const requiredEnvironment = normalizeRequiredEnvironment(rawRequiredEnvironment);
 
   const baseResult = {
     claimId: typeof claimId === 'string' ? claimId : null,
@@ -1120,7 +1483,39 @@ export function evaluateClaim(params) {
     && !e.supportsClaimInvalid
     && !hierarchyLosers.has(e.evidenceId)
     && (!requiresTrust || e.isTrusted));
-  const clusters = clusterEligibleEvidence(eligibleForCounting);
+
+  // Improvement 3/5: applied AFTER the existing trust/supportsClaim/
+  // hierarchy filter, BEFORE clustering — a SEPARATE axis from trust. This
+  // is what makes STATIC/LOCAL_RUNTIME structurally unable to certify a
+  // claim that requires REMOTE_RUNTIME (or a specific environment): the
+  // evidence can be perfectly trusted and still not be the RIGHT KIND of
+  // observation. Distinguished explicitly from "no evidence at all" —
+  // evidence existed and was trusted, it just wasn't observed the way this
+  // claim required — via its own decision, never silently falling through
+  // to the ordinary strength-based thresholds below.
+  const verificationLevelFilterActive = requiredVerificationLevels !== null || requiredEnvironment !== null;
+  const levelFilteredForCounting = verificationLevelFilterActive
+    ? eligibleForCounting.filter((e) =>
+      (requiredVerificationLevels === null || requiredVerificationLevels.includes(e.verificationLevel))
+      && (requiredEnvironment === null || e.environment === requiredEnvironment))
+    : eligibleForCounting;
+
+  if (verificationLevelFilterActive && eligibleForCounting.length > 0 && levelFilteredForCounting.length === 0) {
+    return {
+      ...baseResult,
+      evidence: normalized,
+      effectiveEvidence: [],
+      effectiveEvidenceCount: 0,
+      confidence: 'UNVERIFIED',
+      conflicts: [...unresolvedConflicts, ...hierarchyResolutions],
+      decision: 'HOLD_INSUFFICIENT_VERIFICATION_LEVEL',
+      decisionReason: 'trusted_supporting_evidence_present_but_wrong_verification_level_or_environment',
+      singleSourceExceptionUsed: false,
+      singleSourceExceptionReason: null,
+    };
+  }
+
+  const clusters = clusterEligibleEvidence(levelFilteredForCounting);
   const effectiveClusters = clusters.map((cluster) => ({
     evidenceIds: cluster.map((e) => e.evidenceId),
     sourceClasses: [...new Set(cluster.map((e) => e.sourceClass))],

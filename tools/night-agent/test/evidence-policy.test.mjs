@@ -14,9 +14,13 @@ const {
   SEVERITIES,
   CONFIDENCE_LEVELS,
   DECISIONS,
+  VERIFICATION_LEVELS,
+  ENVIRONMENTS,
   evaluateClaim,
   attestRemoteMainEvidence,
   attestFilesystemEvidence,
+  attestLocalRuntimeEvidence,
+  attestRemoteRuntimeEvidence,
   sameUnderlyingSource,
   buildGitFingerprint,
   buildFilesystemFingerprint,
@@ -198,6 +202,22 @@ function buildFsFixture(prefix) {
   return { rootDir, rootCommit };
 }
 
+// A real, identity-verified local repo containing two real, tiny
+// node:test files — one that always passes, one that always fails — so
+// attestLocalRuntimeEvidence's real `node --test` execution can be
+// exercised deterministically and fast for both outcomes, without needing
+// the full project checkout.
+function buildLocalRuntimeFixture(prefix) {
+  const rootDir = mkTmpDir(prefix);
+  initRepo(rootDir);
+  writeFileSync(path.join(rootDir, 'passing.test.mjs'), "import test from 'node:test';\ntest('always passes', () => {});\n");
+  writeFileSync(path.join(rootDir, 'failing.test.mjs'), "import test from 'node:test';\nimport assert from 'node:assert/strict';\ntest('always fails', () => { assert.equal(1, 2); });\n");
+  git(rootDir, ['add', 'passing.test.mjs', 'failing.test.mjs']);
+  git(rootDir, ['commit', '-q', '-m', `local-runtime-fixture (${rootDir})`]);
+  const rootCommit = git(rootDir, ['rev-parse', 'HEAD']);
+  return { rootDir, rootCommit };
+}
+
 let projectClone;
 let realCanonicalCurrentSha;
 let syntheticForeignRepo;
@@ -206,6 +226,7 @@ let fsFixture;
 let foreignFsFixture;
 
 let gitGlobalConfigAttackFixture;
+let localRuntimeFixture;
 
 before(() => {
   realCanonicalCurrentSha = discoverRealCanonicalCurrentSha();
@@ -215,6 +236,7 @@ before(() => {
   fsFixture = buildFsFixture('korixa-r4-fs-');
   foreignFsFixture = buildFsFixture('korixa-r4-foreign-fs-');
   gitGlobalConfigAttackFixture = buildGitGlobalConfigAttackFixture();
+  localRuntimeFixture = buildLocalRuntimeFixture('korixa-imp3-local-runtime-');
 });
 
 after(() => {
@@ -1267,7 +1289,15 @@ test('PUBLIC_THRESHOLD_BYPASS = ABSENT: no exported function accepts bare streng
 test('AUTHORITATIVE_DECISION_PATHS: evaluateClaim is the only export whose result can legitimately equal CONFIRMED_P0/CONFIRMED_P1', () => {
   const decisionCapableExports = Object.entries(EvidencePolicy).filter(([, v]) => typeof v === 'function');
   const names = decisionCapableExports.map(([name]) => name);
-  assert.deepEqual(names.sort(), ['attestFilesystemEvidence', 'attestRemoteMainEvidence', 'buildCiFingerprint', 'buildFilesystemFingerprint', 'buildGitFingerprint', 'buildRuntimeFingerprint', 'evaluateClaim', 'sameUnderlyingSource'].sort());
+  assert.deepEqual(names.sort(), [
+    'attestFilesystemEvidence', 'attestRemoteMainEvidence', 'attestLocalRuntimeEvidence', 'attestRemoteRuntimeEvidence',
+    'buildCiFingerprint', 'buildFilesystemFingerprint', 'buildGitFingerprint', 'buildRuntimeFingerprint',
+    'evaluateClaim', 'sameUnderlyingSource',
+  ].sort());
+  // None of the four attest* functions return a `decision` field at all —
+  // they return { evidence, error } — so none of them are decision-capable
+  // regardless of this list; only evaluateClaim's RESULT can ever contain
+  // `decision: 'CONFIRMED_P0'|'CONFIRMED_P1'`.
 });
 
 // P0/P1 threshold combinations achievable with REAL attested evidence
@@ -1594,4 +1624,408 @@ test('R5: the canonical currentness query targets github.com over HTTPS, never a
 test('SOURCE_OF_TRUTH_CONTRACT_CHANGED = NO: source-of-truth.mjs exports used here (gatherRemoteMainEvidence, gatherFilesystemEvidence, SOURCE_CLASSES) are called with their existing, unmodified signatures', () => {
   const { evidence } = attestRemoteMainEvidence({ repoRoot: projectClone.repoDir, sha: realCanonicalCurrentSha, relPath: 'PROJECT_STATUS.md', evidenceId: 'contract-check', supportsClaim: true });
   assert.notEqual(evidence, null);
+});
+
+// =============================================================================
+// IMPROVEMENT 3/5 — VERIFICATION LEVELS / EVIDENCE PROVENANCE
+//
+// STATIC/LOCAL_RUNTIME/REMOTE_RUNTIME evidence below is produced by REAL
+// attestation (real `git`/`node --test`/HTTPS calls against real, disposable
+// fixtures or a real, small, fast public HTTPS endpoint) — never mocked,
+// per this project's established testing discipline. REMOTE_RUNTIME tests
+// legitimately depend on network reachability to https://github.com, the
+// same disclosed tradeoff the R5-era canonical-currentness tests already
+// carry.
+// =============================================================================
+
+const REMOTE_RUNTIME_TEST_URL = 'https://github.com';
+const REMOTE_RUNTIME_UNREACHABLE_URL = 'https://this-domain-genuinely-does-not-exist-korixa-imp3-test.invalid';
+
+test('VERIFICATION_LEVELS is the exact closed catalog: STATIC, LOCAL_RUNTIME, REMOTE_RUNTIME, INFERRED — nothing else', () => {
+  assert.deepEqual([...VERIFICATION_LEVELS], ['STATIC', 'LOCAL_RUNTIME', 'REMOTE_RUNTIME', 'INFERRED']);
+});
+
+test('ENVIRONMENTS is the exact closed catalog: Development, Staging, Production', () => {
+  assert.deepEqual([...ENVIRONMENTS], ['Development', 'Staging', 'Production']);
+});
+
+// ---------------------------------------------------------------------------
+// A. STATIC valid
+// ---------------------------------------------------------------------------
+
+test('IMP3 CASE A: attestRemoteMainEvidence and attestFilesystemEvidence always produce verificationLevel STATIC (real content inspection, never execution)', () => {
+  const remote = attestRemoteMainEvidence({ repoRoot: projectClone.repoDir, sha: realCanonicalCurrentSha, relPath: 'PROJECT_STATUS.md', evidenceId: 'imp3-a-remote', supportsClaim: true });
+  assert.equal(remote.evidence.verificationLevel, 'STATIC');
+  const fs = attestFilesystemEvidence({ sourceClass: 'LOCAL_FILESYSTEM', rootDir: fsFixture.rootDir, relPath: 'a.md', expectedRootCommit: fsFixture.rootCommit, evidenceId: 'imp3-a-fs', supportsClaim: true });
+  assert.equal(fs.evidence.verificationLevel, 'STATIC');
+});
+
+// ---------------------------------------------------------------------------
+// B. LOCAL_RUNTIME valid
+// ---------------------------------------------------------------------------
+
+test('IMP3 CASE B: attestLocalRuntimeEvidence really runs `node --test` and produces trusted LOCAL_RUNTIME evidence with the real exit code', () => {
+  const passing = attestLocalRuntimeEvidence({ rootDir: localRuntimeFixture.rootDir, relPath: 'passing.test.mjs', expectedRootCommit: localRuntimeFixture.rootCommit, evidenceId: 'imp3-b-pass', supportsClaim: true });
+  assert.equal(passing.error, null);
+  assert.equal(passing.evidence.verificationLevel, 'LOCAL_RUNTIME');
+  assert.equal(passing.evidence.sourceClass, 'TEST_RUNTIME');
+  assert.equal(passing.evidence.observedExitCode, 0);
+
+  const failing = attestLocalRuntimeEvidence({ rootDir: localRuntimeFixture.rootDir, relPath: 'failing.test.mjs', expectedRootCommit: localRuntimeFixture.rootCommit, evidenceId: 'imp3-b-fail', supportsClaim: false });
+  assert.equal(failing.error, null, 'a real FAILING test execution is still real, valid evidence — the attestor does not refuse bad news');
+  assert.equal(failing.evidence.verificationLevel, 'LOCAL_RUNTIME');
+  assert.notEqual(failing.evidence.observedExitCode, 0);
+});
+
+test('IMP3: attestLocalRuntimeEvidence refuses to execute anything against an unverified path/repo (foreign repo, path traversal)', () => {
+  const foreign = attestLocalRuntimeEvidence({ rootDir: foreignFsFixture.rootDir, relPath: 'passing.test.mjs', expectedRootCommit: localRuntimeFixture.rootCommit, evidenceId: 'imp3-b-foreign', supportsClaim: true });
+  assert.equal(foreign.evidence, null);
+  assert.match(foreign.error, /HOLD_REPOSITORY_IDENTITY_UNVERIFIED|SOURCE_OF_TRUTH_UNVERIFIED/);
+
+  const traversal = attestLocalRuntimeEvidence({ rootDir: localRuntimeFixture.rootDir, relPath: '../../../etc/passwd', expectedRootCommit: localRuntimeFixture.rootCommit, evidenceId: 'imp3-b-traversal', supportsClaim: true });
+  assert.equal(traversal.evidence, null);
+});
+
+// ---------------------------------------------------------------------------
+// C. REMOTE_RUNTIME valid, target well-identified
+// ---------------------------------------------------------------------------
+
+test('IMP3 CASE C: attestRemoteRuntimeEvidence really performs an HTTPS GET and produces trusted REMOTE_RUNTIME evidence with a real, well-identified target', async () => {
+  const r = await attestRemoteRuntimeEvidence({
+    sourceClass: 'CLOUD_RUNTIME', url: REMOTE_RUNTIME_TEST_URL, environment: 'Production', targetIdentity: 'synthetic-production-target-c',
+    evidenceId: 'imp3-c', supportsClaim: true,
+  });
+  assert.equal(r.error, null);
+  assert.equal(r.evidence.verificationLevel, 'REMOTE_RUNTIME');
+  assert.equal(r.evidence.strength, 'DIRECT');
+  assert.equal(r.evidence.environment, 'Production');
+  assert.equal(r.evidence.targetIdentity, 'synthetic-production-target-c');
+  assert.equal(typeof r.evidence.observedStatusCode, 'number');
+  assert.equal(typeof r.evidence.observedAt, 'string');
+});
+
+test('IMP3: attestRemoteRuntimeEvidence fails closed (never throws, never fabricates trust) when the target is genuinely unreachable', async () => {
+  const r = await attestRemoteRuntimeEvidence({
+    sourceClass: 'CLOUD_RUNTIME', url: REMOTE_RUNTIME_UNREACHABLE_URL, environment: 'Production', targetIdentity: 'unreachable-target',
+    evidenceId: 'imp3-c-unreachable', supportsClaim: true,
+  });
+  assert.equal(r.evidence, null);
+  assert.equal(r.error, 'REMOTE_RUNTIME_UNREACHABLE');
+});
+
+// ---------------------------------------------------------------------------
+// D. INFERRED valid
+// ---------------------------------------------------------------------------
+
+test('IMP3 CASE D: raw evidence declaring verificationLevel INFERRED preserves that label (self-downgrade, not a privilege claim) and can support P2/P3, never P0/P1 alone', () => {
+  const inferred = rawEv({ evidenceId: 'imp3-d', verificationLevel: 'INFERRED', derivedFromEvidenceIds: ['imp3-d-source'], sourceFingerprint: 'fp-imp3-d' });
+  const p2 = evaluateClaim({ claimId: 'c', title: 't', severity: 'P2', evidence: [inferred] });
+  assert.equal(p2.evidence[0].verificationLevel, 'INFERRED');
+  assert.equal(p2.decision, 'P2');
+  const p0 = evaluateClaim({ claimId: 'c', title: 't', severity: 'P0', evidence: [inferred], singleSourceExceptionRequested: true, singleSourceExceptionReason: VALID_REASON });
+  assert.notEqual(p0.decision, 'CONFIRMED_P0');
+});
+
+// ---------------------------------------------------------------------------
+// E / F. unknown / missing verification level -> fail closed, conservative
+// ---------------------------------------------------------------------------
+
+for (const badLevel of ['runtime', 'REMOTE', 'production', 'verified', null, {}, [], 1, true]) {
+  test(`IMP3 CASE E: unrecognized verificationLevel (${JSON.stringify(badLevel)}) fails closed to null, never silently coerced`, () => {
+    const r = evaluateClaim({ claimId: 'c', title: 't', severity: 'P2', evidence: [rawEv({ evidenceId: 'e', verificationLevel: badLevel, sourceFingerprint: 'fp-bad-level' })] });
+    assert.equal(r.evidence[0].verificationLevel, null);
+    assert.equal(r.evidence[0].declaredVerificationLevel, null);
+  });
+}
+
+test('IMP3 CASE F: missing verificationLevel (omitted entirely) is conservative — null, never assumed REMOTE_RUNTIME or any other level', () => {
+  const r = evaluateClaim({ claimId: 'c', title: 't', severity: 'P2', evidence: [{ evidenceId: 'e', sourceFingerprint: 'fp-missing-level', supportsClaim: true }] });
+  assert.equal(r.evidence[0].verificationLevel, null);
+});
+
+// ---------------------------------------------------------------------------
+// G. STATIC cannot certify remote runtime
+// ---------------------------------------------------------------------------
+
+test('IMP3 CASE G: STATIC evidence alone cannot satisfy a claim that requires REMOTE_RUNTIME', () => {
+  const staticEv = attestFilesystemEvidence({ sourceClass: 'LOCAL_FILESYSTEM', rootDir: fsFixture.rootDir, relPath: 'a.md', expectedRootCommit: fsFixture.rootCommit, evidenceId: 'imp3-g', supportsClaim: true });
+  const r = evaluateClaim({
+    claimId: 'c', title: 'Production health check works', severity: 'P1', evidence: [staticEv.evidence],
+    requiredVerificationLevels: ['REMOTE_RUNTIME'], singleSourceExceptionRequested: true, singleSourceExceptionReason: VALID_REASON,
+  });
+  assert.equal(r.decision, 'HOLD_INSUFFICIENT_VERIFICATION_LEVEL');
+});
+
+// ---------------------------------------------------------------------------
+// H. LOCAL_RUNTIME cannot certify Production
+// ---------------------------------------------------------------------------
+
+test('IMP3 CASE H: LOCAL_RUNTIME evidence alone cannot satisfy a claim that requires REMOTE_RUNTIME/Production', () => {
+  const localEv = attestLocalRuntimeEvidence({ rootDir: localRuntimeFixture.rootDir, relPath: 'passing.test.mjs', expectedRootCommit: localRuntimeFixture.rootCommit, evidenceId: 'imp3-h', supportsClaim: true });
+  const r = evaluateClaim({
+    claimId: 'c', title: 'Cloud Run Production is running', severity: 'P1', evidence: [localEv.evidence],
+    requiredVerificationLevels: ['REMOTE_RUNTIME'], requiredEnvironment: 'Production',
+    singleSourceExceptionRequested: true, singleSourceExceptionReason: VALID_REASON,
+  });
+  assert.equal(r.decision, 'HOLD_INSUFFICIENT_VERIFICATION_LEVEL');
+});
+
+// ---------------------------------------------------------------------------
+// I. INFERRED cannot become an observation
+// ---------------------------------------------------------------------------
+
+test('IMP3 CASE I: INFERRED evidence can never satisfy a claim that requires an OBSERVED level (STATIC/LOCAL_RUNTIME/REMOTE_RUNTIME)', () => {
+  const inferred = rawEv({ evidenceId: 'imp3-i', verificationLevel: 'INFERRED', sourceFingerprint: 'fp-imp3-i' });
+  for (const level of ['STATIC', 'LOCAL_RUNTIME', 'REMOTE_RUNTIME']) {
+    const r = evaluateClaim({ claimId: 'c', title: 't', severity: 'P2', evidence: [inferred], requiredVerificationLevels: [level] });
+    assert.equal(r.decision, 'HOLD_INSUFFICIENT_VERIFICATION_LEVEL', `INFERRED must not satisfy a ${level} requirement`);
+  }
+});
+
+// ---------------------------------------------------------------------------
+// J. caller raw with REMOTE_RUNTIME gets no trust
+// ---------------------------------------------------------------------------
+
+test('IMP3 CASE J: a raw (untrusted) evidence object self-declaring verificationLevel REMOTE_RUNTIME + environment Production never gains trust', () => {
+  const fake = { evidenceId: 'imp3-j', sourceClass: 'CLOUD_RUNTIME', strength: 'DIRECT', verificationLevel: 'REMOTE_RUNTIME', environment: 'Production', targetIdentity: 'fake-target', supportsClaim: true, sourceFingerprint: 'fp-imp3-j' };
+  const r = evaluateClaim({ claimId: 'c', title: 't', severity: 'P0', evidence: [fake], singleSourceExceptionRequested: true, singleSourceExceptionReason: VALID_REASON });
+  assert.equal(r.decision, 'HOLD_UNTRUSTED_EVIDENCE');
+  assert.equal(r.evidence[0].verificationLevel, null);
+  assert.equal(r.evidence[0].environment, null);
+});
+
+// ---------------------------------------------------------------------------
+// K. REMOTE_REPOSITORY does not auto-become REMOTE_RUNTIME
+// ---------------------------------------------------------------------------
+
+test('IMP3 CASE K: REMOTE_REPOSITORY/AUTHORITATIVE evidence is always verificationLevel STATIC, never REMOTE_RUNTIME, however strong', () => {
+  const r = attestRemoteMainEvidence({ repoRoot: projectClone.repoDir, sha: realCanonicalCurrentSha, relPath: 'README.md', evidenceId: 'imp3-k', supportsClaim: true });
+  assert.equal(r.evidence.sourceClass, 'REMOTE_REPOSITORY');
+  assert.equal(r.evidence.strength, 'AUTHORITATIVE');
+  assert.equal(r.evidence.verificationLevel, 'STATIC');
+  const claimRequiringRuntime = evaluateClaim({ claimId: 'c', title: 't', severity: 'P0', evidence: [r.evidence], requiredVerificationLevels: ['REMOTE_RUNTIME'], singleSourceExceptionRequested: true, singleSourceExceptionReason: VALID_REASON });
+  assert.equal(claimRequiringRuntime.decision, 'HOLD_INSUFFICIENT_VERIFICATION_LEVEL');
+});
+
+// ---------------------------------------------------------------------------
+// L. CI evidence does not imply Production runtime automatically
+// ---------------------------------------------------------------------------
+
+test('IMP3 CASE L: CI_RUNTIME is not an attestable REMOTE_RUNTIME sourceClass, and a raw CI_RUNTIME/REMOTE_RUNTIME self-declaration gains no trust either', () => {
+  const rejected = attestRemoteRuntimeEvidence;
+  const attemptViaRealAttestor = () => rejected({ sourceClass: 'CI_RUNTIME', url: REMOTE_RUNTIME_TEST_URL, environment: 'Production', targetIdentity: 'ci-run', evidenceId: 'imp3-l-a', supportsClaim: true });
+  return attemptViaRealAttestor().then((r) => {
+    assert.equal(r.evidence, null);
+    assert.equal(r.error, 'UNSUPPORTED_SOURCE_CLASS');
+
+    const fakeCi = rawEv({ evidenceId: 'imp3-l-b', sourceClass: 'CI_RUNTIME', verificationLevel: 'REMOTE_RUNTIME', environment: 'Production', targetIdentity: 'ci-run-2', sourceFingerprint: 'fp-imp3-l' });
+    const claim = evaluateClaim({ claimId: 'c', title: 't', severity: 'P0', evidence: [fakeCi], singleSourceExceptionRequested: true, singleSourceExceptionReason: VALID_REASON });
+    assert.equal(claim.decision, 'HOLD_UNTRUSTED_EVIDENCE');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// M. Development REMOTE_RUNTIME does not confirm Production
+// ---------------------------------------------------------------------------
+
+test('IMP3 CASE M: a real, trusted REMOTE_RUNTIME/Development observation cannot satisfy a claim requiring Production', async () => {
+  const devEv = await attestRemoteRuntimeEvidence({ sourceClass: 'CLOUD_RUNTIME', url: REMOTE_RUNTIME_TEST_URL, environment: 'Development', targetIdentity: 'dev-target-m', evidenceId: 'imp3-m', supportsClaim: true });
+  assert.equal(devEv.evidence.environment, 'Development');
+  const claim = evaluateClaim({
+    claimId: 'c', title: 'Production is healthy', severity: 'P1', evidence: [devEv.evidence],
+    requiredVerificationLevels: ['REMOTE_RUNTIME'], requiredEnvironment: 'Production',
+    singleSourceExceptionRequested: true, singleSourceExceptionReason: VALID_REASON,
+  });
+  assert.equal(claim.decision, 'HOLD_INSUFFICIENT_VERIFICATION_LEVEL');
+});
+
+// ---------------------------------------------------------------------------
+// N. same source, different verificationLevel labels does not inflate count
+// ---------------------------------------------------------------------------
+
+test('IMP3 CASE N: the same underlying source copied three times with three different (self-declared, untrusted) verificationLevel labels still clusters as ONE source, not three independent ones', () => {
+  const shared = { evidenceId: 'imp3-n-1', sourceClass: 'STATIC_CODE', strength: 'DIRECT', verificationLevel: 'STATIC', supportsClaim: true, sourceFingerprint: 'fp-imp3-n-shared' };
+  const copyLocal = { ...shared, evidenceId: 'imp3-n-2', verificationLevel: 'LOCAL_RUNTIME' };
+  const copyRemote = { ...shared, evidenceId: 'imp3-n-3', verificationLevel: 'REMOTE_RUNTIME' };
+  const r = evaluateClaim({ claimId: 'c', title: 't', severity: 'P2', evidence: [shared, copyLocal, copyRemote] });
+  assert.equal(r.effectiveEvidenceCount, 1, 'same sourceFingerprint must cluster to one independent source regardless of differing verificationLevel labels');
+});
+
+// ---------------------------------------------------------------------------
+// O. derived inference remains INFERRED
+// ---------------------------------------------------------------------------
+
+test('IMP3 CASE O: an inference derivedFrom a real REMOTE_RUNTIME evidence stays verificationLevel INFERRED — never auto-promoted', async () => {
+  const remoteEv = await attestRemoteRuntimeEvidence({ sourceClass: 'CLOUD_RUNTIME', url: REMOTE_RUNTIME_TEST_URL, environment: 'Production', targetIdentity: 'imp3-o-source', evidenceId: 'imp3-o-source', supportsClaim: true });
+  const inference = { evidenceId: 'imp3-o-inference', verificationLevel: 'INFERRED', derivedFromEvidenceIds: ['imp3-o-source'], sourceFingerprint: 'fp-imp3-o-inference', supportsClaim: true };
+  const r = evaluateClaim({ claimId: 'c', title: 't', severity: 'P2', evidence: [remoteEv.evidence, inference] });
+  const inferenceResult = r.evidence.find((e) => e.evidenceId === 'imp3-o-inference');
+  assert.equal(inferenceResult.verificationLevel, 'INFERRED');
+});
+
+// ---------------------------------------------------------------------------
+// P. order independence still holds with the new fields
+// ---------------------------------------------------------------------------
+
+test('IMP3 CASE P: order independence still holds when verificationLevel/environment fields are present', () => {
+  const evs = [
+    rawEv({ evidenceId: 'a', strength: 'DIRECT', verificationLevel: 'STATIC', sourceFingerprint: 'fpA' }),
+    rawEv({ evidenceId: 'b', strength: 'CORROBORATIVE', verificationLevel: 'INFERRED', sourceFingerprint: 'fpB' }),
+    rawEv({ evidenceId: 'c', strength: 'HISTORICAL', verificationLevel: 'INFERRED', sourceFingerprint: 'fpC' }),
+  ];
+  const forward = evaluateClaim({ claimId: 'c', title: 't', severity: 'P2', evidence: evs });
+  const reversed = evaluateClaim({ claimId: 'c', title: 't', severity: 'P2', evidence: [...evs].reverse() });
+  assert.deepEqual(forward.decision, reversed.decision);
+  assert.equal(forward.effectiveEvidenceCount, reversed.effectiveEvidenceCount);
+});
+
+// ---------------------------------------------------------------------------
+// Q. duplicate evidence IDs still fail closed
+// ---------------------------------------------------------------------------
+
+test('IMP3 CASE Q: duplicate evidenceId still fails closed (HOLD_DUPLICATE_EVIDENCE_ID) even when verificationLevel differs between the duplicates', () => {
+  const r = evaluateClaim({
+    claimId: 'c', title: 't', severity: 'P2',
+    evidence: [
+      rawEv({ evidenceId: 'dup', verificationLevel: 'STATIC', sourceFingerprint: 'fp1' }),
+      rawEv({ evidenceId: 'dup', verificationLevel: 'REMOTE_RUNTIME', sourceFingerprint: 'fp2' }),
+    ],
+  });
+  assert.equal(r.decision, 'HOLD_DUPLICATE_EVIDENCE_ID');
+});
+
+// ---------------------------------------------------------------------------
+// R. historical SHA regression (unaffected by Improvement 3)
+// ---------------------------------------------------------------------------
+
+test('IMP3 CASE R: IMP2-HISTSHA-001 remains closed — a real historical SHA is still denied, now also confirmed STATIC-only and never LOCAL/REMOTE_RUNTIME', () => {
+  const r = attestRemoteMainEvidence({ repoRoot: projectClone.repoDir, sha: HISTORICAL_SHA, relPath: 'PROJECT_STATUS.md', evidenceId: 'imp3-r', supportsClaim: true });
+  assert.equal(r.evidence, null);
+  assert.equal(r.error, 'NOT_CURRENT_REMOTE_MAIN');
+});
+
+// ---------------------------------------------------------------------------
+// S. HOME/global git config attacks remain closed (unaffected by Improvement 3)
+// ---------------------------------------------------------------------------
+
+test('IMP3 CASE S: IMP2-GITGLOBAL-001 remains closed — a hostile HOME still cannot redirect canonical currentness after the Improvement 3 changes', () => {
+  const result = withEnvOverrides({ HOME: gitGlobalConfigAttackFixture.homeDir }, () => attestRemoteMainEvidence({
+    repoRoot: projectClone.repoDir, sha: HISTORICAL_SHA, relPath: 'PROJECT_STATUS.md', evidenceId: 'imp3-s', supportsClaim: true,
+  }));
+  assert.equal(result.evidence, null);
+  assert.equal(result.error, 'NOT_CURRENT_REMOTE_MAIN');
+});
+
+// ---------------------------------------------------------------------------
+// T. positive P0 behavior with trusted evidence continues to work
+// ---------------------------------------------------------------------------
+
+test('IMP3 CASE T: positive P0 confirmation with real trusted evidence (AUTHORITATIVE remote + DIRECT local) still works, unaffected by the new verification-level axis when no requirement is specified', () => {
+  const a = attestRemoteMainEvidence({ repoRoot: projectClone.repoDir, sha: realCanonicalCurrentSha, relPath: 'PROJECT_STATUS.md', evidenceId: 'imp3-t-a', supportsClaim: true });
+  const b = attestFilesystemEvidence({ sourceClass: 'LOCAL_FILESYSTEM', rootDir: fsFixture.rootDir, relPath: 'b.md', expectedRootCommit: fsFixture.rootCommit, evidenceId: 'imp3-t-b', supportsClaim: true });
+  const r = evaluateClaim({ claimId: 'c', title: 't', severity: 'P0', evidence: [a.evidence, b.evidence] });
+  assert.equal(r.decision, 'CONFIRMED_P0');
+});
+
+// ---------------------------------------------------------------------------
+// Fase 11 — integrated incident scenario
+// ---------------------------------------------------------------------------
+
+test('IMP3 INCIDENT: STATIC + LOCAL_RUNTIME evidence cannot confirm "Production Cloud Run is running"; adding a real, trusted REMOTE_RUNTIME/Production observation correctly changes the outcome', async () => {
+  const staticEv = attestFilesystemEvidence({ sourceClass: 'LOCAL_FILESYSTEM', rootDir: fsFixture.rootDir, relPath: 'a.md', expectedRootCommit: fsFixture.rootCommit, evidenceId: 'incident-static', supportsClaim: true });
+  const localEv = attestLocalRuntimeEvidence({ rootDir: localRuntimeFixture.rootDir, relPath: 'passing.test.mjs', expectedRootCommit: localRuntimeFixture.rootCommit, evidenceId: 'incident-local', supportsClaim: true });
+
+  const before = evaluateClaim({
+    claimId: 'incident', title: 'Production Cloud Run is running', severity: 'P1',
+    evidence: [staticEv.evidence, localEv.evidence],
+    requiredVerificationLevels: ['REMOTE_RUNTIME'], requiredEnvironment: 'Production',
+  });
+  assert.equal(before.decision, 'HOLD_INSUFFICIENT_VERIFICATION_LEVEL', 'STATIC + LOCAL_RUNTIME must never be able to certify a Production REMOTE_RUNTIME claim');
+
+  const remoteEv = await attestRemoteRuntimeEvidence({
+    sourceClass: 'CLOUD_RUNTIME', url: REMOTE_RUNTIME_TEST_URL, environment: 'Production', targetIdentity: 'incident-production-target',
+    evidenceId: 'incident-remote', supportsClaim: true,
+  });
+  assert.notEqual(remoteEv.evidence, null);
+
+  const after = evaluateClaim({
+    claimId: 'incident', title: 'Production Cloud Run is running', severity: 'P1',
+    evidence: [staticEv.evidence, localEv.evidence, remoteEv.evidence],
+    requiredVerificationLevels: ['REMOTE_RUNTIME'], requiredEnvironment: 'Production',
+    singleSourceExceptionRequested: true, singleSourceExceptionReason: 'Directly observed the Production endpoint just now, real HTTPS response',
+  });
+  assert.equal(after.decision, 'CONFIRMED_P1', 'once a real REMOTE_RUNTIME/Production observation exists, the SAME claim must be able to confirm — the model differentiates, it does not just block everything');
+  assert.equal(after.effectiveEvidenceCount, 1);
+});
+
+// =============================================================================
+// Fase 14 — adversarial self-audit
+// =============================================================================
+
+test('IMP3 ADVERSARIAL: prototype/clone tricks on a real trusted REMOTE_RUNTIME object never carry trust or verificationLevel forward', async () => {
+  const real = await attestRemoteRuntimeEvidence({ sourceClass: 'CLOUD_RUNTIME', url: REMOTE_RUNTIME_TEST_URL, environment: 'Production', targetIdentity: 'clone-source', evidenceId: 'imp3-adv-clone', supportsClaim: true });
+  const clones = {
+    spread: { ...real.evidence },
+    jsonRoundTrip: JSON.parse(JSON.stringify(real.evidence)),
+    prototypeClone: Object.create(real.evidence),
+  };
+  for (const [label, clone] of Object.entries(clones)) {
+    const r = evaluateClaim({ claimId: 'c', title: 't', severity: 'P1', evidence: [clone], requiredVerificationLevels: ['REMOTE_RUNTIME'], requiredEnvironment: 'Production', singleSourceExceptionRequested: true, singleSourceExceptionReason: VALID_REASON });
+    assert.notEqual(r.decision, 'CONFIRMED_P1', `${label} must not carry REMOTE_RUNTIME trust forward`);
+  }
+});
+
+test('IMP3 ADVERSARIAL: missing targetIdentity is rejected before any network call', async () => {
+  const r = await attestRemoteRuntimeEvidence({ sourceClass: 'CLOUD_RUNTIME', url: REMOTE_RUNTIME_TEST_URL, environment: 'Production', evidenceId: 'imp3-adv-notarget', supportsClaim: true });
+  assert.equal(r.evidence, null);
+  assert.equal(r.error, 'INVALID_TARGET_IDENTITY');
+});
+
+test('IMP3 ADVERSARIAL: a plain http:// URL (not https://) is rejected, never attested', async () => {
+  const r = await attestRemoteRuntimeEvidence({ sourceClass: 'CLOUD_RUNTIME', url: 'http://example.com', environment: 'Production', targetIdentity: 'plain-http', evidenceId: 'imp3-adv-http', supportsClaim: true });
+  assert.equal(r.evidence, null);
+  assert.equal(r.error, 'INVALID_URL');
+});
+
+test('IMP3 ADVERSARIAL: invalid environment value is rejected, never silently coerced to a valid one', async () => {
+  const r = await attestRemoteRuntimeEvidence({ sourceClass: 'CLOUD_RUNTIME', url: REMOTE_RUNTIME_TEST_URL, environment: 'production', targetIdentity: 'lowercase-env', evidenceId: 'imp3-adv-env', supportsClaim: true });
+  assert.equal(r.evidence, null);
+  assert.equal(r.error, 'INVALID_ENVIRONMENT');
+});
+
+test('IMP3 ADVERSARIAL: malformed requiredVerificationLevels (a bare string, not an array) fails closed to unsatisfiable, never silently treated as "no requirement"', () => {
+  const trusted = attestFilesystemEvidence({ sourceClass: 'LOCAL_FILESYSTEM', rootDir: fsFixture.rootDir, relPath: 'a.md', expectedRootCommit: fsFixture.rootCommit, evidenceId: 'imp3-adv-malformed', supportsClaim: true });
+  const r = evaluateClaim({ claimId: 'c', title: 't', severity: 'P1', evidence: [trusted.evidence], requiredVerificationLevels: 'REMOTE_RUNTIME' });
+  assert.equal(r.decision, 'HOLD_INSUFFICIENT_VERIFICATION_LEVEL');
+});
+
+test('IMP3 ADVERSARIAL: requiredVerificationLevels containing only garbage entries fails closed to unsatisfiable', () => {
+  const trusted = attestFilesystemEvidence({ sourceClass: 'LOCAL_FILESYSTEM', rootDir: fsFixture.rootDir, relPath: 'a.md', expectedRootCommit: fsFixture.rootCommit, evidenceId: 'imp3-adv-garbage', supportsClaim: true });
+  const r = evaluateClaim({ claimId: 'c', title: 't', severity: 'P1', evidence: [trusted.evidence], requiredVerificationLevels: ['runtime', 'PRODUCTION', 123] });
+  assert.equal(r.decision, 'HOLD_INSUFFICIENT_VERIFICATION_LEVEL');
+});
+
+test('IMP3 ADVERSARIAL: caller cannot control the isolated LOCAL_RUNTIME execution — attestLocalRuntimeEvidence accepts no command/args/executable parameter of any kind', () => {
+  const source = readFileSync(path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'evidence-policy.mjs'), 'utf8');
+  const match = source.match(/export function attestLocalRuntimeEvidence\(params\) \{[\s\S]*?const \{([\s\S]*?)\} = params;/);
+  assert.notEqual(match, null);
+  const destructured = match[1].split(',').map((s) => s.trim().split(':')[0].trim()).filter(Boolean);
+  assert.deepEqual(destructured.sort(), ['rootDir', 'relPath', 'expectedRootCommit', 'evidenceId', 'supportsClaim', 'derivedFromEvidenceIds', 'timestamp', 'verificationMethod'].sort());
+});
+
+test('IMP3 ADVERSARIAL: PUBLIC_TRUST_API_INJECTABLE_DEPENDENCIES = NONE extended to the two new attestors — poisoned function-typed params are ignored', async () => {
+  const poisonFn = () => { throw new Error('POISONED: must never be invoked'); };
+  const local = attestLocalRuntimeEvidence({
+    rootDir: localRuntimeFixture.rootDir, relPath: 'passing.test.mjs', expectedRootCommit: localRuntimeFixture.rootCommit, evidenceId: 'imp3-adv-poison-local', supportsClaim: true,
+    spawnSyncFn: poisonFn, command: 'rm', args: ['-rf', '/'], executable: 'bash',
+  });
+  assert.equal(local.error, null);
+  assert.equal(local.evidence.verificationLevel, 'LOCAL_RUNTIME');
+
+  const remote = await attestRemoteRuntimeEvidence({
+    sourceClass: 'CLOUD_RUNTIME', url: REMOTE_RUNTIME_TEST_URL, environment: 'Production', targetIdentity: 'poison-remote', evidenceId: 'imp3-adv-poison-remote', supportsClaim: true,
+    fetchFn: poisonFn, transport: poisonFn,
+  });
+  assert.equal(remote.error, null);
+  assert.equal(remote.evidence.verificationLevel, 'REMOTE_RUNTIME');
 });
