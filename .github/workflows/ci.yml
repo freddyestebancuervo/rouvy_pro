@@ -9,7 +9,7 @@ on:
   pull_request:
   workflow_dispatch: {}
 
-# Ninguno de los 3 jobs escribe al repositorio, publica paquetes, ni
+# Ninguno de los 4 jobs escribe al repositorio, publica paquetes, ni
 # necesita id-token OIDC — solo leen el código para analizarlo/probarlo.
 permissions:
   contents: read
@@ -288,3 +288,34 @@ jobs:
 
       - name: Correr los tests e2e
         run: npm run test:e2e
+
+  # =========================================================================
+  # Job 4 — Suite de seguridad del Night Agent (tools/night-agent/**)
+  # =========================================================================
+  night-agent-tests:
+    name: Night Agent — security + test
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: '24'
+
+      - name: Verificar runtime Node 24
+        shell: bash
+        run: |
+          set -euo pipefail
+          ACTUAL_NODE_VERSION="$(node --version)"
+          echo "ACTUAL_NODE_VERSION=$ACTUAL_NODE_VERSION"
+
+          if [[ "$ACTUAL_NODE_VERSION" != v24.* ]]; then
+            echo "::error::Runtime Node no es major 24: $ACTUAL_NODE_VERSION"
+            exit 1
+          fi
+
+          echo "NIGHT_AGENT_NODE24_RUNTIME_ASSERTION=PASS"
+
+      - name: Correr suite Night Agent
+        run: node --test tools/night-agent/test/*.test.mjs
