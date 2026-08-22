@@ -59,6 +59,53 @@ name: (reusable) Backend — deploy to Cloud Run Production
 #         checkout); comentario explícito sobre la doble aprobación de
 #         GitHub Environment (una por job que lo declara).
 #
+# REMEDIACIÓN 2 (misma PR, tras re-audit independiente
+# KORIXA_PR68_POST_REMEDIATION_INDEPENDENT_REAUDIT, PASS_WITH_FINDINGS:
+# P0=0, P1=0, P2=7). Cierra los P2 resolubles por código/evidencia
+# estática; dos preguntas quedan explícitamente marcadas como
+# NONPROD_EVIDENCE_REQUIRED (no se "resuelven" por suposición):
+#
+#   NEW-1  el descubrimiento de existencia del servicio ya NO confía en
+#          la semántica actual de `--filter=metadata.name=X` (gcloud
+#          advirtió en vivo que esa igualdad de string "está
+#          cambiando" hacia coincidencia de subcadena). Se re-filtra
+#          con jq por `.metadata.name == $SERVICE` EXACTO sobre el
+#          JSON ya obtenido.
+#   NEW-2  se restaura la comparación estricta
+#          `spec.containers[0].image == immutable_ref` post-deploy,
+#          ADEMÁS de la procedencia OCI pre-deploy — la justificación
+#          original para retirarla (divergencia índice-multiplataforma)
+#          se re-auditó con evidencia directa y no aplica a este
+#          pipeline (manifiesto concreto, no índice — ver el paso
+#          "Validar candidata").
+#   NEW-3  `discover-service` ya no mezcla stdout/stderr (`2>&1`
+#          combinaba ambos antes de parsear como JSON) — se capturan
+#          en archivos temporales separados, mismo patrón que ya
+#          corrigió D2B2/PR #62.
+#   NEW-4  el comportamiento exacto de `gcloud run deploy` cuando se
+#          omiten AMBOS flags de invocación (`--allow-unauthenticated`/
+#          `--no-allow-unauthenticated`) en un servicio nuevo y modo no
+#          interactivo permanece **UNPROVEN** — la documentación
+#          oficial no lo especifica y no se puede probar sin una
+#          ejecución real. El código ya no lo asume (solo lo reporta,
+#          ver "Reportar política de invocación resultante", ahora
+#          distinguiendo explícitamente lectura fallida de "confirmado
+#          no público"), así que esto sigue siendo un bloqueador de
+#          ACTIVACIÓN DE LLAMADOR, no de la existencia de este archivo.
+#   —      tag de candidata ahora único POR EJECUCIÓN
+#          (`candidate-<sha corto>-<run_id>-<run_attempt>`), no solo
+#          por SHA — evita depender de una semántica de reasignación
+#          de tag de Cloud Run que la documentación oficial no
+#          confirma explícitamente (reintentos con el mismo source_sha
+#          ya no comparten tag).
+#   —      `cpu`/`memory` iguales a cero ahora se rechazan
+#          explícitamente en `validate-contract` (antes "0"/"0m"/"0Mi"
+#          pasaban la sola validación de formato).
+#   —      `cors_allowed_origins` se pasa al deploy vía `env:` en vez
+#          de interpolación directa `${{ inputs.* }}` dentro del texto
+#          del script — GitHub la inyecta como variable de entorno del
+#          proceso, no como texto que bash vuelve a parsear.
+#
 # SECURITY — NO ACTIVADO TODAVÍA:
 # `on: workflow_call` únicamente. Sin `workflow_dispatch`, sin
 # `workflow_run`. Ningún workflow del repositorio invoca este reusable
@@ -192,7 +239,7 @@ on:
         description: "Revisión candidata creada por este deploy."
         value: ${{ jobs.deploy-candidate.outputs.new_revision }}
       candidate_url:
-        description: "URL etiquetada (--tag determinístico por SHA) de la candidata, con 0% de tráfico, usada para el health check pre-switch."
+        description: "URL etiquetada (--tag único por ejecución) de la candidata, con 0% de tráfico, usada para el health check pre-switch."
         value: ${{ jobs.deploy-candidate.outputs.candidate_url }}
       traffic_switch_result:
         description: "'success' | 'rollback_verified_success' | 'rollback_command_failed' | 'rollback_traffic_not_restored' | 'rollback_health_failed' | 'unattempted'. EMPTY when first_deploy=true — the traffic-switch job is skipped entirely for a first deploy (see first_deploy_requires_separate_promotion), so there is no traffic result to report at all, not merely an 'unattempted' one."
@@ -280,13 +327,24 @@ jobs:
           [[ "$SERVICE_NAME" =~ ^[a-z]([a-z0-9-]{0,61}[a-z0-9])?$ ]] || fail "service_name no cumple el formato de nombre de servicio Cloud Run: '$SERVICE_NAME'"
 
           # Formato básico de --cpu: entero/decimal ("1", "2", "0.5") o
-          # milli-cpu ("1000m"). No valida los pares CPU/memoria
-          # permitidos por Cloud Run (eso lo hace gcloud en el deploy
-          # real); esto solo rechaza basura evidente antes de auth/cloud.
+          # milli-cpu ("1000m"). Esto es validación de FORMATO Y
+          # SANIDAD BÁSICA, no una réplica completa de los rangos reales
+          # de Cloud Run (pares CPU/memoria válidos, límites de
+          # plataforma) — un valor sintácticamente válido pero fuera de
+          # rango sigue quedando para que gcloud lo rechace en el
+          # deploy real, antes de cualquier tráfico.
           [[ "$CPU" =~ ^[0-9]+(\.[0-9]+)?$ ]] || [[ "$CPU" =~ ^[0-9]+m$ ]] || fail "cpu no tiene un formato reconocido ('1', '2', '0.5', '1000m'): '$CPU'"
+          # Remediación 2: rechazar explícitamente un valor de CPU cero
+          # (formato válido, pero sin sentido en Cloud Run) — antes '0'
+          # y '0m' pasaban la sola validación de formato.
+          CPU_IS_ZERO="$(awk -v v="${CPU%m}" 'BEGIN{ print (v == 0) ? "yes" : "no" }')"
+          [ "$CPU_IS_ZERO" = "no" ] || fail "cpu no puede ser cero ('$CPU') — no es un límite de CPU válido en Cloud Run"
 
-          # Formato básico de --memory: entero seguido de Mi/Gi.
+          # Formato básico de --memory: entero seguido de Mi/Gi (misma
+          # salvedad de FORMATO_Y_SANIDAD_BASICA que --cpu arriba).
           [[ "$MEMORY" =~ ^[0-9]+(Mi|Gi)$ ]] || fail "memory no tiene un formato reconocido ('512Mi', '1Gi'): '$MEMORY'"
+          MEMORY_NUMERIC="${MEMORY%Mi}"; MEMORY_NUMERIC="${MEMORY_NUMERIC%Gi}"
+          [ "$MEMORY_NUMERIC" -ne 0 ] || fail "memory no puede ser cero ('$MEMORY')"
 
           [[ "$CONCURRENCY" =~ ^[0-9]+$ ]] || fail "concurrency debe ser un entero: '$CONCURRENCY'"
           [ "$CONCURRENCY" -ge 1 ] || fail "concurrency debe ser >= 1 (recibido $CONCURRENCY) — 0 no es una concurrencia válida de Cloud Run"
@@ -368,15 +426,26 @@ jobs:
           fi
           echo "SOURCE_SHA_VERIFIED=YES"
 
-      - name: Calcular tag determinístico de candidata (P2)
+      - name: Calcular tag único de candidata (P2, remediación 2)
         id: candidate-tag
         run: |
           set -euo pipefail
-          # Etiqueta de tráfico válida para Cloud Run: minúsculas,
-          # dígitos y guiones, debe empezar con letra, <= 63 chars.
-          # Un SHA corto en minúsculas hex siempre cumple ese formato.
+          # Remediación 2 (re-audit, hallazgo SAME_SHA_RETRY_TAG_COLLISION):
+          # un tag determinístico solo por source_sha haría que DOS
+          # ejecuciones con el MISMO source_sha (p. ej. un reintento
+          # tras un fallo) intentaran reutilizar el mismo tag —
+          # comportamiento de reasignación de Cloud Run que la
+          # documentación oficial no confirma explícitamente como
+          # libre de ventanas de ambigüedad. Se incluye además
+          # github.run_id/github.run_attempt (siempre numéricos,
+          # generados por GitHub, nunca input libre) para que cada
+          # ejecución tenga un tag propio, sin depender de esa
+          # semántica no probada. Formato válido para Cloud Run
+          # (minúsculas/dígitos/guiones, empieza con letra, <= 63
+          # chars): "candidate-<12 hex>-<run_id>-<run_attempt>" cabe
+          # cómodamente incluso en el peor caso realista.
           SHORT_SHA="$(echo "${{ inputs.source_sha }}" | cut -c1-12)"
-          echo "candidate_tag=candidate-$SHORT_SHA" >> "$GITHUB_OUTPUT"
+          echo "candidate_tag=candidate-$SHORT_SHA-${{ github.run_id }}-${{ github.run_attempt }}" >> "$GITHUB_OUTPUT"
 
       - id: auth
         uses: google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093 # v3
@@ -441,11 +510,26 @@ jobs:
       # explícita sobre el RESULTADO ESTRUCTURADO, nunca sobre el código
       # de salida del comando de descubrimiento en sí:
       #   comando falla            -> FAIL CLOSED (nunca "no existe")
-      #   0 coincidencias          -> no existe, primer despliegue
-      #   1 coincidencia           -> existe, despliegue subsecuente
-      #   >1 coincidencias         -> FAIL CLOSED (estado ambiguo)
+      #   0 coincidencias exactas  -> no existe, primer despliegue
+      #   1 coincidencia exacta    -> existe, despliegue subsecuente
+      #   >1 coincidencias exactas -> FAIL CLOSED (estado ambiguo)
+      #
+      # Remediación 2 (re-audit T-F1.2, hallazgos NEW-1/NEW-3):
+      #   - NEW-1: gcloud advirtió EN VIVO, contra este mismo comando,
+      #     que la semántica de igualdad `=` de --filter para campos
+      #     string "está cambiando... y coincidirá en el futuro
+      #     cercano" con valores que hoy NO coinciden (comportamiento
+      #     de subcadena). El filtro del lado del servidor se conserva
+      #     solo por eficiencia — la decisión de existencia SIEMPRE se
+      #     deriva de un re-filtrado EXACTO con jq sobre
+      #     `.metadata.name`, nunca del resultado crudo de --filter.
+      #   - NEW-3: stdout y stderr ya NO se combinan (antes `2>&1`
+      #     mezclaba ambos en la misma variable que luego se parseaba
+      #     como JSON) — se capturan en archivos temporales separados,
+      #     mismo patrón que ya corrigió D2B2/PR #62 para esta misma
+      #     clase de bug.
       # -----------------------------------------------------------------
-      - name: Descubrir existencia del servicio (fail-closed, nunca por código de error de describe)
+      - name: Descubrir existencia del servicio (fail-closed, nombre exacto, stdout/stderr separados)
         id: discover-service
         run: |
           set -euo pipefail
@@ -453,22 +537,35 @@ jobs:
           REGION="${{ env.PRODUCTION_REGION }}"
           PROJECT="${{ env.PRODUCTION_PROJECT }}"
 
-          if ! LIST_JSON="$(gcloud run services list --project="$PROJECT" --region="$REGION" --filter="metadata.name=$SERVICE" --format=json 2>&1)"; then
-            echo "::error::gcloud run services list falló — no se puede determinar si '$SERVICE' existe. FAIL CLOSED (nunca se asume 'no existe' ante un error del comando de descubrimiento). Salida: $LIST_JSON"
+          STDOUT_FILE="$(mktemp)"
+          STDERR_FILE="$(mktemp)"
+          trap 'rm -f "$STDOUT_FILE" "$STDERR_FILE"' EXIT
+
+          if ! gcloud run services list --project="$PROJECT" --region="$REGION" --filter="metadata.name=$SERVICE" --format=json >"$STDOUT_FILE" 2>"$STDERR_FILE"; then
+            echo "::error::gcloud run services list falló — no se puede determinar si '$SERVICE' existe. FAIL CLOSED (nunca se asume 'no existe' ante un error del comando de descubrimiento). stderr: $(cat "$STDERR_FILE")"
+            exit 1
+          fi
+          if [ -s "$STDERR_FILE" ]; then
+            echo "gcloud emitió salida en stderr durante 'services list' (registrada aparte, nunca mezclada con el JSON parseado): $(cat "$STDERR_FILE")"
+          fi
+
+          if ! jq -e . "$STDOUT_FILE" >/dev/null 2>&1; then
+            echo "::error::La salida de 'services list' no es JSON válido — FAIL CLOSED. Contenido: $(cat "$STDOUT_FILE")"
             exit 1
           fi
 
-          MATCH_COUNT="$(echo "$LIST_JSON" | jq 'length')"
+          EXACT_JSON="$(jq -c --arg name "$SERVICE" '[.[] | select(.metadata.name == $name)]' "$STDOUT_FILE")"
+          MATCH_COUNT="$(echo "$EXACT_JSON" | jq 'length')"
           case "$MATCH_COUNT" in
             0)
-              echo "Ningún servicio '$SERVICE' existe todavía en $PROJECT/$REGION (confirmado por 'services list', no por un describe fallido) — este es el PRIMER despliegue."
+              echo "Ningún servicio con metadata.name exactamente igual a '$SERVICE' existe todavía en $PROJECT/$REGION (confirmado por 'services list' + coincidencia exacta con jq, no por un describe fallido ni por la semántica actual de --filter) — este es el PRIMER despliegue."
               echo "first_deploy=true" >> "$GITHUB_OUTPUT"
               ;;
             1)
               echo "first_deploy=false" >> "$GITHUB_OUTPUT"
               ;;
             *)
-              echo "::error::AMBIGUO: 'services list --filter=metadata.name=$SERVICE' devolvió $MATCH_COUNT coincidencias, se esperaba 0 o 1. FAIL CLOSED."
+              echo "::error::AMBIGUO: $MATCH_COUNT servicios con metadata.name exactamente igual a '$SERVICE'. FAIL CLOSED."
               exit 1
               ;;
           esac
@@ -506,7 +603,19 @@ jobs:
           FINGERPRINT="$(gcloud run services describe "$SERVICE" --project="$PROJECT" --region="$REGION" --format=json | jq -S -c '{serviceAccount: .spec.template.spec.serviceAccountName, network: .spec.template.metadata.annotations["run.googleapis.com/network-interfaces"], ingress: .metadata.annotations["run.googleapis.com/ingress"]}')"
           echo "pre_fingerprint=$FINGERPRINT" >> "$GITHUB_OUTPUT"
 
-      - name: Deploy candidata por digest inmutable, SIN tráfico, con --tag determinístico
+      - name: Deploy candidata por digest inmutable, SIN tráfico, con --tag único
+        env:
+          # Remediación 2 (hardening de shell): cors_allowed_origins es
+          # la cadena de texto más libre de todo el contrato (no un
+          # enum, no un patrón numérico) — se pasa por `env:` en vez de
+          # interpolarse directamente como `${{ inputs.* }}` dentro del
+          # texto del script, para que GitHub Actions la inyecte como
+          # variable de entorno del proceso (nunca como texto re-
+          # parseado por bash) y se referencie citada ("$VAR") al
+          # construir el flag. `validate-contract` ya la valida antes
+          # de este job, pero esta capa es independiente de esa
+          # validación previa.
+          CORS_ALLOWED_ORIGINS_INPUT: ${{ inputs.cors_allowed_origins }}
         run: |
           set -euo pipefail
           # P1-1: sin --allow-unauthenticated ni --no-allow-unauthenticated.
@@ -531,7 +640,7 @@ jobs:
             --subnet="${{ env.PRODUCTION_VPC_SUBNET }}" \
             --vpc-egress="${{ inputs.vpc_egress_mode }}" \
             --set-secrets="${{ env.JWT_PRIVATE_KEY_MOUNT_PATH }}=${{ env.SECRET_JWT_PRIVATE_KEY }}:latest,${{ env.JWT_PUBLIC_KEY_MOUNT_PATH }}=${{ env.SECRET_JWT_PUBLIC_KEY }}:latest,DATABASE_URL=${{ env.SECRET_DATABASE_URL }}:latest,REDIS_URL=${{ env.SECRET_REDIS_URL }}:latest" \
-            --set-env-vars="BACKEND_ENVIRONMENT=production,NODE_ENV=production,JWT_PRIVATE_KEY_PATH=${{ env.JWT_PRIVATE_KEY_MOUNT_PATH }},JWT_PUBLIC_KEY_PATH=${{ env.JWT_PUBLIC_KEY_MOUNT_PATH }},FIREBASE_PROJECT_ID=${{ env.PRODUCTION_PROJECT }},CORS_ALLOWED_ORIGINS=${{ inputs.cors_allowed_origins }},TRUST_PROXY=true" \
+            --set-env-vars="BACKEND_ENVIRONMENT=production,NODE_ENV=production,JWT_PRIVATE_KEY_PATH=${{ env.JWT_PRIVATE_KEY_MOUNT_PATH }},JWT_PUBLIC_KEY_PATH=${{ env.JWT_PUBLIC_KEY_MOUNT_PATH }},FIREBASE_PROJECT_ID=${{ env.PRODUCTION_PROJECT }},CORS_ALLOWED_ORIGINS=$CORS_ALLOWED_ORIGINS_INPUT,TRUST_PROXY=true" \
             --quiet
 
       - name: Reportar política de invocación resultante (solo lectura, sin asumir ni mutar nada)
@@ -542,11 +651,32 @@ jobs:
           # comportamiento por defecto (que puede variar según si el
           # servicio es nuevo y según el modo no interactivo) — este
           # reusable no lo asume ni lo fuerza, solo lo deja visible.
-          POLICY_JSON="$(gcloud run services get-iam-policy "${{ inputs.service_name }}" --project="${{ env.PRODUCTION_PROJECT }}" --region="${{ env.PRODUCTION_REGION }}" --format=json 2>&1 || echo '{}')"
-          if echo "$POLICY_JSON" | jq -e '.bindings[]? | select(.role=="roles/run.invoker") | .members[]? | select(.=="allUsers")' >/dev/null 2>&1; then
-            echo "INVOKER_POLICY_OBSERVED=PUBLIC (allUsers tiene roles/run.invoker)"
+          #
+          # Remediación 2 (re-audit, hallazgo IAM_POLICY_REPORTING):
+          # distingue explícitamente "no se pudo leer la política" de
+          # "se leyó y confirmó que NO es pública" — antes,
+          # `|| echo '{}'` ante un fallo de lectura producía un JSON
+          # vacío indistinguible de una política real sin bindings
+          # públicos, y un futuro llamador podría malinterpretar un
+          # fallo de lectura como privacidad confirmada. stdout/stderr
+          # separados por la misma razón que en discover-service (NEW-3):
+          # una advertencia benigna en stderr durante una llamada
+          # EXITOSA no debe poder corromper el JSON que luego se valida
+          # con jq y hacer que una política pública se reporte como
+          # NOT_PUBLIC por error de parseo.
+          POLICY_STDOUT_FILE="$(mktemp)"
+          POLICY_STDERR_FILE="$(mktemp)"
+          trap 'rm -f "$POLICY_STDOUT_FILE" "$POLICY_STDERR_FILE"' EXIT
+
+          if gcloud run services get-iam-policy "${{ inputs.service_name }}" --project="${{ env.PRODUCTION_PROJECT }}" --region="${{ env.PRODUCTION_REGION }}" --format=json >"$POLICY_STDOUT_FILE" 2>"$POLICY_STDERR_FILE" \
+             && jq -e . "$POLICY_STDOUT_FILE" >/dev/null 2>&1; then
+            if jq -e '.bindings[]? | select(.role=="roles/run.invoker") | .members[]? | select(.=="allUsers")' "$POLICY_STDOUT_FILE" >/dev/null 2>&1; then
+              echo "INVOKER_POLICY_OBSERVED=POLICY_READ_SUCCESS_PUBLIC (allUsers tiene roles/run.invoker)"
+            else
+              echo "INVOKER_POLICY_OBSERVED=POLICY_READ_SUCCESS_NOT_PUBLIC (política leída correctamente; allUsers NO tiene roles/run.invoker)"
+            fi
           else
-            echo "INVOKER_POLICY_OBSERVED=NOT_PUBLIC_OR_UNKNOWN — revisar manualmente antes de decidir la política de invocación final"
+            echo "INVOKER_POLICY_OBSERVED=POLICY_READ_FAILED — no se pudo leer o parsear la política de invocación. Esto NO confirma privacidad, solo que no pudo verificarse. stdout: $(cat "$POLICY_STDOUT_FILE") stderr: $(cat "$POLICY_STDERR_FILE")"
           fi
 
       - name: Identificar NEW_REVISION sin ambigüedad
@@ -561,7 +691,7 @@ jobs:
           fi
           echo "new_revision=$NEW_REV" >> "$GITHUB_OUTPUT"
 
-      - name: Validar candidata (Ready + repositorio correcto) ANTES de health/tráfico
+      - name: Validar candidata (Ready + imagen exacta por digest) ANTES de health/tráfico
         run: |
           set -euo pipefail
           NEW_REV="${{ steps.identify-new-revision.outputs.new_revision }}"
@@ -570,22 +700,28 @@ jobs:
           READY="$(echo "$REV_JSON" | jq -r '.status.conditions[] | select(.type=="Ready") | .status')"
           [ "$READY" = "True" ] || { echo "::error::Candidata $NEW_REV no está Ready=True (obtenido: '$READY')"; exit 1; }
 
-          # P1-2: ya NO se compara por igualdad estricta de string contra
-          # immutable_ref (frágil ante la divergencia índice-multi-
-          # plataforma vs. manifiesto concreto que Development ya
-          # documentó). La procedencia real ya se probó ANTES del deploy
-          # (paso "Verificar procedencia" arriba, sobre el manifiesto en
-          # Artifact Registry) y el deploy se hizo por digest exacto —
-          # aquí solo se confirma un sanity check débil: que la imagen
-          # sigue apuntando al repositorio de Production correcto.
+          # Remediación 2 (re-audit, hallazgo NEW-2): se restaura la
+          # comparación estricta EXACTA contra immutable_ref, ADEMÁS de
+          # (no en lugar de) la procedencia OCI ya verificada antes del
+          # deploy. La justificación original para retirarla (posible
+          # divergencia índice-multiplataforma vs. manifiesto concreto,
+          # citando el comentario de backend-deploy-development.yml) se
+          # re-auditó con evidencia directa: el manifiesto real
+          # publicado por _backend-build-publish-production.yml es un
+          # `application/vnd.docker.distribution.manifest.v2+json`
+          # concreto (verificado en vivo, `docker buildx imagetools
+          # inspect --raw` contra el artefacto real), no un índice OCI
+          # — ese pipeline (y el de Development, idéntico en este
+          # punto) usa `docker build` simple, nunca `docker buildx
+          # build` con `--provenance`. Sin evidencia de que la
+          # divergencia citada aplique a este pipeline, se restaura la
+          # comparación fuerte como una segunda capa, independiente de
+          # la procedencia pre-deploy.
           ACTUAL_IMAGE="$(echo "$REV_JSON" | jq -r '.spec.containers[0].image')"
-          case "$ACTUAL_IMAGE" in
-            "${{ env.ARTIFACT_REPOSITORY }}"@sha256:*) ;;
-            *)
-              echo "::error::La imagen de la candidata ('$ACTUAL_IMAGE') no pertenece al repositorio de Production esperado (${{ env.ARTIFACT_REPOSITORY }})"
-              exit 1
-              ;;
-          esac
+          if [ "$ACTUAL_IMAGE" != "${{ inputs.immutable_ref }}" ]; then
+            echo "::error::La imagen de la candidata ('$ACTUAL_IMAGE') no coincide exactamente con immutable_ref ('${{ inputs.immutable_ref }}')."
+            exit 1
+          fi
 
           TRAFFIC_JSON="$(gcloud run services describe "${{ inputs.service_name }}" --project="${{ env.PRODUCTION_PROJECT }}" --region="${{ env.PRODUCTION_REGION }}" --format='json(status.traffic)')"
           NEW_PCT="$(echo "$TRAFFIC_JSON" | jq -r --arg rev "$NEW_REV" '[.status.traffic[] | select(.revisionName==$rev) | .percent][0] // 0')"
