@@ -85,19 +85,20 @@ name: (reusable) Backend — deploy to Cloud Run Production
 #   NEW-4  el comportamiento exacto de `gcloud run deploy` cuando se
 #          omiten AMBOS flags de invocación (`--allow-unauthenticated`/
 #          `--no-allow-unauthenticated`) en un servicio nuevo y modo no
-#          interactivo permanece **UNPROVEN** — la documentación
-#          oficial no lo especifica y no se puede probar sin una
-#          ejecución real. El código ya no lo asume (solo lo reporta,
-#          ver "Reportar política de invocación resultante", ahora
-#          distinguiendo explícitamente lectura fallida de "confirmado
-#          no público"), así que esto sigue siendo un bloqueador de
-#          ACTIVACIÓN DE LLAMADOR, no de la existencia de este archivo.
-#   —      tag de candidata ahora único POR EJECUCIÓN
-#          (`candidate-<sha corto>-<run_id>-<run_attempt>`), no solo
-#          por SHA — evita depender de una semántica de reasignación
-#          de tag de Cloud Run que la documentación oficial no
-#          confirma explícitamente (reintentos con el mismo source_sha
-#          ya no comparten tag).
+#          interactivo era, en ese momento, **UNPROVEN**. RESUELTO en
+#          REMEDIACIÓN 3 (ver más abajo) — TEST A (NONPROD) probó en
+#          vivo que el resultado es privado por defecto. El código
+#          sigue sin asumirlo (solo lo reporta, ver "Reportar política
+#          de invocación resultante"); la política de invocación
+#          pública/IAM sigue siendo, por diseño, un prerrequisito
+#          separado fuera de este reusable.
+#   —      tag de candidata único POR EJECUCIÓN
+#          (`candidate-<sha corto>-<run_id>-<run_attempt>` en esta
+#          versión — rediseñado en REMEDIACIÓN 3, ver más abajo) — en
+#          ese momento evitaba depender de una semántica de
+#          reasignación de tag de Cloud Run que la documentación
+#          oficial no confirmaba explícitamente (reintentos con el
+#          mismo source_sha ya no compartían tag).
 #   —      `cpu`/`memory` iguales a cero ahora se rechazan
 #          explícitamente en `validate-contract` (antes "0"/"0m"/"0Mi"
 #          pasaban la sola validación de formato).
@@ -105,6 +106,76 @@ name: (reusable) Backend — deploy to Cloud Run Production
 #          de interpolación directa `${{ inputs.* }}` dentro del texto
 #          del script — GitHub la inyecta como variable de entorno del
 #          proceso, no como texto que bash vuelve a parsear.
+#
+# REMEDIACIÓN 3 (misma PR base — T-F1.2, 2026-08-22, evidencia de
+# laboratorio NONPROD real, no Production, en `ridepro-development`,
+# identidades desechables sin acceso a Production, todo eliminado tras
+# cada test). Cierra los dos bloqueadores NONPROD_EVIDENCE_REQUIRED de
+# REMEDIACIÓN 2 y corrige dos hallazgos de código descubiertos por esa
+# misma evidencia:
+#
+#   TEST A (CLOUD_RUN_INVOCATION_DEFAULT_NONPROD) — RESOLVED_PROVEN.
+#          Un servicio Cloud Run nuevo, desplegado por una identidad
+#          con únicamente `roles/run.developer` (sin
+#          `run.services.setIamPolicy`, mismo límite de privilegio que
+#          `korixa-production-deployer`), omitiendo ambos flags de
+#          invocación, resultó privado por defecto: gcloud reportó
+#          explícitamente "This service will require authentication to
+#          be invoked", la política IAM resultante no tuvo ningún
+#          binding (`allUsers` ausente), la petición anónima devolvió
+#          403, y una petición autenticada con la audiencia correcta
+#          devolvió 200. No decide si el servicio final de Production
+#          debe ser público o privado — esa sigue siendo una decisión
+#          separada del propietario — solo prueba el comportamiento
+#          por defecto de este código cuando esa decisión aún no se ha
+#          tomado.
+#   TEST B (CLOUD_RUN_TAG_RETRY_NONPROD) — RESOLVED_PROVEN_SAFE.
+#          Repetir EXACTAMENTE el mismo `gcloud run deploy --no-traffic
+#          --tag=X` (misma imagen, mismo tag) siempre creó una revisión
+#          nueva y reasignó el tag de forma atómica a esa revisión
+#          nueva — la candidata anterior quedó sin tag y en 0%, nunca
+#          duplicada, nunca ambigua, y el tráfico primario nunca se
+#          movió. Esto prueba el reintento EXACTO ensayado, no
+#          independencia universal de cualquier otra variación de
+#          configuración con el mismo tag.
+#   HALLAZGO — LÍMITE COMBINADO tag+servicio. TEST B también descubrió
+#          en vivo que Cloud Run rechaza `--tag` + nombre de servicio
+#          combinados por encima de 46 caracteres (mensaje real de
+#          gcloud, ver step "Calcular tag de candidata" en
+#          validate-contract). El contrato anterior podía dar
+#          CONTRACT_VALID=YES con un `service_name` perfectamente
+#          válido por sí solo que, combinado con el tag generado,
+#          habría hecho fallar `gcloud run deploy` más adelante. El tag
+#          se rediseñó más corto (`c-<run_id>-<run_attempt>`, ya sin
+#          `source_sha` — la procedencia del artefacto se prueba de
+#          forma independiente, ver "Verificar procedencia" más abajo)
+#          y se calcula una única vez en validate-contract, que ahora
+#          también valida el límite combinado real ANTES de cualquier
+#          acceso a cloud.
+#   HALLAZGO — AUDIENCIA DE IDENTITY TOKEN INCORRECTA. El health check
+#          de la candidata generaba su identity token con
+#          `--audiences` igual a la URL ETIQUETADA de la candidata.
+#          Tanto la documentación oficial de Cloud Run ("the aud value
+#          must remain as the URL of the service, even when making
+#          requests to a specific traffic tag") como TEST B (misma
+#          audiencia rechazada con 401 contra esa URL etiquetada;
+#          aceptada con 200 usando la URL base) confirman que era
+#          incorrecto. Combinado con TEST A (un primer despliegue nuevo
+#          es privado por defecto), sin esta corrección un primer
+#          despliegue jamás habría podido confirmar la salud de su
+#          propia candidata. La petición sigue dirigida a la URL
+#          etiquetada; solo la audiencia del token cambia a la URL
+#          canónica del servicio (`status.url`) — ver "Health check de
+#          la CANDIDATA antes de mover tráfico".
+#   HALLAZGO — MISMA CLASE, ROLLBACK. El health check posterior al
+#          rollback de un despliegue subsecuente solo intentaba una
+#          petición anónima, sin fallback autenticado — si la política
+#          de invocación final resultara IAM-protegida, un rollback
+#          realmente exitoso se habría reportado como
+#          `ROLLBACK_HEALTH_FAILED` solo por un 401/403 anónimo. Se
+#          agregó el mismo fallback autenticado (audiencia = URL propia
+#          de la petición, que aquí ya es la URL canónica — no hay URL
+#          etiquetada en este check).
 #
 # SECURITY — NO ACTIVADO TODAVÍA:
 # `on: workflow_call` únicamente. Sin `workflow_dispatch`, sin
@@ -291,6 +362,8 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 5
     permissions: {}
+    outputs:
+      candidate_tag: ${{ steps.candidate-tag.outputs.candidate_tag }}
     steps:
       - name: Validar todos los inputs (sin efectos, sin cloud)
         shell: bash
@@ -388,6 +461,61 @@ jobs:
 
           echo "CONTRACT_VALID=YES"
 
+      # -----------------------------------------------------------------
+      # Remediación 3 (T-F1.2, hallazgos NONPROD TEST A/B, 2026-08-22):
+      # fuente única del tag de candidata, calculada aquí — antes se
+      # calculaba por separado dentro de deploy-candidate, con riesgo de
+      # que una fórmula futura divergiera entre el cálculo y su uso real.
+      # Ya no incluye source_sha: la procedencia del artefacto se prueba
+      # de forma independiente en deploy-candidate (etiqueta OCI
+      # org.opencontainers.image.revision ANTES del deploy + igualdad
+      # estricta de digest DESPUÉS), así que el tag no necesita cargar
+      # esa responsabilidad — solo github.run_id/github.run_attempt
+      # (siempre numéricos, generados por GitHub, nunca input libre).
+      #
+      # TEST B (NONPROD, ridepro-development, evidencia en vivo) probó
+      # que un reintento EXACTO con el mismo --tag es seguro: Cloud Run
+      # siempre crea una revisión nueva y reasigna el tag de forma
+      # atómica a esa revisión nueva, dejando la candidata anterior sin
+      # tag y en 0% de tráfico — nunca duplicado, nunca ambiguo, tráfico
+      # primario nunca afectado. Esto prueba el reintento EXACTO
+      # ensayado, no independencia universal de cualquier otra variación
+      # de configuración con el mismo tag — no se afirma más de lo que
+      # se probó.
+      #
+      # TEST B también descubrió en vivo (mensaje textual real de
+      # gcloud: "Combined traffic tag and service name cannot exceed 46
+      # characters") que Cloud Run exige length(--tag) +
+      # length(nombre del servicio) <= 46 — consistente con el formato
+      # de URL etiquetada (TAG---SERVICIO-HASH.REGION.run.app) y el
+      # límite de 63 caracteres de una etiqueta DNS. La validación de
+      # service_name de más arriba solo comprobaba su formato/longitud
+      # de forma AISLADA (hasta 63 caracteres) — un service_name
+      # perfectamente válido por sí solo podía hacer fallar
+      # `gcloud run deploy --tag=...` más adelante, después de que este
+      # job ya hubiera dado CONTRACT_VALID=YES. Se falla aquí, con el
+      # tag real que se usará, ANTES de checkout/OIDC/auth/cloud.
+      # -----------------------------------------------------------------
+      - name: Calcular tag de candidata (fuente única) y validar límite combinado de Cloud Run
+        id: candidate-tag
+        env:
+          SERVICE_NAME: ${{ inputs.service_name }}
+        run: |
+          set -euo pipefail
+          fail() { echo "::error::$1"; exit 1; }
+
+          CANDIDATE_TAG="c-${{ github.run_id }}-${{ github.run_attempt }}"
+          [[ "$CANDIDATE_TAG" =~ ^[a-z]([a-z0-9-]{0,61}[a-z0-9])?$ ]] || fail "candidate_tag generado no cumple el formato de tag de Cloud Run: '$CANDIDATE_TAG'"
+
+          SERVICE_LEN=${#SERVICE_NAME}
+          TAG_LEN=${#CANDIDATE_TAG}
+          COMBINED_LEN=$((SERVICE_LEN + TAG_LEN))
+          if [ "$COMBINED_LEN" -gt 46 ]; then
+            fail "service_name ($SERVICE_LEN caracteres) + candidate_tag ($TAG_LEN caracteres) = $COMBINED_LEN caracteres combinados — excede el límite de 46 que Cloud Run exige entre --tag y el nombre del servicio (verificado en vivo, T-F1.2 NONPROD TEST B). service_name debe acortarse; candidate_tag ya es la forma mínima soportada por este contrato."
+          fi
+
+          echo "candidate_tag=$CANDIDATE_TAG" >> "$GITHUB_OUTPUT"
+
   # =============================================================================
   # Job 2 — autenticar, desplegar candidata SIN tráfico, validar salud de
   # la candidata ANTES de mover tráfico (vía --tag determinístico).
@@ -408,7 +536,7 @@ jobs:
       previous_revision: ${{ steps.capture-previous.outputs.previous_revision }}
       new_revision: ${{ steps.identify-new-revision.outputs.new_revision }}
       candidate_url: ${{ steps.candidate-url.outputs.candidate_url }}
-      candidate_tag: ${{ steps.candidate-tag.outputs.candidate_tag }}
+      candidate_tag: ${{ needs.validate-contract.outputs.candidate_tag }}
       pre_fingerprint: ${{ steps.capture-previous.outputs.pre_fingerprint }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -425,27 +553,6 @@ jobs:
             exit 1
           fi
           echo "SOURCE_SHA_VERIFIED=YES"
-
-      - name: Calcular tag único de candidata (P2, remediación 2)
-        id: candidate-tag
-        run: |
-          set -euo pipefail
-          # Remediación 2 (re-audit, hallazgo SAME_SHA_RETRY_TAG_COLLISION):
-          # un tag determinístico solo por source_sha haría que DOS
-          # ejecuciones con el MISMO source_sha (p. ej. un reintento
-          # tras un fallo) intentaran reutilizar el mismo tag —
-          # comportamiento de reasignación de Cloud Run que la
-          # documentación oficial no confirma explícitamente como
-          # libre de ventanas de ambigüedad. Se incluye además
-          # github.run_id/github.run_attempt (siempre numéricos,
-          # generados por GitHub, nunca input libre) para que cada
-          # ejecución tenga un tag propio, sin depender de esa
-          # semántica no probada. Formato válido para Cloud Run
-          # (minúsculas/dígitos/guiones, empieza con letra, <= 63
-          # chars): "candidate-<12 hex>-<run_id>-<run_attempt>" cabe
-          # cómodamente incluso en el peor caso realista.
-          SHORT_SHA="$(echo "${{ inputs.source_sha }}" | cut -c1-12)"
-          echo "candidate_tag=candidate-$SHORT_SHA-${{ github.run_id }}-${{ github.run_attempt }}" >> "$GITHUB_OUTPUT"
 
       - id: auth
         uses: google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093 # v3
@@ -626,7 +733,7 @@ jobs:
           gcloud run deploy "${{ inputs.service_name }}" \
             --image="${{ inputs.immutable_ref }}" \
             --no-traffic \
-            --tag="${{ steps.candidate-tag.outputs.candidate_tag }}" \
+            --tag="${{ needs.validate-contract.outputs.candidate_tag }}" \
             --region="${{ env.PRODUCTION_REGION }}" \
             --project="${{ env.PRODUCTION_PROJECT }}" \
             --service-account="${{ env.RUNTIME_SA }}" \
@@ -730,26 +837,63 @@ jobs:
             exit 1
           fi
 
-      - name: Resolver URL etiquetada de la candidata (tag determinístico, 0% de tráfico)
+      - name: Resolver URL etiquetada de la candidata y URL canónica del servicio
         id: candidate-url
         run: |
           set -euo pipefail
-          TAG="${{ steps.candidate-tag.outputs.candidate_tag }}"
-          CANDIDATE_URL="$(gcloud run services describe "${{ inputs.service_name }}" --project="${{ env.PRODUCTION_PROJECT }}" --region="${{ env.PRODUCTION_REGION }}" --format=json | jq -r --arg tag "$TAG" '.status.traffic[] | select(.tag==$tag) | .url')"
-          [ -n "$CANDIDATE_URL" ] && [ "$CANDIDATE_URL" != "null" ] || { echo "::error::No se pudo resolver la URL etiquetada '$TAG'"; exit 1; }
-          echo "candidate_url=$CANDIDATE_URL" >> "$GITHUB_OUTPUT"
+          TAG="${{ needs.validate-contract.outputs.candidate_tag }}"
+          SERVICE_JSON="$(gcloud run services describe "${{ inputs.service_name }}" --project="${{ env.PRODUCTION_PROJECT }}" --region="${{ env.PRODUCTION_REGION }}" --format=json)"
 
+          CANDIDATE_URL="$(echo "$SERVICE_JSON" | jq -r --arg tag "$TAG" '.status.traffic[] | select(.tag==$tag) | .url')"
+          [ -n "$CANDIDATE_URL" ] && [ "$CANDIDATE_URL" != "null" ] || { echo "::error::No se pudo resolver la URL etiquetada '$TAG'"; exit 1; }
+
+          # Remediación 3 (T-F1.2, hallazgo NONPROD TEST B + docs
+          # oficiales de Cloud Run): la URL canónica/base del servicio
+          # (status.url) se resuelve aquí, por separado de la URL
+          # etiquetada — el siguiente step la necesita como audiencia
+          # del identity token, nunca como URL de la petición.
+          SERVICE_BASE_URL="$(echo "$SERVICE_JSON" | jq -r '.status.url')"
+          [ -n "$SERVICE_BASE_URL" ] && [ "$SERVICE_BASE_URL" != "null" ] || { echo "::error::No se pudo resolver status.url (URL canónica del servicio) — requerida como audiencia de identity token, FAIL CLOSED."; exit 1; }
+
+          echo "candidate_url=$CANDIDATE_URL" >> "$GITHUB_OUTPUT"
+          echo "service_base_url=$SERVICE_BASE_URL" >> "$GITHUB_OUTPUT"
+
+      # -----------------------------------------------------------------
+      # Remediación 3 (T-F1.2, hallazgo NONPROD TEST B, 2026-08-22):
+      # antes, este step generaba el identity token con
+      # --audiences="$URL" usando la URL ETIQUETADA de la candidata —
+      # tanto la evidencia en vivo de TEST B (misma audiencia,
+      # rechazada con 401 contra esa misma URL etiquetada; aceptada con
+      # 200 al usar la URL base) como la documentación oficial de Cloud
+      # Run ("the aud value must remain as the URL of the service, even
+      # when making requests to a specific traffic tag") confirman que
+      # ese uso era incorrecto. La petición HTTP SIGUE dirigida a la
+      # URL etiquetada (necesitamos probar específicamente esa
+      # revisión candidata) — solo la audiencia del token cambia a la
+      # URL canónica/base del servicio. Combinado con TEST A (un primer
+      # despliegue nuevo es privado por defecto cuando se omiten ambos
+      # flags de invocación), sin esta corrección un primer despliegue
+      # jamás podría confirmar la salud de su candidata: la petición
+      # anónima recibiría 401/403 y el fallback autenticado, con la
+      # audiencia incorrecta, también habría fallado.
+      # -----------------------------------------------------------------
       - name: Health check de la CANDIDATA antes de mover tráfico
         id: candidate-health
         run: |
           set -euo pipefail
-          URL="${{ steps.candidate-url.outputs.candidate_url }}"
+          REQUEST_URL="${{ steps.candidate-url.outputs.candidate_url }}"
+          TOKEN_AUDIENCE="${{ steps.candidate-url.outputs.service_base_url }}"
+          [ -n "$REQUEST_URL" ] || { echo "::error::candidate_url vacío — FAIL CLOSED"; exit 1; }
+          [ -n "$TOKEN_AUDIENCE" ] || { echo "::error::service_base_url vacío — FAIL CLOSED, no se puede generar un identity token válido"; exit 1; }
+
           MAX_ATTEMPTS=6
           ATTEMPT=1
           SUCCESS=false
           while [ $ATTEMPT -le $MAX_ATTEMPTS ]; do
-            # Intento sin autenticar primero.
-            RESPONSE="$(curl -sS --connect-timeout 5 --max-time 15 -w '\n%{http_code}' "$URL/v1/health" || true)"
+            # Intento sin autenticar primero, contra la URL etiquetada
+            # de la candidata (REQUEST_URL) — es la revisión específica
+            # que este health check debe probar.
+            RESPONSE="$(curl -sS --connect-timeout 5 --max-time 15 -w '\n%{http_code}' "$REQUEST_URL/v1/health" || true)"
             HTTP_CODE="$(echo "$RESPONSE" | tail -n1)"
             BODY="$(echo "$RESPONSE" | sed '$d')"
 
@@ -758,9 +902,11 @@ jobs:
               # roles/run.developer, verificado en vivo), así que puede
               # invocar un servicio IAM-protegido con un identity token
               # propio, sin necesitar ningún cambio de IAM adicional.
-              TOKEN="$(gcloud auth print-identity-token --audiences="$URL" 2>/dev/null || true)"
+              # La audiencia del token es TOKEN_AUDIENCE (URL canónica),
+              # NUNCA REQUEST_URL — ver comentario del step anterior.
+              TOKEN="$(gcloud auth print-identity-token --audiences="$TOKEN_AUDIENCE" 2>/dev/null || true)"
               if [ -n "$TOKEN" ]; then
-                RESPONSE="$(curl -sS --connect-timeout 5 --max-time 15 -H "Authorization: Bearer $TOKEN" -w '\n%{http_code}' "$URL/v1/health" || true)"
+                RESPONSE="$(curl -sS --connect-timeout 5 --max-time 15 -H "Authorization: Bearer $TOKEN" -w '\n%{http_code}' "$REQUEST_URL/v1/health" || true)"
                 HTTP_CODE="$(echo "$RESPONSE" | tail -n1)"
                 BODY="$(echo "$RESPONSE" | sed '$d')"
               fi
@@ -955,14 +1101,37 @@ jobs:
             exit 1
           fi
 
+          # Remediación 3 (T-F1.2, hallazgo ROLLBACK_PRIVATE_HEALTH,
+          # 2026-08-22): este health check solo intentaba una petición
+          # anónima. PREVIOUS_REVISION es una revisión que ya servía el
+          # 100% del tráfico antes de este deploy, pero su política de
+          # invocación (pública/IAM) la decide un prerrequisito
+          # separado, fuera de este reusable (ver P1-1 arriba) — si esa
+          # decisión resultara ser IAM-protegida, un rollback realmente
+          # exitoso (tráfico restaurado, servicio sano) se habría
+          # reportado como ROLLBACK_HEALTH_FAILED solo por un 401/403
+          # anónimo. Mismo patrón de fallback ya usado en
+          # candidate-health: la audiencia del identity token es la
+          # URL canónica del servicio (aquí, la propia URL de la
+          # petición — no hay URL etiquetada en este check).
           URL="$(gcloud run services describe "$SERVICE" --project="$PROJECT" --region="$REGION" --format='value(status.url)')"
           RESPONSE="$(curl -sS --connect-timeout 5 --max-time 15 -w '\n%{http_code}' "$URL/v1/health" 2>/dev/null || true)"
           HTTP_CODE="$(echo "$RESPONSE" | tail -n1)"
           BODY="$(echo "$RESPONSE" | sed '$d')"
+
+          if [ "$HTTP_CODE" = "401" ] || [ "$HTTP_CODE" = "403" ]; then
+            TOKEN="$(gcloud auth print-identity-token --audiences="$URL" 2>/dev/null || true)"
+            if [ -n "$TOKEN" ]; then
+              RESPONSE="$(curl -sS --connect-timeout 5 --max-time 15 -H "Authorization: Bearer $TOKEN" -w '\n%{http_code}' "$URL/v1/health" 2>/dev/null || true)"
+              HTTP_CODE="$(echo "$RESPONSE" | tail -n1)"
+              BODY="$(echo "$RESPONSE" | sed '$d')"
+            fi
+          fi
+
           if [ "$HTTP_CODE" != "200" ] || ! echo "$BODY" | jq -e '.status=="ok" and .database=="connected"' >/dev/null 2>&1; then
             echo "ROLLBACK_STATE=ROLLBACK_HEALTH_FAILED"
             echo "rollback_state=ROLLBACK_HEALTH_FAILED" >> "$GITHUB_OUTPUT"
-            echo "::error::Tráfico restaurado a PREVIOUS_REVISION (100%) pero el health check post-restauración no pasó (HTTP $HTTP_CODE). CRITICAL: verificación manual inmediata."
+            echo "::error::Tráfico restaurado a PREVIOUS_REVISION (100%) pero el health check post-restauración no pasó (HTTP $HTTP_CODE, incluyendo el intento autenticado si el anónimo fue 401/403). CRITICAL: verificación manual inmediata."
             exit 1
           fi
 
