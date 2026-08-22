@@ -1,0 +1,40 @@
+name: Night Agent Slack Bridge
+
+on:
+  workflow_dispatch:
+    inputs:
+      message:
+        description: "Mensaje para enviar a Slack"
+        required: false
+        default: "KORIXA - prueba GitHub Actions a Slack OK"
+
+permissions:
+  contents: read
+
+jobs:
+  notify-slack:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Enviar mensaje a Slack
+        env:
+          SLACK_WEBHOOK: ${{ secrets.KORIXA_SLACK_WEBHOOK }}
+          MESSAGE: ${{ inputs.message }}
+        run: |
+          if [ -z "$SLACK_WEBHOOK" ]; then
+            echo "::error::No existe el secret KORIXA_SLACK_WEBHOOK"
+            exit 1
+          fi
+
+          PAYLOAD=$(python3 - <<'PY'
+          import json
+          import os
+          print(json.dumps({"text": os.environ["MESSAGE"]}))
+          PY
+          )
+
+          curl --fail-with-body --silent --show-error \
+            -X POST \
+            -H "Content-Type: application/json" \
+            --data "$PAYLOAD" \
+            "$SLACK_WEBHOOK"
