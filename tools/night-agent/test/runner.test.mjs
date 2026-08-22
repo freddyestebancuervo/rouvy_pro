@@ -2066,3 +2066,164 @@ test('CLI: --queue <example> --execute-green WITH KORIXA_NIGHT_EXECUTION=1 (but 
 // CLI entrypoint; the 3/3-unlocked path is proven reachable ONLY at the
 // in-process level (see the executeControlledGreenTask tests above), always
 // paired with an injected fake spawnFn.
+
+// ---------------------------------------------------------------------------
+// Slack notification wiring (best-effort, non-authoritative — see notify.mjs
+// for the exhaustive absorption/allowlist unit coverage). These tests prove
+// ONLY the wiring: the right label fires at the right moment with the right
+// (allowlisted) fields, and a notification failure/throw NEVER changes a
+// checkpoint state, outcome.result, or exit code. No test here ever lets
+// KORIXA_NIGHT_SLACK_NOTIFY reach '1' against the real `notifySlackBestEffort`
+// default in a real subprocess — every notify-enabled scenario below injects
+// notifySlackFn directly (in-process), so no real `gh` call is ever possible.
+// ---------------------------------------------------------------------------
+
+function recordingNotifySlackFn(calls) {
+  return (params) => {
+    calls.push(params);
+    return { attempted: false, ok: false, reason: 'TEST_STUB' };
+  };
+}
+
+test('NOTIFY_WIRING: START fires exactly once, after the RUNNING checkpoint is on disk, before the child is spawned', async (t) => {
+  const dir = tempDir(t);
+  const child = makeFakeChild();
+  const checkpointFilePath = path.join(dir, 'checkpoint.json');
+  const calls = [];
+  let spawnCalledAfterStartNotify = false;
+  const args = executeTaskFixtureArgs(t, {
+    tmpDirFn: () => dir,
+    checkpointFilePath,
+    notifySlackFn: (params) => {
+      // At the moment START fires, the checkpoint must already be RUNNING on disk.
+      const onDisk = JSON.parse(readFileSync(checkpointFilePath, 'utf8'));
+      assert.equal(onDisk.state, 'RUNNING');
+      calls.push(params);
+    },
+  });
+  const resultPromise = executeControlledGreenTask({
+    ...args,
+    spawnFn: () => {
+      spawnCalledAfterStartNotify = calls.length > 0;
+      return child;
+    },
+  });
+  child.emit('close', 0);
+  await resultPromise;
+
+  const startCalls = calls.filter((c) => c.label === 'START');
+  assert.equal(startCalls.length, 1);
+  assert.equal(spawnCalledAfterStartNotify, true, 'START must fire before the child is spawned');
+});
+
+test('NOTIFY_WIRING: START call carries only allowlisted fields (taskId, state, attempt, timestamp) -- never prompt/env/policy path', async (t) => {
+  const dir = tempDir(t);
+  const child = makeFakeChild();
+  const calls = [];
+  const args = executeTaskFixtureArgs(t, { tmpDirFn: () => dir, notifySlackFn: recordingNotifySlackFn(calls) });
+  const resultPromise = executeControlledGreenTask({ ...args, spawnFn: () => child });
+  child.emit('close', 0);
+  await resultPromise;
+
+  const startCall = calls.find((c) => c.label === 'START');
+  assert.equal(startCall.fields.taskId, 'task-a');
+  assert.equal(startCall.fields.state, 'RUNNING');
+  assert.equal(typeof startCall.fields.attempt, 'number');
+  assert.equal(typeof startCall.fields.timestamp, 'string');
+  const fieldKeys = Object.keys(startCall.fields);
+  for (const forbidden of ['prompt', 'env', 'policyPath', 'repoRoot', 'stdout', 'stderr']) {
+    assert.ok(!fieldKeys.includes(forbidden), `forbidden field "${forbidden}" was passed to notifySlackFn`);
+  }
+});
+
+test('NOTIFY_WIRING: CHECKPOINT (VERIFYING) fires exactly once, after the VERIFYING checkpoint is on disk, on the PASS path', async (t) => {
+  const dir = tempDir(t);
+  const child = makeFakeChild();
+  const checkpointFilePath = path.join(dir, 'checkpoint.json');
+  const calls = [];
+  const args = executeTaskFixtureArgs(t, {
+    tmpDirFn: () => dir,
+    checkpointFilePath,
+    notifySlackFn: (params) => {
+      if (params.label === 'CHECKPOINT') {
+        const onDisk = JSON.parse(readFileSync(checkpointFilePath, 'utf8'));
+        assert.equal(onDisk.state, 'VERIFYING');
+      }
+      calls.push(params);
+    },
+  });
+  const resultPromise = executeControlledGreenTask({ ...args, spawnFn: () => child });
+  child.emit('close', 0);
+  const result = await resultPromise;
+  assert.equal(result.status, 'PASS');
+
+  const checkpointCalls = calls.filter((c) => c.label === 'CHECKPOINT');
+  assert.equal(checkpointCalls.length, 1);
+  assert.equal(checkpointCalls[0].fields.taskId, 'task-a');
+  assert.equal(checkpointCalls[0].fields.state, 'VERIFYING');
+});
+
+test('NOTIFY_WIRING: exactly START + CHECKPOINT fire during a full PASS run -- no extra/duplicate in-function notifications', async (t) => {
+  const dir = tempDir(t);
+  const child = makeFakeChild();
+  const calls = [];
+  const args = executeTaskFixtureArgs(t, { tmpDirFn: () => dir, notifySlackFn: recordingNotifySlackFn(calls) });
+  const resultPromise = executeControlledGreenTask({ ...args, spawnFn: () => child });
+  child.emit('close', 0);
+  await resultPromise;
+  assert.deepEqual(calls.map((c) => c.label), ['START', 'CHECKPOINT']);
+});
+
+test('NOTIFY_FAILURE_NON_BLOCKING: a notifySlackFn that THROWS on every call does not change the checkpoint state or the PASS outcome', async (t) => {
+  const dir = tempDir(t);
+  const child = makeFakeChild();
+  const checkpointFilePath = path.join(dir, 'checkpoint.json');
+  const args = executeTaskFixtureArgs(t, {
+    tmpDirFn: () => dir,
+    checkpointFilePath,
+    notifySlackFn: () => { throw new Error('simulated Slack/gh failure'); },
+  });
+  const resultPromise = executeControlledGreenTask({ ...args, spawnFn: () => child });
+  child.emit('close', 0);
+  const result = await resultPromise;
+  assert.equal(result.status, 'PASS', 'a throwing notifier must never prevent PASS');
+  const finalCheckpoint = JSON.parse(readFileSync(checkpointFilePath, 'utf8'));
+  assert.equal(finalCheckpoint.state, 'PASS');
+});
+
+test('NOTIFY_FAILURE_NON_BLOCKING: a notifySlackFn that THROWS on every call does not change the checkpoint state or the HOLD outcome (retry budget exhausted)', async (t) => {
+  const dir = tempDir(t);
+  const child = makeFakeChild();
+  const checkpointFilePath = path.join(dir, 'checkpoint.json');
+  const args = executeTaskFixtureArgs(t, {
+    tmpDirFn: () => dir,
+    checkpointFilePath,
+    task: policyTaskFixture({ max_retries: 1 }),
+    attempt: 0,
+    notifySlackFn: () => { throw new Error('simulated Slack/gh failure'); },
+  });
+  const resultPromise = executeControlledGreenTask({ ...args, spawnFn: () => child });
+  child.emit('close', 1);
+  const result = await resultPromise;
+  assert.equal(result.status, 'HOLD', 'a throwing notifier must never prevent the correct fail-closed HOLD');
+  const finalCheckpoint = JSON.parse(readFileSync(checkpointFilePath, 'utf8'));
+  assert.equal(finalCheckpoint.state, 'HOLD');
+});
+
+test('NOTIFY_FAILURE_NON_BLOCKING: the real (default) notifySlackBestEffort -- disabled by default, envValue unset -- never affects a real PASS run', async (t) => {
+  const dir = tempDir(t);
+  const child = makeFakeChild();
+  const checkpointFilePath = path.join(dir, 'checkpoint.json');
+  // No notifySlackFn override at all: exercises the REAL default
+  // (notifySlackBestEffort imported from notify.mjs). Since
+  // KORIXA_NIGHT_SLACK_NOTIFY is not set in this test process's env, this
+  // must perform zero subprocess calls and the PASS outcome must be exactly
+  // as if notification didn't exist.
+  const args = executeTaskFixtureArgs(t, { tmpDirFn: () => dir, checkpointFilePath });
+  const resultPromise = executeControlledGreenTask({ ...args, spawnFn: () => child });
+  child.emit('close', 0);
+  const result = await resultPromise;
+  assert.equal(result.status, 'PASS');
+  const finalCheckpoint = JSON.parse(readFileSync(checkpointFilePath, 'utf8'));
+  assert.equal(finalCheckpoint.state, 'PASS');
+});

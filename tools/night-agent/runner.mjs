@@ -74,6 +74,19 @@ import {
   resolveCheckpointRecoveryDecision,
 } from './checkpoint.mjs';
 import { isRepoRelativePath, isPathWithinScope } from './path-safety.mjs';
+import { notifySlackBestEffort } from './notify.mjs';
+
+// Best-effort notification call-site wrapper: defense-in-depth on top of
+// notifySlackBestEffort's own try/catch. A notification (or a test's
+// injected fake) throwing must NEVER propagate into caller control flow —
+// it can never affect a checkpoint, outcome.result, or an exit code.
+function safeNotify(notifySlackFn, params) {
+  try {
+    notifySlackFn(params);
+  } catch {
+    // best-effort, non-authoritative: never propagate.
+  }
+}
 
 /**
  * @param {string[]} argv
@@ -773,6 +786,7 @@ export async function executeControlledGreenTask({
   checkNightGuardInstalledFn = checkNightGuardInstalled,
   getGitStatusPathsFn = getGitStatusPaths,
   runAllVerificationCommandsFn = runAllVerificationCommands,
+  notifySlackFn = notifySlackBestEffort,
   spawnFn,
   baseEnv = process.env,
 }) {
@@ -818,6 +832,7 @@ export async function executeControlledGreenTask({
 
     let checkpoint = createCheckpoint({ taskId: task.id, state: 'RUNNING', attempt, baseSha, now: nowFn() });
     writeCheckpointFn(resolvedCheckpointFilePath, checkpoint);
+    safeNotify(notifySlackFn, { label: 'START', fields: { taskId: task.id, state: 'RUNNING', attempt, timestamp: nowFn() } });
 
     const argvSpec = buildClaudeArgvFn({ prompt, maxTurns: task.max_turns });
     const env = buildControlledChildEnv({ baseEnv, policyFilePath: policyPath });
@@ -863,6 +878,7 @@ export async function executeControlledGreenTask({
 
     checkpoint = advanceCheckpoint(checkpoint, { state: 'VERIFYING', now: nowFn() });
     writeCheckpointFn(resolvedCheckpointFilePath, checkpoint);
+    safeNotify(notifySlackFn, { label: 'CHECKPOINT', fields: { taskId: task.id, state: 'VERIFYING', attempt, timestamp: nowFn() } });
 
     const verification = runAllVerificationCommandsFn(task, { repoRoot, spawnSyncFn, existsSyncFn, timeoutMs: resolvedVerificationTimeoutMs });
     if (!verification.allPass) {
@@ -1149,7 +1165,16 @@ function main() {
       // executeControlledGreenTask's own realChildSpawn flag), never a
       // hardcoded constant.
       console.log(`REAL_CHILD_SPAWN = ${outcome.realChildSpawn ? 1 : 0}`);
-      process.exit(resolveExitCode(outcome.result));
+      // Best-effort, non-authoritative — outcome.result and the exit code
+      // below are already fully decided before this call and cannot be
+      // altered by it (see safeNotify / notifySlackBestEffort). Exactly one
+      // message per invocation: BLOCKED for any HOLD*, END otherwise.
+      const exitCodeFamily = resolveExitCode(outcome.result);
+      safeNotify(notifySlackBestEffort, {
+        label: outcome.result.startsWith('HOLD') ? 'BLOCKED' : 'END',
+        fields: { taskId: outcome.taskId ?? undefined, result: outcome.result, realChildSpawn: outcome.realChildSpawn ? 1 : 0, exitCodeFamily },
+      });
+      process.exit(exitCodeFamily);
     });
     return;
   }
