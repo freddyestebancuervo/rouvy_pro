@@ -39,6 +39,34 @@ name: (reusable) Backend — Production DB read-only inspection
 # vivo, DESPUÉS de conectar y ANTES de cualquier consulta de catálogo
 # amplia, y falla cerrado (`CREDENTIAL_DB_USER_MISMATCH`) si no
 # coincide — ver db-readonly-inspector.ts, PHASE 7.
+#
+# REMEDIACIÓN (misma PR, tras auditoría independiente
+# KORIXA_TF12_PRODUCTION_DB_READONLY_INSPECTOR_INDEPENDENT_AUDIT, HOLD:
+# P0=0, P1=8, P2=3, P3=3). Cierra P1-8, el único hallazgo de este
+# archivo (los otros 7 P1 estaban en db-readonly-inspector.ts — ver su
+# propio header):
+#   P1-8  el step "Capturar el resultado de la ejecución" ya EXPLICITA
+#         `exit 1` cuando la ejecución del Job no tuvo éxito
+#         (succeededCount≠1 o failedCount≠0) — antes solo emitía
+#         `execution_status=failed` + una anotación `::error::`, que no
+#         falla un step por sí sola (comportamiento de GitHub Actions),
+#         permitiendo que el workflow reportara éxito con una
+#         inspección de Production realmente fallida. La documentación
+#         oficial de `gcloud run jobs execute --wait` no especifica su
+#         código de salida ante una tarea fallida (verificado en vivo
+#         durante esta misma auditoría), así que ese comando tampoco
+#         puede asumirse como respaldo implícito.
+# P2-11 (limitación arquitectónica, aceptada, NO resuelta debilitando
+# valores fijos de Production): este workflow exacto no puede
+# ensayarse en `ridepro-development` — todos sus hechos de Production
+# (proyecto, instancia, red, SA, secreto) son `env:` fijos, no inputs.
+# Solo el script del inspector (ya cubierto por pruebas unitarias con
+# mocks) y un Job desechable reconstruido a mano (mismo patrón ya
+# usado por NONPROD TEST A/TEST B) pueden ensayarse antes de la primera
+# invocación real de este archivo — que, dado CALLER_COUNT=0, solo
+# puede ocurrir contra Production. Esto no es un defecto a corregir en
+# este PR; es un límite explícito que debe quedar documentado para el
+# próximo bloque de ensayo NONPROD.
 
 on:
   workflow_call:
@@ -343,6 +371,20 @@ jobs:
           [ -n "$EXECUTION_NAME" ] || { echo "::error::No se pudo resolver el nombre de la ejecución — FAIL CLOSED."; exit 1; }
           echo "execution_name=$EXECUTION_NAME" >> "$GITHUB_OUTPUT"
 
+      # -----------------------------------------------------------------
+      # REMEDIACIÓN P1-8 (auditoría independiente
+      # KORIXA_TF12_PRODUCTION_DB_READONLY_INSPECTOR_INDEPENDENT_AUDIT):
+      # antes, esta rama solo emitía `execution_status=failed` +
+      # `::error::` sin `exit 1` — una anotación `::error::` NO falla un
+      # step por sí sola (comportamiento propio de GitHub Actions), así
+      # que el step (y por lo tanto el job completo) podía reportar
+      # ÉXITO aunque la ejecución real del Job hubiera fallado. La
+      # documentación oficial de `gcloud run jobs execute --wait` no
+      # especifica su código de salida ante una tarea fallida (verificado
+      # en vivo, T-F1.2, esta misma auditoría) — así que ese comando NO
+      # puede asumirse como respaldo implícito. Ahora esta rama termina
+      # el step explícitamente con `exit 1`.
+      # -----------------------------------------------------------------
       - name: Capturar el resultado de la ejecución (sin leer logs — ver limitación documentada)
         id: wait-execution
         run: |
@@ -355,6 +397,7 @@ jobs:
           else
             echo "execution_status=failed" >> "$GITHUB_OUTPUT"
             echo "::error::La ejecución del inspector no tuvo éxito (succeeded=$SUCCEEDED_COUNT, failed=$FAILED_COUNT). La evidencia detallada (JSON de InspectionResult o el InspectorError) vive únicamente en los logs del Job — ver limitación de PHASE 35."
+            exit 1
           fi
 
       # -----------------------------------------------------------------

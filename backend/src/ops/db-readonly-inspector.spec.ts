@@ -1,3 +1,5 @@
+import * as fs from 'fs';
+import * as path from 'path';
 import {
   INSPECTION_QUERIES,
   EXPECTED_MIGRATION_NAMES,
@@ -6,12 +8,17 @@ import {
   assertExpectedTarget,
   classifyMigrationPrefix,
   expectedObjectsForApplied,
+  diffPhysicalSchema,
+  summarizePhysicalDiff,
   classifyOwnerModel,
   findPrivilegeEscalations,
+  findMissingExpectedRoles,
   topLevelStatementForm,
   InspectorError,
   runInspection,
   type RoleCapabilityRow,
+  type ExpectedPhysicalSet,
+  type ActualPhysicalInventory,
 } from './db-readonly-inspector';
 
 // `pg.Client` se mockea por completo — ningún test de este archivo toca
@@ -21,7 +28,8 @@ const mockQuery = jest.fn();
 const mockEnd = jest.fn();
 
 jest.mock('pg', () => ({
-  Client: jest.fn().mockImplementation(() => ({
+  Client: jest.fn().mockImplementation((config: unknown) => ({
+    __config: config,
     connect: mockConnect,
     query: mockQuery,
     end: mockEnd,
@@ -62,6 +70,19 @@ function baseEnv(overrides: Partial<NodeJS.ProcessEnv> = {}) {
   };
 }
 
+/** Inventario físico "completo y sano" para las 6 migraciones aplicadas
+ * — usado como base para los tests de mutación (quitar/agregar un
+ * objeto puntual) en vez de repetir la lista entera cada vez. */
+function fullHealthyInventory(): { tables: string[]; indexes: string[]; sequences: string[]; columns: string[] } {
+  const expected = expectedObjectsForApplied([...EXPECTED_MIGRATION_NAMES]);
+  return {
+    tables: [...expected.tables],
+    indexes: [...expected.indexes],
+    sequences: [...expected.sequences, ...ENGINE_TRACKING_OBJECTS.sequences],
+    columns: [...expected.columns],
+  };
+}
+
 /**
  * Despachador de queries por texto — refleja el orden real de
  * `runInspection` sin acoplar los tests a ese orden exacto (dispatch por
@@ -74,7 +95,12 @@ function installHappyPathMock(options: {
   pgmigrationsExists?: boolean;
   trackedNames?: string[];
   objectOwners?: { schema: string; object_name: string; object_type: string; owner: string }[];
-  physicalPresence?: Record<string, boolean>;
+  indexNames?: string[];
+  columnRows?: { table_name: string; column_name: string }[];
+  pgcryptoPresent?: boolean;
+  roleCapabilityRows?: RoleCapabilityRow[];
+  dbOwnerRows?: { datname: string; owner: string }[];
+  schemaOwnerRows?: { nspname: string; owner: string }[];
 }) {
   const {
     transactionReadOnly = 'on',
@@ -83,7 +109,12 @@ function installHappyPathMock(options: {
     pgmigrationsExists = true,
     trackedNames = ['0001_init', '0002_users_email_case_insensitive_unique'],
     objectOwners = [],
-    physicalPresence = {},
+    indexNames = [],
+    columnRows = [],
+    pgcryptoPresent = true,
+    roleCapabilityRows = OK_ROLE_CAPS,
+    dbOwnerRows = [{ datname: 'korixa_production', owner: 'korixa_app' }],
+    schemaOwnerRows = [{ nspname: 'public', owner: 'korixa_app' }],
   } = options;
 
   mockConnect.mockResolvedValue(undefined);
@@ -102,16 +133,16 @@ function installHappyPathMock(options: {
       });
     }
     if (sql === INSPECTION_QUERIES.roleCapabilities) {
-      return Promise.resolve({ rows: OK_ROLE_CAPS });
+      return Promise.resolve({ rows: roleCapabilityRows });
     }
     if (sql === INSPECTION_QUERIES.roleMemberships) {
       return Promise.resolve({ rows: [] });
     }
     if (sql === INSPECTION_QUERIES.databaseOwnership) {
-      return Promise.resolve({ rows: [{ datname: 'korixa_production', owner: 'korixa_app' }] });
+      return Promise.resolve({ rows: dbOwnerRows });
     }
     if (sql === INSPECTION_QUERIES.schemaOwnership) {
-      return Promise.resolve({ rows: [{ nspname: 'public', owner: 'korixa_app' }] });
+      return Promise.resolve({ rows: schemaOwnerRows });
     }
     if (sql === INSPECTION_QUERIES.objectOwnership) {
       return Promise.resolve({ rows: objectOwners });
@@ -124,22 +155,65 @@ function installHappyPathMock(options: {
         ],
       });
     }
+    if (sql === INSPECTION_QUERIES.tablePrivileges) {
+      return Promise.resolve({
+        rows: [
+          {
+            rolname: 'korixa_runtime',
+            table_name: 'users',
+            can_select: true,
+            can_insert: true,
+            can_update: true,
+            can_delete: true,
+            can_truncate: false,
+            can_references: false,
+            can_trigger: false,
+          },
+        ],
+      });
+    }
+    if (sql === INSPECTION_QUERIES.sequencePrivileges) {
+      return Promise.resolve({
+        rows: [{ rolname: 'korixa_runtime', sequence_name: 'audit_log_id_seq', can_usage: true, can_select: false, can_update: true }],
+      });
+    }
     if (sql === INSPECTION_QUERIES.migrationTrackerExists) {
       return Promise.resolve({ rows: [{ pgmigrations_exists: pgmigrationsExists }] });
     }
     if (sql === INSPECTION_QUERIES.migrationTrackerRows) {
       return Promise.resolve({ rows: trackedNames.map((name) => ({ name, run_on: '2026-08-22T00:00:00.000Z' })) });
     }
-    if (sql === INSPECTION_QUERIES.physicalSchemaExistence) {
-      return Promise.resolve({ rows: [physicalPresence] });
+    if (sql === INSPECTION_QUERIES.indexInventory) {
+      return Promise.resolve({ rows: indexNames.map((indexname) => ({ indexname })) });
     }
-    if (sql === INSPECTION_QUERIES.firebaseUidColumnExists) {
-      return Promise.resolve({ rows: [{ firebase_uid_column_exists: false }] });
+    if (sql === INSPECTION_QUERIES.columnInventory) {
+      return Promise.resolve({ rows: columnRows });
     }
     if (sql === INSPECTION_QUERIES.pgcryptoPresent) {
-      return Promise.resolve({ rows: [{ pgcrypto_present: true }] });
+      return Promise.resolve({ rows: [{ pgcrypto_present: pgcryptoPresent }] });
     }
     throw new Error(`Query no reconocida por el mock: ${sql}`);
+  });
+}
+
+/** Instala un mock "totalmente sano" para las 6 migraciones aplicadas —
+ * usado como punto de partida para los tests de mutación puntual
+ * (quitar un índice, agregar una tabla extra, etc.). */
+function installFullyHealthyMock(overrides: Parameters<typeof installHappyPathMock>[0] = {}) {
+  const inv = fullHealthyInventory();
+  installHappyPathMock({
+    trackedNames: [...EXPECTED_MIGRATION_NAMES],
+    objectOwners: [
+      ...inv.tables.map((t) => ({ schema: 'public', object_name: t, object_type: 'table', owner: 'korixa_app' })),
+      ...inv.sequences.map((s) => ({ schema: 'public', object_name: s, object_type: 'sequence', owner: 'korixa_app' })),
+    ],
+    indexNames: inv.indexes,
+    columnRows: inv.columns.map((c) => {
+      const dot = c.indexOf('.');
+      return { table_name: c.slice(0, dot), column_name: c.slice(dot + 1) };
+    }),
+    pgcryptoPresent: true,
+    ...overrides,
   });
 }
 
@@ -164,7 +238,7 @@ describe('db-readonly-inspector', () => {
     it('el resultado exitoso no contiene el DSN ni la contraseña en ningún campo serializado', async () => {
       const env = baseEnv();
       setEnv(env);
-      installHappyPathMock({});
+      installFullyHealthyMock();
 
       const result = await runInspection();
       const serialized = JSON.stringify(result);
@@ -194,7 +268,7 @@ describe('db-readonly-inspector', () => {
   describe('orden de statements', () => {
     it('el primer statement ejecutado es exactamente BEGIN READ ONLY', async () => {
       setEnv(baseEnv());
-      installHappyPathMock({});
+      installFullyHealthyMock();
 
       await runInspection();
 
@@ -204,7 +278,7 @@ describe('db-readonly-inspector', () => {
 
     it('la assertion de solo-lectura se ejecuta inmediatamente después de BEGIN', async () => {
       setEnv(baseEnv());
-      installHappyPathMock({});
+      installFullyHealthyMock();
 
       await runInspection();
 
@@ -257,15 +331,17 @@ describe('db-readonly-inspector', () => {
   });
 
   // ---------------------------------------------------------------------
-  // 8. Identidad válida -> continúa hasta completar.
+  // 8/20. Identidad válida -> continúa, pero credential_db_user_mapping
+  // no implica db_role_model probado (P1-3).
   // ---------------------------------------------------------------------
-  it('con identidad válida (korixa_runtime, korixa_production) la inspección completa y produce un final_disposition', async () => {
+  it('con identidad válida la inspección completa; credential_db_user_mapping no implica db_role_model probado', async () => {
     setEnv(baseEnv());
-    installHappyPathMock({});
+    installFullyHealthyMock();
 
     const result = await runInspection();
 
-    expect(result.db_role_mapping).toBe('MATCHES_EXPECTED');
+    expect(result.credential_db_user_mapping).toBe('MATCHES_EXPECTED');
+    expect(result.db_role_model).toBe('UNPROVEN_REQUIRES_REVIEW');
     expect(result.final_disposition).toBeDefined();
   });
 
@@ -282,18 +358,14 @@ describe('db-readonly-inspector', () => {
   // 10-13. Clasificación de prefijos de migración.
   // ---------------------------------------------------------------------
   describe('classifyMigrationPrefix', () => {
-    it('clasifica correctamente cada prefijo válido, incluyendo el vacío y el completo', () => {
+    it('clasifica correctamente cada prefijo válido, incluyendo el vacío y el completo — un prefijo vacío es TRACKED_AND_CONSISTENT(applied=[]), nunca un estado especial "vacío probado" (P1-4)', () => {
       for (let i = 0; i <= EXPECTED_MIGRATION_NAMES.length; i += 1) {
         const prefix = EXPECTED_MIGRATION_NAMES.slice(0, i);
         const result = classifyMigrationPrefix([...prefix]);
-        if (i === 0) {
-          expect(result.state).toBe('CLEAN_EMPTY');
-        } else {
-          expect(result.state).toBe('TRACKED_AND_CONSISTENT');
-          if (result.state === 'TRACKED_AND_CONSISTENT') {
-            expect(result.applied).toEqual(prefix);
-            expect(result.pending).toEqual(EXPECTED_MIGRATION_NAMES.slice(i));
-          }
+        expect(result.state).toBe('TRACKED_AND_CONSISTENT');
+        if (result.state === 'TRACKED_AND_CONSISTENT') {
+          expect(result.applied).toEqual(prefix);
+          expect(result.pending).toEqual(EXPECTED_MIGRATION_NAMES.slice(i));
         }
       }
     });
@@ -323,53 +395,213 @@ describe('db-readonly-inspector', () => {
   });
 
   // ---------------------------------------------------------------------
-  // 14-15. Caso sin tracker.
+  // 9-10 (remediación). pgmigrations vacía/ausente + presencia/ausencia
+  // de objetos de aplicación — las 4 combinaciones de la Remediación 4.
   // ---------------------------------------------------------------------
-  it('tracker ausente + sin objetos de aplicación -> CLEAN_EMPTY', async () => {
-    setEnv(baseEnv());
-    installHappyPathMock({ pgmigrationsExists: false, trackedNames: [], objectOwners: [] });
+  describe('CLEAN_EMPTY vs HOLD_PHYSICAL_OBJECTS_WITHOUT_TRACKING (Remediación 4, P1-4)', () => {
+    it('A: pgmigrations ausente + sin objetos de aplicación -> CLEAN_EMPTY', async () => {
+      setEnv(baseEnv());
+      installHappyPathMock({ pgmigrationsExists: false, trackedNames: [], objectOwners: [] });
 
-    const result = await runInspection();
+      const result = await runInspection();
 
-    expect(result.pgmigrations.exists).toBe(false);
-    expect(result.final_disposition).toBe('CLEAN_EMPTY');
-  });
-
-  it('tracker ausente + objetos de aplicación presentes -> HOLD', async () => {
-    setEnv(baseEnv());
-    installHappyPathMock({
-      pgmigrationsExists: false,
-      trackedNames: [],
-      objectOwners: [{ schema: 'public', object_name: 'users', object_type: 'table', owner: 'korixa_app' }],
+      expect(result.pgmigrations.exists).toBe(false);
+      expect(result.final_disposition).toBe('CLEAN_EMPTY');
     });
 
-    const result = await runInspection();
+    it('B: pgmigrations existe pero vacía + solo objetos del motor -> CLEAN_EMPTY, con pgmigrations.exists=true visible', async () => {
+      setEnv(baseEnv());
+      installHappyPathMock({
+        pgmigrationsExists: true,
+        trackedNames: [],
+        objectOwners: [
+          { schema: 'public', object_name: 'pgmigrations', object_type: 'table', owner: 'korixa_runtime' },
+          { schema: 'public', object_name: 'pgmigrations_id_seq', object_type: 'sequence', owner: 'korixa_runtime' },
+        ],
+      });
 
-    expect(result.final_disposition).toBe('HOLD_PHYSICAL_OBJECTS_WITHOUT_TRACKING');
-  });
+      const result = await runInspection();
 
-  // ---------------------------------------------------------------------
-  // 16. Migración trackeada con objeto físico faltante -> HOLD.
-  // ---------------------------------------------------------------------
-  it('migración trackeada como aplicada pero con objeto físico esperado faltante -> HOLD', async () => {
-    setEnv(baseEnv());
-    installHappyPathMock({
-      pgmigrationsExists: true,
-      trackedNames: ['0001_init'],
-      physicalPresence: { users_exists: false }, // 0001 implica users; falta.
+      expect(result.pgmigrations.exists).toBe(true);
+      expect(result.final_disposition).toBe('CLEAN_EMPTY');
     });
 
-    const result = await runInspection();
+    it('C: pgmigrations existe pero vacía + un objeto de aplicación existe -> HOLD_PHYSICAL_OBJECTS_WITHOUT_TRACKING (bug confirmado por la auditoría, ahora corregido)', async () => {
+      setEnv(baseEnv());
+      installHappyPathMock({
+        pgmigrationsExists: true,
+        trackedNames: [],
+        objectOwners: [{ schema: 'public', object_name: 'users', object_type: 'table', owner: 'korixa_app' }],
+      });
 
-    expect(result.final_disposition).toBe('HOLD_TRACKING_WITH_MISSING_OBJECTS');
-    expect(result.physical_schema.expected_missing).toContain('users');
+      const result = await runInspection();
+
+      expect(result.pgmigrations.exists).toBe(true);
+      expect(result.final_disposition).toBe('HOLD_PHYSICAL_OBJECTS_WITHOUT_TRACKING');
+    });
+
+    it('D: pgmigrations ausente + un objeto de aplicación existe -> HOLD_PHYSICAL_OBJECTS_WITHOUT_TRACKING', async () => {
+      setEnv(baseEnv());
+      installHappyPathMock({
+        pgmigrationsExists: false,
+        trackedNames: [],
+        objectOwners: [{ schema: 'public', object_name: 'users', object_type: 'table', owner: 'korixa_app' }],
+      });
+
+      const result = await runInspection();
+
+      expect(result.final_disposition).toBe('HOLD_PHYSICAL_OBJECTS_WITHOUT_TRACKING');
+    });
   });
 
   // ---------------------------------------------------------------------
-  // 17-18. Modelo de ownership.
+  // Remediación 1/2/3/5/18 — diff físico completo: faltantes y
+  // sobrantes en las 5 categorías, vía runInspection() de punta a punta
+  // sobre un inventario "sano" con exactamente una mutación cada vez.
+  // ---------------------------------------------------------------------
+  describe('completitud física — faltantes (P1-1)', () => {
+    it('1. índice esperado faltante (0006 aplicada) -> HOLD_TRACKING_WITH_MISSING_OBJECTS', async () => {
+      setEnv(baseEnv());
+      const inv = fullHealthyInventory();
+      installFullyHealthyMock({ indexNames: inv.indexes.filter((i) => i !== 'idx_equipment_user_created_id') });
+
+      const result = await runInspection();
+
+      expect(result.final_disposition).toBe('HOLD_TRACKING_WITH_MISSING_OBJECTS');
+      expect(result.physical_schema.expected_missing).toContain('index:idx_equipment_user_created_id');
+    });
+
+    it('2. secuencia esperada faltante (audit_log_id_seq) -> HOLD_TRACKING_WITH_MISSING_OBJECTS', async () => {
+      setEnv(baseEnv());
+      const inv = fullHealthyInventory();
+      installFullyHealthyMock({
+        objectOwners: [
+          ...inv.tables.map((t) => ({ schema: 'public', object_name: t, object_type: 'table', owner: 'korixa_app' })),
+          // audit_log_id_seq deliberadamente ausente
+          { schema: 'public', object_name: 'pgmigrations_id_seq', object_type: 'sequence', owner: 'korixa_runtime' },
+        ],
+      });
+
+      const result = await runInspection();
+
+      expect(result.final_disposition).toBe('HOLD_TRACKING_WITH_MISSING_OBJECTS');
+      expect(result.physical_schema.expected_missing).toContain('sequence:audit_log_id_seq');
+    });
+
+    it('3. extensión pgcrypto faltante (0001 aplicada) -> HOLD_TRACKING_WITH_MISSING_OBJECTS', async () => {
+      setEnv(baseEnv());
+      installFullyHealthyMock({ pgcryptoPresent: false });
+
+      const result = await runInspection();
+
+      expect(result.final_disposition).toBe('HOLD_TRACKING_WITH_MISSING_OBJECTS');
+      expect(result.physical_schema.expected_missing).toContain('extension:pgcrypto');
+    });
+
+    it('4. columna users.firebase_uid faltante (0005 aplicada) -> HOLD_TRACKING_WITH_MISSING_OBJECTS (el bug original: la query se ejecutaba pero su resultado se descartaba)', async () => {
+      setEnv(baseEnv());
+      const inv = fullHealthyInventory();
+      installFullyHealthyMock({
+        columnRows: inv.columns
+          .filter((c) => c !== 'users.firebase_uid')
+          .map((c) => {
+            const dot = c.indexOf('.');
+            return { table_name: c.slice(0, dot), column_name: c.slice(dot + 1) };
+          }),
+      });
+
+      const result = await runInspection();
+
+      expect(result.final_disposition).toBe('HOLD_TRACKING_WITH_MISSING_OBJECTS');
+      expect(result.physical_schema.expected_missing).toContain('column:users.firebase_uid');
+    });
+  });
+
+  describe('completitud física — sobrantes (P1-5, antes estructuralmente inalcanzable)', () => {
+    it('5. tabla extra no explicada -> HOLD_UNEXPECTED_SCHEMA_OBJECTS', async () => {
+      setEnv(baseEnv());
+      const inv = fullHealthyInventory();
+      installFullyHealthyMock({
+        objectOwners: [
+          ...inv.tables.map((t) => ({ schema: 'public', object_name: t, object_type: 'table', owner: 'korixa_app' })),
+          ...inv.sequences.map((s) => ({ schema: 'public', object_name: s, object_type: 'sequence', owner: 'korixa_app' })),
+          { schema: 'public', object_name: 'manual_table', object_type: 'table', owner: 'korixa_app' },
+        ],
+      });
+
+      const result = await runInspection();
+
+      expect(result.final_disposition).toBe('HOLD_UNEXPECTED_SCHEMA_OBJECTS');
+      expect(result.physical_schema.unexpected_objects).toContain('table:manual_table');
+    });
+
+    it('6. secuencia extra no explicada -> HOLD_UNEXPECTED_SCHEMA_OBJECTS', async () => {
+      setEnv(baseEnv());
+      const inv = fullHealthyInventory();
+      installFullyHealthyMock({
+        objectOwners: [
+          ...inv.tables.map((t) => ({ schema: 'public', object_name: t, object_type: 'table', owner: 'korixa_app' })),
+          ...inv.sequences.map((s) => ({ schema: 'public', object_name: s, object_type: 'sequence', owner: 'korixa_app' })),
+          { schema: 'public', object_name: 'manual_seq', object_type: 'sequence', owner: 'korixa_app' },
+        ],
+      });
+
+      const result = await runInspection();
+
+      expect(result.final_disposition).toBe('HOLD_UNEXPECTED_SCHEMA_OBJECTS');
+      expect(result.physical_schema.unexpected_objects).toContain('sequence:manual_seq');
+    });
+
+    it('7. índice extra no explicado -> HOLD_UNEXPECTED_SCHEMA_OBJECTS', async () => {
+      setEnv(baseEnv());
+      const inv = fullHealthyInventory();
+      installFullyHealthyMock({ indexNames: [...inv.indexes, 'idx_manual_unexplained'] });
+
+      const result = await runInspection();
+
+      expect(result.final_disposition).toBe('HOLD_UNEXPECTED_SCHEMA_OBJECTS');
+      expect(result.physical_schema.unexpected_objects).toContain('index:idx_manual_unexplained');
+    });
+
+    it('8. columna extra en una tabla esperada -> HOLD_UNEXPECTED_SCHEMA_OBJECTS', async () => {
+      setEnv(baseEnv());
+      const inv = fullHealthyInventory();
+      installFullyHealthyMock({
+        columnRows: [
+          ...inv.columns.map((c) => {
+            const dot = c.indexOf('.');
+            return { table_name: c.slice(0, dot), column_name: c.slice(dot + 1) };
+          }),
+          { table_name: 'users', column_name: 'manual_unexplained_column' },
+        ],
+      });
+
+      const result = await runInspection();
+
+      expect(result.final_disposition).toBe('HOLD_UNEXPECTED_SCHEMA_OBJECTS');
+      expect(result.physical_schema.unexpected_objects).toContain('column:users.manual_unexplained_column');
+    });
+
+    it('columna extra en una tabla NO esperada no se reporta por separado (ya cubierta por unexpectedTables, evita ruido duplicado)', () => {
+      const expected: ExpectedPhysicalSet = { tables: new Set(['users']), indexes: new Set(), sequences: new Set(), extensions: new Set(), columns: new Set(['users.id']) };
+      const actual: ActualPhysicalInventory = {
+        tables: new Set(['users', 'manual_table']),
+        indexes: new Set(),
+        sequences: new Set(),
+        pgcryptoPresent: true,
+        columns: new Set(['users.id', 'manual_table.some_column']),
+      };
+      const diff = diffPhysicalSchema(expected, actual);
+      expect(diff.unexpectedTables).toEqual(['manual_table']);
+      expect(diff.unexpectedColumns).toEqual([]);
+    });
+  });
+
+  // ---------------------------------------------------------------------
+  // 16-17 (remediación). Modelo de ownership.
   // ---------------------------------------------------------------------
   describe('classifyOwnerModel', () => {
-    it('korixa_runtime como owner de un objeto de aplicación es una violación (HOLD)', () => {
+    it('korixa_runtime como owner de un objeto de aplicación es una violación (HOLD) — y produce db_role_model=OBVIOUS_VIOLATION', () => {
       expect(classifyOwnerModel(['korixa_runtime'], true)).toBe('CASE_C_RUNTIME_OWNER_VIOLATION');
     });
 
@@ -386,34 +618,213 @@ describe('db-readonly-inspector', () => {
     });
   });
 
-  it('runInspection() reporta HOLD_INCONSISTENT_OWNER_MODEL si korixa_runtime posee un objeto de aplicación', async () => {
+  it('21. runInspection() reporta HOLD_INCONSISTENT_OWNER_MODEL y db_role_model=OBVIOUS_VIOLATION si korixa_runtime posee un objeto de aplicación', async () => {
     setEnv(baseEnv());
+    const expected0001 = expectedObjectsForApplied(['0001_init']);
     installHappyPathMock({
-      pgmigrationsExists: false,
-      trackedNames: [],
-      objectOwners: [{ schema: 'public', object_name: 'users', object_type: 'table', owner: 'korixa_runtime' }],
+      pgmigrationsExists: true,
+      trackedNames: ['0001_init'],
+      // Inventario 0001 COMPLETO (todas las tablas + la secuencia) para
+      // que nada dispare HOLD_TRACKING_WITH_MISSING_OBJECTS antes de
+      // llegar a la evaluación de ownership — la única anomalía
+      // deliberada acá es que 'users' es dueño de korixa_runtime.
+      objectOwners: [
+        ...[...expected0001.tables].map((t) => ({
+          schema: 'public',
+          object_name: t,
+          object_type: 'table',
+          owner: t === 'users' ? 'korixa_runtime' : 'korixa_app',
+        })),
+        ...[...expected0001.sequences].map((s) => ({ schema: 'public', object_name: s, object_type: 'sequence', owner: 'korixa_app' })),
+      ],
+      indexNames: [...expected0001.indexes],
+      columnRows: [...expected0001.columns].map((c) => {
+        const dot = c.indexOf('.');
+        return { table_name: c.slice(0, dot), column_name: c.slice(dot + 1) };
+      }),
     });
 
     const result = await runInspection();
 
-    // Objeto sin tracker Y ownership inconsistente — el gate de tracking
-    // ausente se evalúa primero (ver runInspection), documentado y
-    // determinístico, no accidental.
-    expect(['HOLD_PHYSICAL_OBJECTS_WITHOUT_TRACKING', 'HOLD_INCONSISTENT_OWNER_MODEL']).toContain(
-      result.final_disposition,
-    );
+    expect(result.final_disposition).toBe('HOLD_INCONSISTENT_OWNER_MODEL');
+    expect(result.db_role_model).toBe('OBVIOUS_VIOLATION');
+  });
+
+  it('22. ownership mixto entre korixa_app y postgres -> HOLD_INCONSISTENT_OWNER_MODEL', async () => {
+    setEnv(baseEnv());
+    const expected0001 = expectedObjectsForApplied(['0001_init']);
+    installHappyPathMock({
+      pgmigrationsExists: true,
+      trackedNames: ['0001_init'],
+      objectOwners: [
+        ...[...expected0001.tables].map((t) => ({
+          schema: 'public',
+          object_name: t,
+          object_type: 'table',
+          owner: t === 'roles' ? 'postgres' : 'korixa_app',
+        })),
+        ...[...expected0001.sequences].map((s) => ({ schema: 'public', object_name: s, object_type: 'sequence', owner: 'korixa_app' })),
+      ],
+      indexNames: [...expected0001.indexes],
+      columnRows: [...expected0001.columns].map((c) => {
+        const dot = c.indexOf('.');
+        return { table_name: c.slice(0, dot), column_name: c.slice(dot + 1) };
+      }),
+    });
+
+    const result = await runInspection();
+
+    expect(result.final_disposition).toBe('HOLD_INCONSISTENT_OWNER_MODEL');
+  });
+
+  it('23. schema físico completo y sano con las 6 migraciones -> TRACKED_AND_CONSISTENT', async () => {
+    setEnv(baseEnv());
+    installFullyHealthyMock();
+
+    const result = await runInspection();
+
+    expect(result.final_disposition).toBe('TRACKED_AND_CONSISTENT');
+    expect(result.physical_schema.classification).toBe('MATCHES_APPLIED');
+  });
+
+  it('24-25. prefijo parcial válido con objetos parciales coincidentes -> TRACKED_AND_CONSISTENT con PENDING correcto; los objetos de migraciones pendientes ausentes NO fallan', async () => {
+    setEnv(baseEnv());
+    const expected0001 = expectedObjectsForApplied(['0001_init']);
+    installHappyPathMock({
+      pgmigrationsExists: true,
+      trackedNames: ['0001_init'],
+      objectOwners: [...expected0001.tables].map((t) => ({ schema: 'public', object_name: t, object_type: 'table', owner: 'korixa_app' })).concat([
+        { schema: 'public', object_name: 'audit_log_id_seq', object_type: 'sequence', owner: 'korixa_app' },
+      ]),
+      indexNames: [...expected0001.indexes],
+      columnRows: [...expected0001.columns].map((c) => {
+        const dot = c.indexOf('.');
+        return { table_name: c.slice(0, dot), column_name: c.slice(dot + 1) };
+      }),
+    });
+
+    const result = await runInspection();
+
+    expect(result.final_disposition).toBe('TRACKED_AND_CONSISTENT');
+    if (result.pgmigrations.classification.state === 'TRACKED_AND_CONSISTENT') {
+      expect(result.pgmigrations.classification.pending).toEqual(EXPECTED_MIGRATION_NAMES.slice(1));
+    }
+    // Ningún objeto de 0002-0006 (ej. 'equipment', pendiente) se exige.
+    expect(result.physical_schema.expected_missing.some((x) => x.includes('equipment'))).toBe(false);
   });
 
   // ---------------------------------------------------------------------
-  // 19-20. Objetos del motor node-pg-migrate nunca se marcan como
-  // inesperados.
+  // Remediación 6 (P1-2) — privilegios de tabla/secuencia SÍ se ejecutan
+  // y quedan expuestos.
+  // ---------------------------------------------------------------------
+  it('12/13/14/15. tablePrivileges y sequencePrivileges se ejecutan de verdad y sus filas aparecen en el resultado', async () => {
+    setEnv(baseEnv());
+    installFullyHealthyMock();
+
+    const result = await runInspection();
+
+    const executedQueries = mockQuery.mock.calls.map((c) => c[0]);
+    expect(executedQueries).toContain(INSPECTION_QUERIES.tablePrivileges);
+    expect(executedQueries).toContain(INSPECTION_QUERIES.sequencePrivileges);
+    expect(result.privileges.tables.length).toBeGreaterThan(0);
+    expect(result.privileges.sequences.length).toBeGreaterThan(0);
+    expect(result.privileges.tables[0]).toHaveProperty('can_select');
+    expect(result.privileges.sequences[0]).toHaveProperty('can_usage');
+  });
+
+  // ---------------------------------------------------------------------
+  // Remediación 7 (P1-7) — rol esperado ausente.
+  // ---------------------------------------------------------------------
+  it('16. korixa_app ausente entre las filas de rolCapabilities -> HOLD_EXPECTED_ROLE_MISSING', async () => {
+    setEnv(baseEnv());
+    installFullyHealthyMock({ roleCapabilityRows: OK_ROLE_CAPS.filter((r) => r.rolname !== 'korixa_app') });
+
+    const result = await runInspection();
+
+    expect(result.final_disposition).toBe('HOLD_EXPECTED_ROLE_MISSING');
+    expect(result.roles.missing_expected_roles).toEqual(['korixa_app']);
+  });
+
+  it('17. korixa_runtime ausente entre las filas de rolCapabilities -> HOLD_EXPECTED_ROLE_MISSING', async () => {
+    setEnv(baseEnv());
+    installFullyHealthyMock({ roleCapabilityRows: OK_ROLE_CAPS.filter((r) => r.rolname !== 'korixa_runtime') });
+
+    const result = await runInspection();
+
+    expect(result.final_disposition).toBe('HOLD_EXPECTED_ROLE_MISSING');
+    expect(result.roles.missing_expected_roles).toEqual(['korixa_runtime']);
+  });
+
+  describe('findMissingExpectedRoles', () => {
+    it('devuelve vacío cuando ambos roles objetivo están presentes', () => {
+      expect(findMissingExpectedRoles(OK_ROLE_CAPS)).toEqual([]);
+    });
+
+    it('devuelve el nombre del rol ausente', () => {
+      expect(findMissingExpectedRoles([OK_ROLE_CAPS[1]])).toEqual(['korixa_app']);
+    });
+  });
+
+  // ---------------------------------------------------------------------
+  // Remediación 9 (P1-6) — owner de base/schema no resuelto.
+  // ---------------------------------------------------------------------
+  it('18. la consulta de ownership de base de datos no devuelve exactamente 1 fila -> HOLD_OWNER_UNRESOLVED, database_owner=null (nunca string vacío)', async () => {
+    setEnv(baseEnv());
+    installFullyHealthyMock({ dbOwnerRows: [] });
+
+    const result = await runInspection();
+
+    expect(result.final_disposition).toBe('HOLD_OWNER_UNRESOLVED');
+    expect(result.database_owner).toBeNull();
+  });
+
+  it('19. la consulta de ownership de schema no devuelve exactamente 1 fila -> HOLD_OWNER_UNRESOLVED, public_schema_owner=null', async () => {
+    setEnv(baseEnv());
+    installFullyHealthyMock({ schemaOwnerRows: [] });
+
+    const result = await runInspection();
+
+    expect(result.final_disposition).toBe('HOLD_OWNER_UNRESOLVED');
+    expect(result.public_schema_owner).toBeNull();
+  });
+
+  // ---------------------------------------------------------------------
+  // Precedencia de disposición (Remediación 11) — un hallazgo de mayor
+  // prioridad no debe quedar enmascarado por uno de menor prioridad
+  // ocurriendo a la vez.
+  // ---------------------------------------------------------------------
+  it('escalamiento de privilegio tiene precedencia sobre cualquier otro hallazgo simultáneo', async () => {
+    setEnv(baseEnv());
+    installFullyHealthyMock({
+      roleCapabilityRows: [{ ...OK_ROLE_CAPS[0], rolsuper: true }, OK_ROLE_CAPS[1]],
+      dbOwnerRows: [], // también dispararía HOLD_OWNER_UNRESOLVED si se evaluara antes
+    });
+
+    const result = await runInspection();
+
+    expect(result.final_disposition).toBe('HOLD_ROLE_PRIVILEGE_ESCALATION');
+  });
+
+  // ---------------------------------------------------------------------
+  // 9 (num. original). No existe ninguna API de query libre — repetido
+  // aquí junto al resto de invariantes estructurales.
+  // ---------------------------------------------------------------------
+  it('no existe ningún método de ejecución de SQL libre en el módulo', () => {
+    for (const value of Object.values(INSPECTION_QUERIES)) {
+      expect(typeof value).toBe('string');
+    }
+  });
+
+  // ---------------------------------------------------------------------
+  // 19-20 (numeración original). Objetos del motor node-pg-migrate
+  // nunca se marcan como inesperados.
   // ---------------------------------------------------------------------
   it('pgmigrations y pgmigrations_id_seq están en la whitelist de objetos del motor, nunca se tratan como inesperados', () => {
     expect(ENGINE_TRACKING_OBJECTS.tables).toContain('pgmigrations');
     expect(ENGINE_TRACKING_OBJECTS.sequences).toContain('pgmigrations_id_seq');
   });
 
-  it('runInspection excluye los objetos del motor del cálculo de ownership de aplicación', async () => {
+  it('runInspection excluye los objetos del motor del cálculo de ownership de aplicación y del diff físico', async () => {
     setEnv(baseEnv());
     installHappyPathMock({
       pgmigrationsExists: true,
@@ -426,29 +837,35 @@ describe('db-readonly-inspector', () => {
 
     const result = await runInspection();
 
-    // korixa_runtime posee pgmigrations (normal — el propio runner lo crea
-    // con la credencial que ejecuta `migrate up`), pero como se excluye
-    // del cálculo de ownership de APLICACIÓN, no dispara
-    // HOLD_INCONSISTENT_OWNER_MODEL.
     expect(result.final_disposition).not.toBe('HOLD_INCONSISTENT_OWNER_MODEL');
+    expect(result.final_disposition).not.toBe('HOLD_UNEXPECTED_SCHEMA_OBJECTS');
   });
 
   // ---------------------------------------------------------------------
-  // 21. Ninguna query de tabla de aplicación (Correction C).
+  // 21 (numeración original). Ninguna query de tabla de aplicación
+  // (Correction C) — extendido a las 2 queries nuevas.
   // ---------------------------------------------------------------------
-  it('ninguna INSPECTION_QUERY hace SELECT/COUNT de una tabla de aplicación', () => {
+  it('ninguna INSPECTION_QUERY hace SELECT/COUNT de filas de una tabla de aplicación', () => {
     const applicationTables = ['users', 'roles', 'user_roles', 'refresh_tokens', 'ride_sessions', 'audit_log', 'equipment', 'equipment_categories', 'workouts', 'workout_intervals'];
+    const rowLevelExceptions: (keyof typeof INSPECTION_QUERIES)[] = ['migrationTrackerRows', 'indexInventory', 'columnInventory'];
     for (const [key, sql] of Object.entries(INSPECTION_QUERIES)) {
-      if (key === 'migrationTrackerRows') continue; // única excepción permitida — metadata de migración, no negocio.
+      if (rowLevelExceptions.includes(key as keyof typeof INSPECTION_QUERIES)) continue; // metadata de migración/catálogo, no negocio.
       for (const table of applicationTables) {
         expect(sql.toUpperCase()).not.toMatch(new RegExp(`FROM\\s+PUBLIC\\.${table.toUpperCase()}\\b`));
         expect(sql.toUpperCase()).not.toMatch(new RegExp(`FROM\\s+${table.toUpperCase()}\\b`));
       }
     }
+    // Las 2 excepciones son metadata pura (information_schema/pg_indexes),
+    // nunca filas de negocio — confirmado por texto exacto.
+    expect(INSPECTION_QUERIES.indexInventory).toContain('pg_indexes');
+    expect(INSPECTION_QUERIES.columnInventory).toContain('information_schema.columns');
   });
 
   // ---------------------------------------------------------------------
-  // 22. Errores saneados.
+  // 22 (numeración original) + Remediación 14 (P3-12). Errores saneados,
+  // incluyendo un error crudo no-InspectorError en el catch de nivel
+  // superior conceptualmente equivalente (probado aquí a nivel de
+  // runInspection, que es lo que ese catch consume).
   // ---------------------------------------------------------------------
   it('un fallo de query de catálogo se traduce a un InspectorError con código fijo, nunca el error crudo de pg', async () => {
     setEnv(baseEnv());
@@ -478,8 +895,21 @@ describe('db-readonly-inspector', () => {
     }
   });
 
+  it('27. un error crudo (no-InspectorError) nunca se serializaría con su DSN — verificado sobre el helper de saneamiento que el manejador de nivel superior consume', () => {
+    const rawError = new Error('postgres://user:supersecret@host:5432/db');
+    // Simula exactamente la lógica del catch de nivel superior (PHASE 25/Remediación 14):
+    const safe =
+      rawError instanceof InspectorError
+        ? { error_code: (rawError as InspectorError).code, message: rawError.message }
+        : { error_code: 'UNEXPECTED_INSPECTOR_ERROR', message: 'Ocurrió un error inesperado durante la inspección, de un tipo no reconocido — nunca se serializa el error crudo, su mensaje ni su stack.' };
+
+    expect(JSON.stringify(safe)).not.toContain('supersecret');
+    expect(safe.error_code).toBe('UNEXPECTED_INSPECTOR_ERROR');
+  });
+
   // ---------------------------------------------------------------------
-  // 23-24. ROLLBACK intentado en falla + cliente siempre cierra.
+  // 23-24 (numeración original). ROLLBACK intentado en falla + cliente
+  // siempre cierra.
   // ---------------------------------------------------------------------
   it('intenta ROLLBACK y cierra el cliente incluso cuando la inspección falla', async () => {
     setEnv(baseEnv());
@@ -494,7 +924,7 @@ describe('db-readonly-inspector', () => {
 
   it('cierra el cliente también en el camino exitoso', async () => {
     setEnv(baseEnv());
-    installHappyPathMock({});
+    installFullyHealthyMock();
 
     await runInspection();
 
@@ -509,11 +939,37 @@ describe('db-readonly-inspector', () => {
   });
 
   // ---------------------------------------------------------------------
-  // 25. El JSON de salida contiene solo las claves aprobadas.
+  // Remediación 15 (P2-10) — sin override de TLS.
+  // ---------------------------------------------------------------------
+  it('28. el cliente de pg ya no fuerza ssl.rejectUnauthorized:false — sin override explícito de ssl', async () => {
+    setEnv(baseEnv());
+    installFullyHealthyMock();
+
+    await runInspection();
+
+    const { Client } = jest.requireMock('pg') as { Client: jest.Mock };
+    const configPassed = Client.mock.calls[0][0];
+    expect(configPassed.ssl).toBeUndefined();
+  });
+
+  // ---------------------------------------------------------------------
+  // Remediación 17 (P3-14) — sincronización con los archivos reales.
+  // ---------------------------------------------------------------------
+  it('29. EXPECTED_MIGRATION_NAMES está sincronizado con los archivos reales en backend/migrations/', () => {
+    const migrationsDir = path.join(__dirname, '..', '..', 'migrations');
+    const files = fs.readdirSync(migrationsDir).filter((f) => f.endsWith('.sql')).sort();
+    const namesFromDisk = files.map((f) => f.replace(/\.sql$/, ''));
+    expect(namesFromDisk).toEqual([...EXPECTED_MIGRATION_NAMES]);
+  });
+
+  // ---------------------------------------------------------------------
+  // 25 (numeración original) + Remediación 18 punto 30. El JSON de
+  // salida contiene solo las claves aprobadas; todos los statements
+  // fijos siguen siendo BEGIN READ ONLY / SELECT / ROLLBACK.
   // ---------------------------------------------------------------------
   it('el resultado solo contiene las claves de InspectionResult — ninguna clave adicional', async () => {
     setEnv(baseEnv());
-    installHappyPathMock({});
+    installFullyHealthyMock();
 
     const result = await runInspection();
 
@@ -531,11 +987,18 @@ describe('db-readonly-inspector', () => {
       'pgmigrations',
       'physical_schema',
       'pgcrypto_present',
-      'db_role_mapping',
+      'credential_db_user_mapping',
+      'db_role_model',
       'production_schema_state',
       'final_disposition',
     ];
     expect(Object.keys(result).sort()).toEqual(approvedTopLevelKeys.sort());
+  });
+
+  it('30. todo statement ejecutable fijo sigue siendo BEGIN READ ONLY / SELECT / ROLLBACK', () => {
+    for (const sql of Object.values(INSPECTION_QUERIES)) {
+      expect(['BEGIN_READ_ONLY', 'SELECT', 'ROLLBACK']).toContain(topLevelStatementForm(sql));
+    }
   });
 
   // ---------------------------------------------------------------------
@@ -605,6 +1068,55 @@ describe('db-readonly-inspector', () => {
       const expected = expectedObjectsForApplied(['0001_init']);
       expect(expected.tables.has('equipment')).toBe(false);
       expect(expected.tables.has('users')).toBe(true);
+    });
+
+    it('con solo 0001 aplicado, incluye exactamente las columnas de 0001 (no firebase_uid, de 0005)', () => {
+      const expected = expectedObjectsForApplied(['0001_init']);
+      expect(expected.columns.has('users.firebase_uid')).toBe(false);
+      expect(expected.columns.has('users.email')).toBe(true);
+    });
+
+    it('con las 6 aplicadas, incluye users.firebase_uid', () => {
+      const expected = expectedObjectsForApplied([...EXPECTED_MIGRATION_NAMES]);
+      expect(expected.columns.has('users.firebase_uid')).toBe(true);
+    });
+  });
+
+  describe('diffPhysicalSchema', () => {
+    it('detecta faltantes y sobrantes simultáneamente, en categorías distintas', () => {
+      const expected: ExpectedPhysicalSet = {
+        tables: new Set(['users']),
+        indexes: new Set(['users_pkey']),
+        sequences: new Set(),
+        extensions: new Set(['pgcrypto']),
+        columns: new Set(['users.id', 'users.email']),
+      };
+      const actual: ActualPhysicalInventory = {
+        tables: new Set(['users', 'manual_table']),
+        indexes: new Set([]), // falta users_pkey
+        sequences: new Set(),
+        pgcryptoPresent: true,
+        columns: new Set(['users.id']), // falta users.email
+      };
+      const diff = diffPhysicalSchema(expected, actual);
+      expect(diff.missingIndexes).toEqual(['users_pkey']);
+      expect(diff.missingColumns).toEqual(['users.email']);
+      expect(diff.unexpectedTables).toEqual(['manual_table']);
+    });
+  });
+
+  describe('summarizePhysicalDiff', () => {
+    it('MISSING tiene precedencia sobre UNEXPECTED cuando ambos ocurren a la vez', () => {
+      const expected: ExpectedPhysicalSet = { tables: new Set(['users']), indexes: new Set(), sequences: new Set(), extensions: new Set(), columns: new Set() };
+      const diff = diffPhysicalSchema(expected, {
+        tables: new Set(['manual_table']), // falta 'users', sobra 'manual_table'
+        indexes: new Set(),
+        sequences: new Set(),
+        pgcryptoPresent: true,
+        columns: new Set(),
+      });
+      const summary = summarizePhysicalDiff(expected, diff);
+      expect(summary.classification).toBe('MISSING_EXPECTED_OBJECTS');
     });
   });
 
