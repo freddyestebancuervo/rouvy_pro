@@ -1,0 +1,418 @@
+name: (reusable) Backend — Production DB read-only inspection
+
+# T-F1.2 (docs/audits/AUDITORIA_FINAL/BACKLOG_MAESTRO.md) —
+# KORIXA_TF12_PRODUCTION_DB_READONLY_INSPECTOR_IMPLEMENTATION.
+#
+# Ejecuta el inspector de solo lectura (backend/src/ops/db-readonly-inspector.ts,
+# compilado a dist/ops/db-readonly-inspector.js) como un Cloud Run Job
+# efímero en `korixa-production-postgres`. El inspector solo ejecuta
+# `BEGIN READ ONLY` + un conjunto FIJO de consultas de catálogo (nunca
+# SQL libre, nunca una tabla de aplicación) y siempre `ROLLBACK` al
+# final — ver el propio archivo fuente para el detalle completo.
+#
+# SECURITY — NO ACTIVADO TODAVÍA:
+# `on: workflow_call` únicamente. Sin `workflow_dispatch`, sin
+# `workflow_run`. Ningún workflow del repositorio invoca este reusable
+# todavía (ver "Reachability check", verificado en vivo antes de este
+# commit: CALLER_COUNT=0). Este archivo puede tener capacidad real de
+# ejecutar el Job sin dejar de ser inalcanzable — mismo patrón ya
+# establecido por `_backend-deploy-cloud-run-production.yml`.
+#
+# Ningún valor de infraestructura sin evidencia se asume por defecto.
+# Los valores fijos de este archivo (proyecto, región, instancia de
+# Cloud SQL, red/subred, SA de despliegue y de runtime, nombre del
+# secreto) son los mismos ya verificados en vivo y reutilizados por
+# `_backend-deploy-cloud-run-production.yml` — reconfirmados en vivo,
+# solo lectura, antes de este commit (T-F1.2, 2026-08-22): proyecto
+# ACTIVE, instancia RUNNABLE con IP privada únicamente, base
+# `korixa_production` presente, SA de runtime existe y no está
+# deshabilitada, secreto existe con al menos una versión ENABLED,
+# `korixa-production-deployer` tiene `roles/run.developer` (incluye
+# `run.jobs.create/update/run/get/list/delete`) a nivel de proyecto Y
+# `roles/iam.serviceAccountUser` (actAs) acotado exactamente al recurso
+# de la SA de runtime (nunca a nivel de proyecto) — ninguna concesión
+# de IAM nueva fue necesaria ni se realizó para este bloque.
+#
+# CORRECTION A (DB_ROLE_MAPPING sigue UNPROVEN): este workflow NUNCA
+# asume que el secreto `korixa-production-database-url` autentica como
+# `korixa_runtime`. El propio inspector verifica `current_user` en
+# vivo, DESPUÉS de conectar y ANTES de cualquier consulta de catálogo
+# amplia, y falla cerrado (`CREDENTIAL_DB_USER_MISMATCH`) si no
+# coincide — ver db-readonly-inspector.ts, PHASE 7.
+#
+# REMEDIACIÓN (misma PR, tras auditoría independiente
+# KORIXA_TF12_PRODUCTION_DB_READONLY_INSPECTOR_INDEPENDENT_AUDIT, HOLD:
+# P0=0, P1=8, P2=3, P3=3). Cierra P1-8, el único hallazgo de este
+# archivo (los otros 7 P1 estaban en db-readonly-inspector.ts — ver su
+# propio header):
+#   P1-8  el step "Capturar el resultado de la ejecución" ya EXPLICITA
+#         `exit 1` cuando la ejecución del Job no tuvo éxito
+#         (succeededCount≠1 o failedCount≠0) — antes solo emitía
+#         `execution_status=failed` + una anotación `::error::`, que no
+#         falla un step por sí sola (comportamiento de GitHub Actions),
+#         permitiendo que el workflow reportara éxito con una
+#         inspección de Production realmente fallida. La documentación
+#         oficial de `gcloud run jobs execute --wait` no especifica su
+#         código de salida ante una tarea fallida (verificado en vivo
+#         durante esta misma auditoría), así que ese comando tampoco
+#         puede asumirse como respaldo implícito.
+# P2-11 (limitación arquitectónica, aceptada, NO resuelta debilitando
+# valores fijos de Production): este workflow exacto no puede
+# ensayarse en `ridepro-development` — todos sus hechos de Production
+# (proyecto, instancia, red, SA, secreto) son `env:` fijos, no inputs.
+# Solo el script del inspector (ya cubierto por pruebas unitarias con
+# mocks) y un Job desechable reconstruido a mano (mismo patrón ya
+# usado por NONPROD TEST A/TEST B) pueden ensayarse antes de la primera
+# invocación real de este archivo — que, dado CALLER_COUNT=0, solo
+# puede ocurrir contra Production. Esto no es un defecto a corregir en
+# este PR; es un límite explícito que debe quedar documentado para el
+# próximo bloque de ensayo NONPROD.
+
+on:
+  workflow_call:
+    inputs:
+      source_sha:
+        description: "SHA completo (40 hex) ya validado por CI que corresponde al código del inspector a ejecutar."
+        required: true
+        type: string
+      immutable_ref:
+        description: "Referencia inmutable repository@sha256:<digest> del artefacto que contiene dist/ops/db-readonly-inspector.js — nunca un tag ni 'latest'."
+        required: true
+        type: string
+      expected_migration_set_hash:
+        description: "SHA256 esperado del conjunto de 6 archivos de migración (ver algoritmo en el header de db-readonly-inspector.ts, PHASE 25) — provisto por el llamador, nunca calculado fuera de este workflow y confiado a ciegas."
+        required: true
+        type: string
+      database_secret_version:
+        description: "Número de versión EXACTO (entero positivo) de korixa-production-database-url a montar — nunca ':latest', para evitar una carrera con una rotación de secreto concurrente."
+        required: true
+        type: string
+      inspection_authorized:
+        description: "Debe ser EXACTAMENTE true. Confirmación declarativa, externa a este workflow, de que un humano autorizó esta ejecución de solo lectura contra Production."
+        required: true
+        type: boolean
+
+    outputs:
+      execution_name:
+        description: "Nombre de la ejecución del Cloud Run Job."
+        value: ${{ jobs.inspect-production-db.outputs.execution_name }}
+      execution_status:
+        description: "'succeeded' | 'failed' — resultado de la ejecución del Job, nunca el contenido de la evidencia (eso vive en los logs del Job, ver AUTOMATED_LOG_EVIDENCE_FETCH más abajo)."
+        value: ${{ jobs.inspect-production-db.outputs.execution_status }}
+
+permissions:
+  contents: read
+
+# Evita dos inspecciones concurrentes contra la misma base — igual
+# criterio que `_backend-deploy-cloud-run-production.yml`.
+concurrency:
+  group: production-db-readonly-inspection
+  cancel-in-progress: false
+
+env:
+  # Verificados en vivo el 2026-08-22 (T-F1.2, este mismo bloque).
+  PRODUCTION_PROJECT: ridepro-dbafe
+  PRODUCTION_REGION: southamerica-east1
+  ARTIFACT_REPOSITORY: southamerica-east1-docker.pkg.dev/ridepro-dbafe/korixa-backend/api
+  DEPLOYER_SA: korixa-production-deployer@ridepro-dbafe.iam.gserviceaccount.com
+  RUNTIME_SA: korixa-production-runtime@ridepro-dbafe.iam.gserviceaccount.com
+  PRODUCTION_VPC_NETWORK: korixa-production-vpc
+  PRODUCTION_VPC_SUBNET: korixa-production-sa-east1
+  # PHASE 27 — hechos fijos propios de este bloque, ratificados en el
+  # preflight de inspección de solo lectura (KORIXA_TF12_PRODUCTION_DB_READONLY_INSPECTION_PREFLIGHT).
+  CLOUD_SQL_INSTANCE: korixa-production-postgres
+  EXPECTED_DATABASE: korixa_production
+  INSPECTOR_JOB: korixa-production-db-readonly-inspector
+  SECRET_DATABASE_URL: korixa-production-database-url
+  INSPECTION_VPC_EGRESS: private-ranges-only
+  INSPECTOR_TASK_TIMEOUT: 300s
+
+jobs:
+  # =============================================================================
+  # Job 1 — validar el contrato completo ANTES de checkout/auth/cloud
+  # (mismo patrón que _backend-deploy-cloud-run-production.yml).
+  # =============================================================================
+  validate-contract:
+    name: Validate contract (sin checkout, sin OIDC, sin cloud)
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions: {}
+    steps:
+      - name: Validar todos los inputs (sin efectos, sin cloud)
+        shell: bash
+        env:
+          SOURCE_SHA: ${{ inputs.source_sha }}
+          IMMUTABLE_REF: ${{ inputs.immutable_ref }}
+          EXPECTED_MIGRATION_SET_HASH: ${{ inputs.expected_migration_set_hash }}
+          DATABASE_SECRET_VERSION: ${{ inputs.database_secret_version }}
+          INSPECTION_AUTHORIZED: ${{ inputs.inspection_authorized }}
+        run: |
+          set -euo pipefail
+          fail() { echo "::error::$1"; exit 1; }
+
+          [[ "$SOURCE_SHA" =~ ^[0-9a-f]{40}$ ]] || fail "source_sha no es un SHA-1 completo (40 hex): '$SOURCE_SHA'"
+
+          case "$IMMUTABLE_REF" in
+            southamerica-east1-docker.pkg.dev/ridepro-dbafe/korixa-backend/api@sha256:*)
+              DIGEST="${IMMUTABLE_REF#*@}"
+              [[ "$DIGEST" =~ ^sha256:[0-9a-f]{64}$ ]] || fail "immutable_ref no tiene un digest sha256 válido: '$IMMUTABLE_REF'"
+              ;;
+            *)
+              fail "immutable_ref debe ser exactamente repository@sha256:<digest> del repositorio de Production, nunca un tag ni 'latest': '$IMMUTABLE_REF'"
+              ;;
+          esac
+
+          [[ "$EXPECTED_MIGRATION_SET_HASH" =~ ^[0-9a-f]{64}$ ]] || fail "expected_migration_set_hash no es un SHA256 hex (64 caracteres): '$EXPECTED_MIGRATION_SET_HASH'"
+
+          [[ "$DATABASE_SECRET_VERSION" =~ ^[1-9][0-9]*$ ]] || fail "database_secret_version debe ser un entero positivo, nunca 'latest': '$DATABASE_SECRET_VERSION'"
+
+          [ "$INSPECTION_AUTHORIZED" = "true" ] || fail "inspection_authorized no es exactamente 'true' — sin esta confirmación externa explícita, la inspección no continúa."
+
+          echo "CONTRACT_VALID=YES"
+
+  # =============================================================================
+  # Job 2 — checkout + procedencia + precheck de nube + deploy/ejecución
+  # del Job de inspección. Un único job, mismo criterio de composición
+  # que `deploy-candidate` en el reusable de deploy.
+  # =============================================================================
+  inspect-production-db:
+    name: Verify provenance + run read-only inspection Job
+    needs: validate-contract
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    environment: production
+    permissions:
+      contents: read
+      id-token: write
+    outputs:
+      execution_name: ${{ steps.execute-job.outputs.execution_name }}
+      execution_status: ${{ steps.wait-execution.outputs.execution_status }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Verificar SHA fuente exacto antes de cualquier cosa
+        run: |
+          set -euo pipefail
+          CHECKED_OUT_SHA="$(git rev-parse HEAD)"
+          if [ "$CHECKED_OUT_SHA" != "${{ inputs.source_sha }}" ]; then
+            echo "::error::El working tree del runner ($CHECKED_OUT_SHA) no coincide con source_sha declarado ('${{ inputs.source_sha }}')."
+            exit 1
+          fi
+
+      # -----------------------------------------------------------------
+      # PHASE 29 — freshness guard: source_sha debe ser el HEAD actual de
+      # main en este mismo instante, leído en vivo desde GitHub (nunca
+      # confiado al checkout local, que solo prueba que ESE commit
+      # existe, no que sigue siendo el más reciente). Usa el
+      # GITHUB_TOKEN por defecto (permissions: contents: read ya
+      # declarado arriba) — ninguna credencial de GCP interviene en
+      # este paso.
+      # -----------------------------------------------------------------
+      - name: Verificar que source_sha es el HEAD actual de main (freshness guard)
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          REMOTE_MAIN_SHA="$(gh api "repos/${{ github.repository }}/commits/main" --jq '.sha')"
+          if [ -z "$REMOTE_MAIN_SHA" ]; then
+            echo "::error::No se pudo leer el HEAD actual de main desde la API de GitHub — FAIL CLOSED."
+            exit 1
+          fi
+          if [ "$REMOTE_MAIN_SHA" != "${{ inputs.source_sha }}" ]; then
+            echo "::error::source_sha ('${{ inputs.source_sha }}') no coincide con el HEAD actual de main ('$REMOTE_MAIN_SHA') — main avanzó desde que se calculó este contrato. FAIL CLOSED."
+            exit 1
+          fi
+          echo "SOURCE_FRESHNESS_VERIFIED=YES ($REMOTE_MAIN_SHA)"
+
+      # -----------------------------------------------------------------
+      # PHASE 25 — algoritmo ya ratificado: SHA256(filename + "\n" +
+      # bytes) por archivo, en orden lexicográfico (== orden numérico
+      # para estos 6 nombres), concatenados y SHA256 de nuevo.
+      # -----------------------------------------------------------------
+      - name: Calcular y verificar el hash del conjunto de migraciones
+        run: |
+          set -euo pipefail
+          cd backend/migrations
+          COMBINED=""
+          for f in $(printf '%s\n' ./*.sql | sed 's|^\./||' | sort); do
+            FILE_HASH="$( (printf '%s\n' "$f"; cat "$f") | sha256sum | awk '{print $1}')"
+            COMBINED="${COMBINED}${FILE_HASH}"
+          done
+          COMPUTED_HASH="$(printf '%s' "$COMBINED" | sha256sum | awk '{print $1}')"
+          if [ "$COMPUTED_HASH" != "${{ inputs.expected_migration_set_hash }}" ]; then
+            echo "::error::MIGRATION_SET_HASH mismatch: calculado '$COMPUTED_HASH', esperado '${{ inputs.expected_migration_set_hash }}' — el árbol de migraciones en source_sha no es el que el llamador declaró. FAIL CLOSED."
+            exit 1
+          fi
+          echo "MIGRATION_SET_HASH_VERIFIED=YES ($COMPUTED_HASH)"
+
+      - id: auth
+        uses: google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093 # v3
+        with:
+          project_id: ${{ env.PRODUCTION_PROJECT }}
+          workload_identity_provider: projects/731660820861/locations/global/workloadIdentityPools/github-actions-pool/providers/github-production-deployer
+          service_account: ${{ env.DEPLOYER_SA }}
+
+      - uses: google-github-actions/setup-gcloud@aa5489c8933f4cc7a4f7d45035b3b1440c9c10db # v3
+
+      - name: Verificar projectId ANTES de cualquier acceso a Production
+        run: |
+          set -euo pipefail
+          ACTUAL_PROJECT="$(gcloud config get-value project)"
+          if [ "$ACTUAL_PROJECT" != "${{ env.PRODUCTION_PROJECT }}" ]; then
+            echo "::error::PROJECT MISMATCH: esperado ${{ env.PRODUCTION_PROJECT }}, obtenido '$ACTUAL_PROJECT'"
+            exit 1
+          fi
+
+      - name: Verificar que immutable_ref resuelve realmente en Artifact Registry
+        run: |
+          set -euo pipefail
+          gcloud artifacts docker images describe "${{ inputs.immutable_ref }}" \
+            --project="${{ env.PRODUCTION_PROJECT }}" \
+            --format="value(image_summary.digest)" >/dev/null
+
+      - name: Configurar credenciales de Docker para Artifact Registry (solo lectura)
+        run: gcloud auth configure-docker southamerica-east1-docker.pkg.dev --quiet
+
+      - name: Verificar procedencia — etiqueta OCI del manifiesto == source_sha
+        run: |
+          set -euo pipefail
+          LABEL_REVISION="$(docker buildx imagetools inspect "${{ inputs.immutable_ref }}" --format '{{ index .Image.Config.Labels "org.opencontainers.image.revision" }}' 2>/dev/null || true)"
+          if [ -z "$LABEL_REVISION" ] || [ "$LABEL_REVISION" = "<no value>" ]; then
+            echo "::error::No se pudo leer la etiqueta org.opencontainers.image.revision del manifiesto de immutable_ref — sin procedencia verificable, FAIL CLOSED."
+            exit 1
+          fi
+          if [ "$LABEL_REVISION" != "${{ inputs.source_sha }}" ]; then
+            echo "::error::PROVENANCE MISMATCH: la etiqueta OCI del artefacto ('$LABEL_REVISION') no coincide con source_sha declarado ('${{ inputs.source_sha }}')."
+            exit 1
+          fi
+          echo "PROVENANCE_VERIFIED=YES ($LABEL_REVISION)"
+
+      # -----------------------------------------------------------------
+      # PHASE 31 — precheck de nube, solo lectura. Ninguna mutación de
+      # IAM/red/Cloud SQL/backup ocurre en este ni en ningún otro step
+      # de este workflow.
+      # -----------------------------------------------------------------
+      - name: Precheck de Cloud SQL — RUNNABLE, IP privada únicamente, base esperada presente
+        id: cloud-sql-precheck
+        run: |
+          set -euo pipefail
+          INSTANCE_JSON="$(gcloud sql instances describe "${{ env.CLOUD_SQL_INSTANCE }}" --project="${{ env.PRODUCTION_PROJECT }}" --format=json)"
+
+          STATE="$(echo "$INSTANCE_JSON" | jq -r '.state')"
+          [ "$STATE" = "RUNNABLE" ] || { echo "::error::Cloud SQL instance state='$STATE' (esperado RUNNABLE) — FAIL CLOSED."; exit 1; }
+
+          IPV4_ENABLED="$(echo "$INSTANCE_JSON" | jq -r '.settings.ipConfiguration.ipv4Enabled')"
+          if [ "$IPV4_ENABLED" = "true" ]; then
+            echo "::error::La instancia tiene IP pública habilitada (ipv4Enabled=true) — se esperaba IP privada únicamente. FAIL CLOSED (esto no es una condición que este workflow deba tolerar en silencio)."
+            exit 1
+          fi
+
+          PRIVATE_IP="$(echo "$INSTANCE_JSON" | jq -r '.ipAddresses[] | select(.type=="PRIVATE") | .ipAddress' | head -n1)"
+          [ -n "$PRIVATE_IP" ] && [ "$PRIVATE_IP" != "null" ] || { echo "::error::No se pudo resolver la IP privada de la instancia — FAIL CLOSED."; exit 1; }
+          echo "private_ip=$PRIVATE_IP" >> "$GITHUB_OUTPUT"
+
+          DB_EXISTS="$(gcloud sql databases list --instance="${{ env.CLOUD_SQL_INSTANCE }}" --project="${{ env.PRODUCTION_PROJECT }}" --format=json | jq --arg db "${{ env.EXPECTED_DATABASE }}" '[.[] | select(.name==$db)] | length')"
+          [ "$DB_EXISTS" = "1" ] || { echo "::error::La base '${{ env.EXPECTED_DATABASE }}' no existe en la instancia (o existe más de una vez) — FAIL CLOSED."; exit 1; }
+
+      - name: Precheck de identidad — SA de runtime existe y no está deshabilitada
+        run: |
+          set -euo pipefail
+          DISABLED="$(gcloud iam service-accounts describe "${{ env.RUNTIME_SA }}" --format='value(disabled)')"
+          if [ "$DISABLED" = "True" ]; then
+            echo "::error::La SA de runtime está deshabilitada — FAIL CLOSED."
+            exit 1
+          fi
+
+      - name: Precheck de secreto — versión pinneada existe y está ENABLED
+        run: |
+          set -euo pipefail
+          VERSION_STATE="$(gcloud secrets versions describe "${{ inputs.database_secret_version }}" --secret="${{ env.SECRET_DATABASE_URL }}" --project="${{ env.PRODUCTION_PROJECT }}" --format='value(state)')"
+          if [ "$VERSION_STATE" != "ENABLED" ]; then
+            echo "::error::korixa-production-database-url versión ${{ inputs.database_secret_version }} tiene estado '$VERSION_STATE' (esperado ENABLED) — FAIL CLOSED. Nunca se lee el payload de la versión, solo su estado."
+            exit 1
+          fi
+
+      # -----------------------------------------------------------------
+      # PHASE 33-34 — deploy/update del Job (definición) y ejecución
+      # (acción), en steps separados y explícitos. `--set-secrets` usa
+      # la versión PINNEADA (nunca ':latest' — PHASE 32).
+      # -----------------------------------------------------------------
+      - name: Deploy/update del Cloud Run Job de inspección (definición, sin ejecutar todavía)
+        run: |
+          set -euo pipefail
+          gcloud run jobs deploy "${{ env.INSPECTOR_JOB }}" \
+            --image="${{ inputs.immutable_ref }}" \
+            --region="${{ env.PRODUCTION_REGION }}" \
+            --project="${{ env.PRODUCTION_PROJECT }}" \
+            --service-account="${{ env.RUNTIME_SA }}" \
+            --network="${{ env.PRODUCTION_VPC_NETWORK }}" \
+            --subnet="${{ env.PRODUCTION_VPC_SUBNET }}" \
+            --vpc-egress="${{ env.INSPECTION_VPC_EGRESS }}" \
+            --tasks=1 \
+            --max-retries=0 \
+            --task-timeout="${{ env.INSPECTOR_TASK_TIMEOUT }}" \
+            --command="node" \
+            --args="dist/ops/db-readonly-inspector.js" \
+            --set-secrets="DATABASE_URL=${{ env.SECRET_DATABASE_URL }}:${{ inputs.database_secret_version }}" \
+            --set-env-vars="EXPECTED_DATABASE=${{ env.EXPECTED_DATABASE }},EXPECTED_DB_HOST=${{ steps.cloud-sql-precheck.outputs.private_ip }},EXPECTED_SOURCE_SHA=${{ inputs.source_sha }},EXPECTED_MIGRATION_SET_HASH=${{ inputs.expected_migration_set_hash }}" \
+            --quiet
+
+      - name: Ejecutar el Job y esperar su finalización
+        id: execute-job
+        run: |
+          set -euo pipefail
+          EXECUTION_NAME="$(gcloud run jobs execute "${{ env.INSPECTOR_JOB }}" \
+            --region="${{ env.PRODUCTION_REGION }}" \
+            --project="${{ env.PRODUCTION_PROJECT }}" \
+            --wait \
+            --format='value(metadata.name)')"
+          [ -n "$EXECUTION_NAME" ] || { echo "::error::No se pudo resolver el nombre de la ejecución — FAIL CLOSED."; exit 1; }
+          echo "execution_name=$EXECUTION_NAME" >> "$GITHUB_OUTPUT"
+
+      # -----------------------------------------------------------------
+      # REMEDIACIÓN P1-8 (auditoría independiente
+      # KORIXA_TF12_PRODUCTION_DB_READONLY_INSPECTOR_INDEPENDENT_AUDIT):
+      # antes, esta rama solo emitía `execution_status=failed` +
+      # `::error::` sin `exit 1` — una anotación `::error::` NO falla un
+      # step por sí sola (comportamiento propio de GitHub Actions), así
+      # que el step (y por lo tanto el job completo) podía reportar
+      # ÉXITO aunque la ejecución real del Job hubiera fallado. La
+      # documentación oficial de `gcloud run jobs execute --wait` no
+      # especifica su código de salida ante una tarea fallida (verificado
+      # en vivo, T-F1.2, esta misma auditoría) — así que ese comando NO
+      # puede asumirse como respaldo implícito. Ahora esta rama termina
+      # el step explícitamente con `exit 1`.
+      # -----------------------------------------------------------------
+      - name: Capturar el resultado de la ejecución (sin leer logs — ver limitación documentada)
+        id: wait-execution
+        run: |
+          set -euo pipefail
+          EXECUTION_JSON="$(gcloud run jobs executions describe "${{ steps.execute-job.outputs.execution_name }}" --region="${{ env.PRODUCTION_REGION }}" --project="${{ env.PRODUCTION_PROJECT }}" --format=json)"
+          SUCCEEDED_COUNT="$(echo "$EXECUTION_JSON" | jq -r '.status.succeededCount // 0')"
+          FAILED_COUNT="$(echo "$EXECUTION_JSON" | jq -r '.status.failedCount // 0')"
+          if [ "$SUCCEEDED_COUNT" = "1" ] && [ "$FAILED_COUNT" = "0" ]; then
+            echo "execution_status=succeeded" >> "$GITHUB_OUTPUT"
+          else
+            echo "execution_status=failed" >> "$GITHUB_OUTPUT"
+            echo "::error::La ejecución del inspector no tuvo éxito (succeeded=$SUCCEEDED_COUNT, failed=$FAILED_COUNT). La evidencia detallada (JSON de InspectionResult o el InspectorError) vive únicamente en los logs del Job — ver limitación de PHASE 35."
+            exit 1
+          fi
+
+      # -----------------------------------------------------------------
+      # PHASE 35 — no se asume que el orchestrator puede leer Cloud
+      # Logging. Verificado en vivo (T-F1.2, este bloque): la política
+      # IAM de proyecto de korixa-production-deployer solo tiene
+      # roles/run.developer, sin logging.viewer ni ningún rol
+      # equivalente — NO se agrega ese permiso acá. La recuperación de
+      # evidencia detallada de los logs del Job queda como un camino de
+      # lectura separado y explícitamente autorizado aparte, fuera de
+      # este workflow.
+      # -----------------------------------------------------------------
+      - name: Reportar limitación de evidencia de logs (informativo, sin cambios de IAM)
+        run: |
+          echo "AUTOMATED_LOG_EVIDENCE_FETCH=NOT_AVAILABLE_WITH_CURRENT_ORCHESTRATOR"
+          echo "El orchestrator (${{ env.DEPLOYER_SA }}) no tiene logging.viewer (verificado en vivo, T-F1.2) — no se le agrega acá. Recuperar el JSON de InspectionResult de los logs del Job requiere un camino de lectura separado, explícitamente autorizado."
+          echo "execution_name=${{ steps.execute-job.outputs.execution_name }}"
+          echo "execution_status=${{ steps.wait-execution.outputs.execution_status }}"
