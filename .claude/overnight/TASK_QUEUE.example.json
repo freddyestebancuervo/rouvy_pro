@@ -1,0 +1,120 @@
+{
+  "schema_version": 1,
+  "session": {
+    "session_id": "example-fixture-session-0001",
+    "mode": "dry-run",
+    "base_sha": "0000000000000000000000000000000000FIXT",
+    "branch_prefix": "agent/night/example-fixture",
+    "max_session_minutes": 120,
+    "max_total_tasks": 4,
+    "max_consecutive_holds": 2
+  },
+  "tasks": [
+    {
+      "id": "task-green-independent-001",
+      "title": "EXAMPLE: add a unit test for an existing pure function",
+      "objective": "Demonstrate a GREEN, INDEPENDENT task with no dependencies. This is a non-production fixture, not a real task. The target path is a purely illustrative example directory (never created on disk in V1/B) chosen deliberately OUTSIDE tools/night-agent/** — the Night Agent's own code is a critical control-plane path (section 12) and is never a valid GREEN task target, including for this example.",
+      "risk": "GREEN",
+      "status": "READY",
+      "enabled": true,
+      "dependency_type": "INDEPENDENT",
+      "depends_on": [],
+      "allowed_paths": [
+        "examples/night-agent-fixture/example-fixture-only.test.mjs"
+      ],
+      "read_paths": [
+        "examples/night-agent-fixture/example-fixture-only.test.mjs"
+      ],
+      "forbidden_paths": [
+        "backend/**",
+        ".github/**",
+        ".claude/hooks/**"
+      ],
+      "required_checks": [
+        "node --test examples/night-agent-fixture/example-fixture-only.test.mjs"
+      ],
+      "verification_commands": [
+        { "family": "NODE_TEST", "target": "examples/night-agent-fixture/example-fixture-only.test.mjs" }
+      ],
+      "max_retries": 3,
+      "max_turns": 20,
+      "timeout_seconds": 120,
+      "on_failure": "RETRY_THEN_HOLD"
+    },
+    {
+      "id": "task-green-hard-dependency-002",
+      "title": "EXAMPLE: refactor that depends on task-green-independent-001 passing first",
+      "objective": "Demonstrate a GREEN task with a HARD_DEPENDENCY. This is a non-production fixture, not a real task.",
+      "risk": "GREEN",
+      "status": "BLOCKED",
+      "enabled": true,
+      "dependency_type": "HARD_DEPENDENCY",
+      "depends_on": ["task-green-independent-001"],
+      "allowed_paths": [
+        "examples/night-agent-fixture/example-fixture-only-002.test.mjs"
+      ],
+      "read_paths": [
+        "examples/night-agent-fixture/example-fixture-only-002.test.mjs"
+      ],
+      "forbidden_paths": [
+        "backend/**",
+        ".github/**",
+        ".claude/hooks/**"
+      ],
+      "required_checks": [
+        "node --test examples/night-agent-fixture/example-fixture-only-002.test.mjs"
+      ],
+      "verification_commands": [
+        { "family": "NODE_TEST", "target": "examples/night-agent-fixture/example-fixture-only-002.test.mjs" }
+      ],
+      "max_retries": 3,
+      "max_turns": 20,
+      "timeout_seconds": 120,
+      "on_failure": "HOLD"
+    },
+    {
+      "id": "task-yellow-example-003",
+      "title": "EXAMPLE: push a fixture branch and open a Draft PR",
+      "objective": "Demonstrate what a YELLOW task looks like. NOT executable in V1 — YELLOW_EXECUTION_ENABLED is NO. This is a non-production fixture.",
+      "risk": "YELLOW",
+      "status": "HOLD",
+      "enabled": false,
+      "dependency_type": "INDEPENDENT",
+      "depends_on": [],
+      "allowed_paths": [],
+      "read_paths": [],
+      "forbidden_paths": [
+        "backend/**",
+        ".github/**",
+        ".claude/hooks/**"
+      ],
+      "required_checks": [],
+      "verification_commands": [],
+      "max_retries": 0,
+      "max_turns": 1,
+      "timeout_seconds": 60,
+      "on_failure": "HOLD"
+    },
+    {
+      "id": "task-red-example-004",
+      "title": "EXAMPLE: deploy to Production Cloud Run",
+      "objective": "Demonstrate what a RED task looks like. NEVER executable by the Night Agent — denied by policy regardless of version. This is a non-production fixture.",
+      "risk": "RED",
+      "status": "HOLD",
+      "enabled": false,
+      "dependency_type": "INDEPENDENT",
+      "depends_on": [],
+      "allowed_paths": [],
+      "read_paths": [],
+      "forbidden_paths": [
+        "*"
+      ],
+      "required_checks": [],
+      "verification_commands": [],
+      "max_retries": 0,
+      "max_turns": 1,
+      "timeout_seconds": 60,
+      "on_failure": "SESSION_HALT"
+    }
+  ]
+}

@@ -50,6 +50,11 @@ node_modules/
 # Claude Code — configuración local, no compartida
 .claude/settings.local.json
 
+# Korixa Night Agent — estado de runtime local (logs/locks de sesiones
+# reales, aún no existen en V1). El resto de .claude/overnight/ (policy,
+# safety, ejemplos, plantilla) sí se versiona a propósito.
+.claude/overnight/runtime/
+
 # Flutter/Dart/Pub related
 **/doc/api/
 .dart_tool/
