@@ -45,6 +45,26 @@
 // OF SCOPE for this revision (NIGHT_HARDENING_1) — see this revision's own
 // task framing ("Fase 6 — No aumentar autonomía todavía"); these are tested,
 // standalone gates ready for a future, separately-authorized wiring task.
+//
+// DISCLOSED TRUST BOUNDARY (flagged by this revision's own independent
+// audit, not yet closed — deliberately, see below): `redTeamPhaseResult` and
+// each `evidenceCitations[]` entry are trusted by SHAPE alone. Nothing in
+// this module verifies that a `{completed: true, blocking: false, ...}`
+// object actually came from a real `runRedTeamPhase()` call, or that a
+// `PROVEN_BY_LIVE_READ_ONLY` evidence citation actually came from a real
+// observation rather than being hand-typed by whatever caller invokes this
+// function. This project's own `evidence-policy.mjs` established the
+// correct answer to exactly this class of risk — a WeakSet-branded,
+// unforgeable `TRUSTED_EVIDENCE_REGISTRY` that only real attestation
+// functions can populate — and this module deliberately does NOT reuse or
+// reimplement that machinery here, because nothing calls this module yet
+// (see "OUT OF SCOPE" above): there is no live path today for a caller to
+// exploit shape-only trust, since no caller exists. This is safe to leave
+// disclosed-but-open for a not-yet-wired module and unsafe to leave open
+// once a real wiring task hands these functions real, potentially
+// LLM-authored input — closing this gap (via the same WeakSet-branding
+// pattern, or an equivalent) MUST be part of that future wiring task, not
+// assumed already covered by this module's current test suite.
 
 import { classifyClaimSet } from './claim-taxonomy.mjs';
 
@@ -113,6 +133,7 @@ const PASS_SHAPED_STATES = Object.freeze(['PASS', 'PASS_WITH_FINDINGS']);
 export const AUDIT_HOLD_REASONS = Object.freeze([
   'INVALID_REQUESTED_STATE',
   'HOLD_INDEPENDENT_AUDIT_REQUIRED',
+  'HOLD_INVALID_EVIDENCE_CITATIONS_SHAPE',
   'HOLD_RED_TEAM_NOT_RUN',
   'HOLD_RED_TEAM_BLOCKING_FINDING',
   'HOLD_UNPROVEN_PRODUCTION_CLAIM',
@@ -131,7 +152,15 @@ export function certifyIndependentAuditResult(input) {
   const requestedState = input?.requestedState;
   const executorContextId = typeof input?.executorContextId === 'string' && input.executorContextId.length > 0 ? input.executorContextId : null;
   const auditorContextId = typeof input?.auditorContextId === 'string' && input.auditorContextId.length > 0 ? input.auditorContextId : null;
-  const evidenceCitations = Array.isArray(input?.evidenceCitations) ? input.evidenceCitations : [];
+  // NIGHT_HARDENING_1-R2: `evidenceCitations` PRESENT but not an array (e.g.
+  // a single citation object passed bare instead of wrapped in `[...]`) is a
+  // malformed input shape, not "zero citations" -- silently coercing it to
+  // [] would let a claim's evidence disappear entirely from consideration
+  // and PASS trivially with nothing to check. Genuinely absent/undefined
+  // `evidenceCitations` remains a normal, valid "no citations offered" case.
+  const rawEvidenceCitations = input?.evidenceCitations;
+  const evidenceCitationsShapeValid = rawEvidenceCitations === undefined || Array.isArray(rawEvidenceCitations);
+  const evidenceCitations = Array.isArray(rawEvidenceCitations) ? rawEvidenceCitations : [];
   const redTeamPhaseResult = input?.redTeamPhaseResult;
   const findings = Array.isArray(input?.findings) ? Object.freeze([...input.findings]) : Object.freeze([]);
 
@@ -152,6 +181,9 @@ export function certifyIndependentAuditResult(input) {
   }
 
   if (PASS_SHAPED_STATES.includes(requestedState)) {
+    if (!evidenceCitationsShapeValid) {
+      return buildResult({ finalState: 'HOLD', reason: 'HOLD_INVALID_EVIDENCE_CITATIONS_SHAPE', requestedState, executorContextId, auditorContextId, claimSet, redTeamPhaseResult, findings });
+    }
     if (!redTeamPhaseResult || redTeamPhaseResult.completed !== true) {
       return buildResult({ finalState: 'HOLD', reason: 'HOLD_RED_TEAM_NOT_RUN', requestedState, executorContextId, auditorContextId, claimSet, redTeamPhaseResult, findings });
     }

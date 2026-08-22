@@ -107,14 +107,35 @@ export function normalizeTopics(rawTopics) {
 // the SAME claim to also declare environment: 'Production'. Rather than
 // silently letting that combination pass (which would let a nonprod
 // observation quietly stand in for a Production one), the combination itself
-// is treated as invalid evidence and coerced to UNPROVEN. This is the only
-// evidenceLevel/environment pair this module treats as mutually exclusive;
-// every other combination (including UNPROVEN + Production, or
-// PROVEN_BY_LIVE_READ_ONLY + Production) is a normal, valid claim shape.
+// is treated as invalid evidence and coerced to UNPROVEN. Every other
+// combination (including UNPROVEN + Production, or PROVEN_BY_LIVE_READ_ONLY +
+// Production) is a normal, valid claim shape.
+//
+// NIGHT_HARDENING_1-R2 SECURITY CORRECTION (this revision) closes a real gap
+// an independent audit of R1 found live: R1 only coerced this combination
+// when `environment` was the EXACT string 'Production'. Since `environment`
+// is optional and the actual HOLD trigger elsewhere in this module is
+// topic-based (not environment-based), a claim like `{evidenceLevel:
+// 'PROVEN_BY_NONPROD_TEST', topics: ['cloud_run', 'iam']}` with `environment`
+// simply omitted classified as PROCEED — meaning nonprod-lab evidence could
+// silently stand in for a Production claim whenever the caller just didn't
+// bother to declare an environment, which is the common/lazy case, not an
+// exotic one. Live-reproduced by the audit: `certifyIndependentAuditResult`
+// granted PASS for a claim literally named 'the-actual-prod-deploy-is-safe'
+// backed only by disposable-lab evidence.
+//
+// Fixed by inverting the condition: PROVEN_BY_NONPROD_TEST evidence is only
+// ever treated as proven when the claim EXPLICITLY, affirmatively declares
+// itself scoped to a nonprod environment (`environment` is exactly
+// 'Development' or 'Staging'). Omitting `environment` entirely, or declaring
+// anything else (including 'Production' or an unrecognized value), now also
+// coerces to UNPROVEN — there is no longer any way to get PROVEN_BY_NONPROD_
+// TEST evidence to PROCEED on a production-impact-topic claim without the
+// claim itself honestly stating it is about a nonprod environment.
 // ---------------------------------------------------------------------------
 
 function resolveEffectiveEvidenceLevel(evidenceLevel, environment) {
-  if (evidenceLevel === 'PROVEN_BY_NONPROD_TEST' && environment === 'Production') {
+  if (evidenceLevel === 'PROVEN_BY_NONPROD_TEST' && environment !== 'Development' && environment !== 'Staging') {
     return { effective: 'UNPROVEN', invalidCombo: true };
   }
   return { effective: evidenceLevel, invalidCombo: false };
@@ -139,14 +160,28 @@ export function classifyClaim(claim) {
   const normalizedEvidenceLevel = normalizeEvidenceLevel(declaredEvidenceLevel);
   const environment = normalizeEnvironment(claim?.environment);
   const { effective: effectiveEvidenceLevel, invalidCombo } = resolveEffectiveEvidenceLevel(normalizedEvidenceLevel, environment);
-  const matchedTopics = normalizeTopics(claim?.topics);
+
+  // NIGHT_HARDENING_1-R2: a `topics` field that is PRESENT but not an array
+  // (e.g. a bare string like 'production' instead of ['production']) is a
+  // malformed claim shape, not "no topics declared". Silently normalizing it
+  // to [] would fail OPEN on exactly the input class this module exists to
+  // fail closed on (an independent audit reproduced this live). `topics`
+  // being genuinely absent/undefined is still a normal, valid, "no
+  // production impact declared" claim — only a present-but-wrong-type value
+  // is treated as malformed.
+  const rawTopics = claim?.topics;
+  const topicsShapeValid = rawTopics === undefined || Array.isArray(rawTopics);
+  const matchedTopics = normalizeTopics(rawTopics);
   const touchesProductionImpact = matchedTopics.length > 0;
 
   const evidenceLevelWasInvalid = !CLAIM_EVIDENCE_LEVELS.includes(declaredEvidenceLevel);
 
   let decision = 'PROCEED';
   let holdReason = null;
-  if (effectiveEvidenceLevel === 'UNPROVEN' && touchesProductionImpact) {
+  if (!topicsShapeValid) {
+    decision = 'HOLD';
+    holdReason = 'malformed_topics_shape';
+  } else if (effectiveEvidenceLevel === 'UNPROVEN' && touchesProductionImpact) {
     decision = 'HOLD';
     holdReason = invalidCombo ? 'nonprod_test_cannot_certify_production' : 'unproven_claim_with_production_impact';
   }
@@ -158,6 +193,7 @@ export function classifyClaim(claim) {
     evidenceLevelWasInvalid,
     invalidEvidenceEnvironmentCombo: invalidCombo,
     environment,
+    topicsShapeValid,
     matchedTopics,
     touchesProductionImpact,
     decision,

@@ -247,3 +247,56 @@ test('result objects are frozen', () => {
   const result = certifyIndependentAuditResult({ requestedState: 'HOLD', executorContextId: 'e', auditorContextId: 'a' });
   assert.throws(() => { result.finalState = 'PASS'; }, TypeError);
 });
+
+// =============================================================================
+// R2 malformed-shape regression: `evidenceCitations` present but not an
+// array must fail closed, never silently become "zero citations" (which
+// would let a claim's evidence disappear from consideration entirely).
+// =============================================================================
+
+test('R2 REGRESSION: evidenceCitations passed as a bare object (not wrapped in an array) -> HOLD_INVALID_EVIDENCE_CITATIONS_SHAPE, never silently treated as zero citations', () => {
+  const result = certifyIndependentAuditResult({
+    requestedState: 'PASS',
+    executorContextId: 'exec-1',
+    auditorContextId: 'audit-2',
+    evidenceCitations: { claimId: 'a', evidenceLevel: 'PROVEN_BY_LIVE_READ_ONLY', topics: ['cloud_run'] },
+    redTeamPhaseResult: cleanRedTeamResult(),
+  });
+  assert.equal(result.finalState, 'HOLD');
+  assert.equal(result.reason, 'HOLD_INVALID_EVIDENCE_CITATIONS_SHAPE');
+});
+
+test('evidenceCitations genuinely omitted (undefined) is still a normal, valid "no citations offered" case', () => {
+  const result = certifyIndependentAuditResult({
+    requestedState: 'HOLD', // non-PASS, so the shape check doesn't even need to fire to matter here
+    executorContextId: 'exec-1',
+    auditorContextId: 'audit-2',
+  });
+  assert.equal(result.finalState, 'HOLD');
+  assert.equal(result.reason, 'REQUESTED_STATE_GRANTED');
+});
+
+// =============================================================================
+// DISCLOSED TRUST BOUNDARY (documented in this module's header, deliberately
+// not closed in this revision — nothing calls this module yet, so there is
+// no live exploitation path). This test exists so a future wiring task
+// cannot miss it: it PROVES the current shape-only trust, so closing it (via
+// unforgeable attestation, mirroring evidence-policy.mjs's own
+// WeakSet-branded TRUSTED_EVIDENCE_REGISTRY pattern) must be part of that
+// future task, not assumed already handled here.
+// =============================================================================
+
+test('DISCLOSED TRUST BOUNDARY: a hand-fabricated redTeamPhaseResult (never produced by a real runRedTeamPhase() call) is currently accepted identically to a genuine one', () => {
+  const fabricated = { completed: true, blocking: false }; // never actually ran any of the 16 checks
+  const result = certifyIndependentAuditResult({
+    requestedState: 'PASS',
+    executorContextId: 'exec-1',
+    auditorContextId: 'audit-2',
+    evidenceCitations: PROVEN_EVIDENCE,
+    redTeamPhaseResult: fabricated,
+  });
+  // This SUCCEEDS today -- that is the point of this test. A future wiring
+  // task must close this (see the module header's "DISCLOSED TRUST
+  // BOUNDARY" comment) before handing this function real, untrusted input.
+  assert.equal(result.finalState, 'PASS');
+});

@@ -117,10 +117,69 @@ test('PROVEN_BY_NONPROD_TEST for a Development/Staging environment claim is vali
   }
 });
 
-test('PROVEN_BY_NONPROD_TEST with no environment declared at all is valid (not assumed to be Production)', () => {
+// R2 SECURITY CORRECTION regression: this used to assert PROCEED (the actual
+// bug an independent audit reproduced live -- a claim naming a real
+// production-impact topic, backed only by nonprod-lab evidence, with
+// `environment` simply omitted, sailed through as PROCEED/eventually PASS).
+// The correct behavior is the opposite: omitting `environment` is NOT an
+// affirmative "this is nonprod" declaration, so it must not be treated as
+// one.
+test('R2 REGRESSION: PROVEN_BY_NONPROD_TEST with NO environment declared and a production-impact topic -> HOLD, not PROCEED', () => {
   const result = classifyClaim({ claimId: 'e3', evidenceLevel: 'PROVEN_BY_NONPROD_TEST', topics: ['cloud_run'] });
-  assert.equal(result.invalidEvidenceEnvironmentCombo, false);
+  assert.equal(result.invalidEvidenceEnvironmentCombo, true);
+  assert.equal(result.evidenceLevel, 'UNPROVEN');
+  assert.equal(result.decision, 'HOLD');
+  assert.equal(result.holdReason, 'nonprod_test_cannot_certify_production');
+});
+
+test('R2 REGRESSION: end-to-end reproduction of the audit finding — a claim named for a real prod deploy, backed only by nonprod evidence, no environment declared, must HOLD', () => {
+  const result = classifyClaim({
+    claimId: 'the-actual-prod-deploy-is-safe',
+    evidenceLevel: 'PROVEN_BY_NONPROD_TEST',
+    topics: ['cloud_run', 'traffic'],
+  });
+  assert.equal(result.decision, 'HOLD');
+});
+
+test('PROVEN_BY_NONPROD_TEST with no environment declared and NO production-impact topics is still a normal PROCEED (the fix is scoped to production-impact claims only)', () => {
+  const result = classifyClaim({ claimId: 'e4', evidenceLevel: 'PROVEN_BY_NONPROD_TEST', topics: [] });
   assert.equal(result.decision, 'PROCEED');
+  // evidenceLevel is still coerced to UNPROVEN by the R2 rule regardless of
+  // topics (the rule is about the evidenceLevel/environment pair itself,
+  // not about whether it happens to matter for THIS claim) -- but with no
+  // production-impact topic, UNPROVEN alone does not trigger HOLD.
+  assert.equal(result.evidenceLevel, 'UNPROVEN');
+});
+
+// =============================================================================
+// R2 REGRESSION: malformed (present but non-array) `topics` must fail closed,
+// not silently become "no topics".
+// =============================================================================
+
+test('R2 REGRESSION: topics passed as a bare string (not wrapped in an array) is a malformed claim shape -> HOLD, never silently treated as zero topics', () => {
+  const result = classifyClaim({ claimId: 'malformed1', evidenceLevel: 'UNPROVEN', topics: 'production' });
+  assert.equal(result.topicsShapeValid, false);
+  assert.equal(result.matchedTopics.length, 0);
+  assert.equal(result.decision, 'HOLD');
+  assert.equal(result.holdReason, 'malformed_topics_shape');
+});
+
+test('a genuinely absent `topics` field (undefined) is still a normal, valid claim -- not malformed', () => {
+  const result = classifyClaim({ claimId: 'ok', evidenceLevel: 'UNPROVEN' });
+  assert.equal(result.topicsShapeValid, true);
+  assert.equal(result.decision, 'PROCEED');
+});
+
+test('an empty-array `topics` field is still a normal, valid claim', () => {
+  const result = classifyClaim({ claimId: 'ok2', evidenceLevel: 'PROVEN_BY_CODE', topics: [] });
+  assert.equal(result.topicsShapeValid, true);
+  assert.equal(result.decision, 'PROCEED');
+});
+
+test('malformed topics forces HOLD even for an otherwise strongly-proven claim (the malformed-shape check runs first)', () => {
+  const result = classifyClaim({ claimId: 'malformed2', evidenceLevel: 'PROVEN_BY_LIVE_READ_ONLY', topics: { production: true } });
+  assert.equal(result.decision, 'HOLD');
+  assert.equal(result.holdReason, 'malformed_topics_shape');
 });
 
 // =============================================================================

@@ -222,15 +222,31 @@ export function scanGithubActionsWorkflowText(yamlText) {
 
   // --- ::error:: without a following exit (looked for within the same
   // `run:` block -- approximated here as "within the next 15 lines and
-  // before the next `- name:`/`run:` step boundary", which is generous
-  // enough to avoid false positives on multi-line scripts while still
-  // catching the real pattern this project has hit twice). ---
+  // before the next step boundary", which is generous enough to avoid false
+  // positives on multi-line scripts while still catching the real pattern
+  // this project has hit twice).
+  //
+  // NIGHT_HARDENING_1-R2 SECURITY CORRECTION (this revision) closes a real
+  // false negative an independent audit of R1 reproduced live: the step-
+  // boundary regex only recognized `- name:`/`- uses:` as the start of a new
+  // step, not a bare `- run:` (a perfectly ordinary, common GitHub Actions
+  // shape — used even in this module's own test fixtures). An unguarded
+  // `::error::` followed by an UNRELATED, different step's `exit 1` was
+  // silently treated as "the exit follows", missing the exact P1-8-shaped
+  // defect this scanner exists to catch. Fixed by also recognizing `- run:`
+  // as a step boundary. Also closes a second, related false negative: the
+  // exit-pattern check matched inside `#`-comment lines (e.g. `# TODO: exit
+  // 1 once this is safe`), letting a commented-out, non-executing "exit"
+  // silently clear a real finding — comment lines are now skipped entirely
+  // for this check.
+  // ---------------------------------------------------------------------------
   lines.forEach((line, idx) => {
     if (!ERROR_ANNOTATION_PATTERN.test(line)) return;
     const windowEnd = Math.min(lines.length, idx + 16);
     let sawExit = false;
     for (let j = idx; j < windowEnd; j += 1) {
-      if (/^\s*-\s*(name:|uses:)/.test(lines[j]) && j > idx) break; // next step started
+      if (/^\s*-\s*(name:|uses:|run:)/.test(lines[j]) && j > idx) break; // next step started
+      if (/^\s*#/.test(lines[j])) continue; // a comment line never counts as a real exit
       if (EXIT_NONZERO_PATTERN.test(lines[j])) { sawExit = true; break; }
     }
     if (!sawExit) {

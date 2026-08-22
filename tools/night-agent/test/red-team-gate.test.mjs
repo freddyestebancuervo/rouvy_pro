@@ -156,6 +156,49 @@ test('does NOT flag ::error:: when an exit 1 follows in the same block (the fixe
   assert.equal(result.findings.filter((f) => f.checkId === 'GH_ACTIONS_ERROR_ANNOTATION_WITHOUT_EXIT').length, 0);
 });
 
+// R2 SECURITY CORRECTION regression: an independent audit reproduced this
+// live -- an unguarded `::error::` in one bare `- run:` step was masked by
+// an unrelated `exit 1` belonging to a DIFFERENT, later step, because the
+// step-boundary regex only recognized `- name:`/`- uses:`, not `- run:`.
+test('R2 REGRESSION: an ::error:: in one bare "- run:" step is NOT masked by an unrelated exit in a different step', () => {
+  const yaml = [
+    '      - run: |',
+    '          echo "::error::execution failed, see logs"',
+    '      - run: |',
+    '          some-other-unrelated-command || exit 1',
+  ].join('\n');
+  const result = scanGithubActionsWorkflowText(yaml);
+  assert.ok(
+    result.findings.some((f) => f.checkId === 'GH_ACTIONS_ERROR_ANNOTATION_WITHOUT_EXIT'),
+    'expected the first step\'s unguarded ::error:: to be flagged despite the second, unrelated step\'s exit 1',
+  );
+});
+
+test('a bare "- run:" step IS recognized as a step boundary (does not merely fix the false negative by over-widening the window)', () => {
+  const yaml = [
+    '      - run: |',
+    '          echo "::error::first step failed"',
+    '      - run: |',
+    '          echo "second step, unrelated"',
+    '          exit 1',
+  ].join('\n');
+  const result = scanGithubActionsWorkflowText(yaml);
+  const flaggedLines = result.findings.filter((f) => f.checkId === 'GH_ACTIONS_ERROR_ANNOTATION_WITHOUT_EXIT').map((f) => f.line);
+  assert.deepEqual(flaggedLines, [2]);
+});
+
+// R2 SECURITY CORRECTION regression: a commented-out "exit" must never count
+// as a real one.
+test('R2 REGRESSION: a commented-out "exit 1" does not clear a real, unguarded ::error:: finding', () => {
+  const yaml = [
+    '      - run: |',
+    '          echo "::error::execution failed"',
+    '          # TODO: exit 1 once this is safe',
+  ].join('\n');
+  const result = scanGithubActionsWorkflowText(yaml);
+  assert.ok(result.findings.some((f) => f.checkId === 'GH_ACTIONS_ERROR_ANNOTATION_WITHOUT_EXIT'));
+});
+
 test('detects continue-on-error: true', () => {
   const yaml = 'steps:\n  - run: might-fail.sh\n    continue-on-error: true\n';
   const result = scanGithubActionsWorkflowText(yaml);
