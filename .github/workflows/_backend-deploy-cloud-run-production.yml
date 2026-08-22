@@ -1,53 +1,645 @@
-name: (reusable) Backend — deploy to Cloud Run Production [contract bootstrap]
+name: (reusable) Backend — deploy to Cloud Run Production
 
-# T-F1.2 Block A — congela el contrato/ruta (job_workflow_ref) de este
-# reusable ANTES de que exista ninguna identidad WIF ni infraestructura
-# de Production. Su propósito FUTURO (bloque separado, explícitamente
-# autorizado) será el flujo completo ya diseñado en T-F1.2-B0/B0.1/B0.2:
-# stale-SHA check inmediatamente antes de cualquier mutación de DB y de
-# tráfico, deploy --no-traffic, validación de candidata, switch
-# explícito de tráfico, health check, no-drift check y rollback
-# condicionado — usando PRODUCTION_DEPLOYER_SA, nunca la identidad de
-# publicación de artefactos.
+# T-F1.2 (docs/audits/AUDITORIA_FINAL/BACKLOG_MAESTRO.md), bloque propuesto
+# D3B0 (PROPOSAL_ONLY_NOT_FORMAL — ningún documento autoritativo asigna
+# todavía un identificador posterior a D2B3/D2B0-R0).
 #
-# `environment: production` se declara deliberadamente NO en este
-# bloque (ver T-F1.2-B0.3, Fase 5): activarlo ya dispararía políticas
-# reales de GitHub Environment innecesarias mientras este job no hace
-# nada. Se agrega junto con la integración real de identidad, en el
-# mismo bloque que crea el GitHub Environment "production".
+# Implementa la secuencia completa de despliegue seguro diseñada en
+# T-F1.2-B0/B0.1/B0.2/B0.3 y validada operativamente en Development
+# (.github/workflows/backend-deploy-development.yml): guard de origen,
+# WIF -> korixa-production-deployer, verificación de proyecto, deploy
+# por digest inmutable SIN tráfico, validación de candidata (incluye
+# health check de la candidata ANTES de mover tráfico, vía --tag,
+# mejora deliberada respecto al patrón de Development que solo
+# valida salud DESPUÉS del switch), gate de migración explícito y
+# separado (fail-closed, no ejecuta ninguna migración), switch
+# explícito de tráfico, health check posterior, verificación de
+# ausencia de drift, y rollback condicionado — con un caso especial
+# para el primer despliegue (no existe revisión previa a la que volver).
 #
-# SECURITY:
-# Production deploy capability is intentionally disabled in Block A.
-# OIDC, environment: production, Cloud Run operations and automatic
-# invocation require separately authorized security changes.
+# SECURITY — NO ACTIVADO TODAVÍA:
+# `on: workflow_call` únicamente. Sin `workflow_dispatch`, sin
+# `workflow_run`. Ningún workflow del repositorio invoca este reusable
+# todavía — `production-deploy.yml` sigue siendo un bootstrap vacío,
+# deliberadamente NO modificado en este mismo bloque (la activación del
+# llamador es un límite de seguridad separado, autorizado aparte). Este
+# archivo puede tener capacidad real de despliegue sin dejar de ser
+# inalcanzable: nada lo invoca.
+#
+# Ningún valor de infraestructura sin evidencia se asume por defecto —
+# todo parámetro todavía no decidido por el propietario (nombre del
+# servicio, CPU, memoria, concurrencia, min/max instancias, ingress,
+# política de invocación, orígenes CORS, mecanismo de egress VPC, y la
+# confirmación de que las migraciones ya se aplicaron) es un INPUT
+# `required: true` sin default — un futuro llamador debe suministrarlo
+# explícitamente, nunca queda hardcodeado aquí. Los únicos valores fijos
+# en este archivo son los que el preflight de T-F1.2 verificó en vivo
+# contra `ridepro-dbafe` (proyecto, región, identidades, nombres de
+# secretos, VPC/subred) — ver comentarios en cada uso.
+#
+# APROBACIÓN HUMANA: `environment: production` se declara en
+# `deploy-candidate` y en `traffic-switch` (no en `validate-contract` ni
+# en `migration-gate`, que nunca tocan cloud). El GitHub Environment
+# `production` existe (verificado en vivo, T-F1.2 preflight) pero HOY
+# no tiene ningún reviewer obligatorio configurado — sin eso, esta
+# declaración no pausa nada todavía. Si el propietario decide exigir
+# aprobación humana antes del primer despliegue real (ver decisión
+# abierta correspondiente), agregarla como regla del Environment en
+# GitHub basta — ningún cambio de código en este archivo sería
+# necesario, el gate ya está conectado.
+#
+# MIGRACIONES: este reusable NUNCA ejecuta `npm run migrate:up` ni
+# ninguna operación de base de datos. El job `migration-gate` es
+# exclusivamente una confirmación externa (booleano `required: true`,
+# sin default) de que un futuro proceso, todavía sin diseñar, ya
+# resolvió el estado del esquema — ver T-F1.2 PROJECT_STATUS.md,
+# decisión `DEFERRED`. Ninguna identidad de este workflow (deployer)
+# tiene acceso al secreto `korixa-production-migration-database-url`
+# (verificado en vivo: sin bindings IAM) — ese secreto permanece
+# intencionalmente inalcanzable desde aquí.
 
 on:
   workflow_call:
     inputs:
+      # ---------------------------------------------------------------
+      # Identidad del artefacto — verificado, no un valor libre.
+      # ---------------------------------------------------------------
       source_sha:
-        description: "SHA exacto ya validado que este reusable desplegará en el bloque futuro."
+        description: "SHA completo (40 hex) ya validado por CI que corresponde al artefacto a desplegar."
         required: true
         type: string
+      immutable_ref:
+        description: "Referencia inmutable repository@sha256:<digest> — único valor válido para --image (ver _backend-build-publish-production.yml, output immutable_ref). Nunca un tag por SHA ni 'latest'."
+        required: true
+        type: string
+
+      # ---------------------------------------------------------------
+      # Especificación del servicio Cloud Run — decisiones del
+      # propietario todavía no tomadas (ver PROJECT_STATUS.md, bloque
+      # de reconciliación de infraestructura 2026-08-22). Sin default:
+      # un valor ausente falla el contrato, nunca se asume.
+      # ---------------------------------------------------------------
+      service_name:
+        description: "Nombre del servicio Cloud Run de Production. UNDECIDED — debe ser suministrado explícitamente."
+        required: true
+        type: string
+      cpu:
+        description: "Límite de CPU (ej. '1'). UNDECIDED."
+        required: true
+        type: string
+      memory:
+        description: "Límite de memoria (ej. '512Mi'). UNDECIDED."
+        required: true
+        type: string
+      concurrency:
+        description: "Máximo de requests concurrentes por instancia. UNDECIDED."
+        required: true
+        type: string
+      min_instances:
+        description: "Instancias mínimas. UNDECIDED."
+        required: true
+        type: string
+      max_instances:
+        description: "Instancias máximas. UNDECIDED."
+        required: true
+        type: string
+      ingress:
+        description: "uno de: all | internal | internal-and-cloud-load-balancing. UNDECIDED."
+        required: true
+        type: string
+      allow_unauthenticated:
+        description: "true => --allow-unauthenticated (invocación pública, patrón ya usado en Development); false => --no-allow-unauthenticated (invocación autenticada por IAM). UNDECIDED para Production — ver PROJECT_STATUS.md."
+        required: true
+        type: boolean
+      cors_allowed_origins:
+        description: "Valor exacto de CORS_ALLOWED_ORIGINS (coma-separado). Sin este valor el backend cierra CORS por completo en producción (resolveCorsOptions, backend/src/config/cors.config.ts) — no es un fallo de arranque, pero bloquea cualquier cliente Web. UNDECIDED."
+        required: true
+        type: string
+      vpc_egress_mode:
+        description: "Uno de: private-ranges-only | all-traffic (--vpc-egress de Direct VPC Egress). UNDECIDED — ver nota de networking más abajo; el conector clásico (vpcaccess.googleapis.com) está deshabilitado y NO es una alternativa disponible hoy."
+        required: true
+        type: string
+
+      # ---------------------------------------------------------------
+      # Gate de migración — confirmación externa, nunca ejecución.
+      # ---------------------------------------------------------------
+      migration_precondition_confirmed:
+        description: "Debe ser EXACTAMENTE true. Confirma (fuera de este workflow) que el esquema de korixa-production-postgres ya está migrado al estado que este artefacto espera. Este reusable NUNCA ejecuta migraciones — ver comentario de cabecera. Sin default: su ausencia falla cerrado."
+        required: true
+        type: boolean
+
+    outputs:
+      first_deploy:
+        description: "'true' si no existía ningún servicio Cloud Run previo (no hay PREVIOUS_REVISION)."
+        value: ${{ jobs.deploy-candidate.outputs.first_deploy }}
+      previous_revision:
+        description: "Revisión que tenía 100% del tráfico antes de este deploy, o vacío si first_deploy=true."
+        value: ${{ jobs.deploy-candidate.outputs.previous_revision }}
+      new_revision:
+        description: "Revisión candidata creada por este deploy."
+        value: ${{ jobs.deploy-candidate.outputs.new_revision }}
+      candidate_url:
+        description: "URL etiquetada (--tag) de la candidata, con 0% de tráfico, usada para el health check pre-switch."
+        value: ${{ jobs.deploy-candidate.outputs.candidate_url }}
+      traffic_switch_result:
+        description: "'success' | 'rolled_back' | 'first_deploy_traffic_removed' | 'unattempted'."
+        value: ${{ jobs.traffic-switch.outputs.result || 'unattempted' }}
 
 permissions:
   contents: read
 
+env:
+  # Verificados en vivo el 2026-08-22 contra ridepro-dbafe
+  # (CLOUD_RUN_PRODUCTION_DEPLOY_PREFLIGHT) — no son parámetros del
+  # llamador porque no son decisiones pendientes, son hechos ya
+  # provisionados.
+  PRODUCTION_PROJECT: ridepro-dbafe
+  PRODUCTION_REGION: southamerica-east1
+  ARTIFACT_REPOSITORY: southamerica-east1-docker.pkg.dev/ridepro-dbafe/korixa-backend/api
+  DEPLOYER_SA: korixa-production-deployer@ridepro-dbafe.iam.gserviceaccount.com
+  RUNTIME_SA: korixa-production-runtime@ridepro-dbafe.iam.gserviceaccount.com
+  PRODUCTION_VPC_NETWORK: korixa-production-vpc
+  PRODUCTION_VPC_SUBNET: korixa-production-sa-east1
+  SECRET_DATABASE_URL: korixa-production-database-url
+  SECRET_REDIS_URL: korixa-production-redis-url
+  SECRET_JWT_PRIVATE_KEY: korixa-production-jwt-private-key
+  SECRET_JWT_PUBLIC_KEY: korixa-production-jwt-public-key
+  # Rutas de montaje de archivo para las 2 claves JWT — el backend las
+  # lee vía fs.readFileSync(JWT_PRIVATE_KEY_PATH/JWT_PUBLIC_KEY_PATH),
+  # nunca como contenido inline de una env var (backend/src/jwt/token.service.ts).
+  # DATABASE_URL/REDIS_URL sí son valores de env var planos (connection
+  # strings), no rutas — backend/src/config/database.config.ts y
+  # redis.config.ts leen process.env.* directamente.
+  JWT_PRIVATE_KEY_MOUNT_PATH: /etc/secrets/jwt-private-key
+  JWT_PUBLIC_KEY_MOUNT_PATH: /etc/secrets/jwt-public-key
+
 jobs:
-  contract-only:
-    name: Contract validation (sin deploy, sin auth cloud)
+  # =============================================================================
+  # Job 1 — validar el contrato completo ANTES de checkout/auth/cloud.
+  # =============================================================================
+  validate-contract:
+    name: Validate contract (sin checkout, sin OIDC, sin cloud)
     runs-on: ubuntu-latest
     timeout-minutes: 5
-    # Sin id-token — este job no se autentica contra ningún proveedor
-    # cloud, no toca Cloud Run, Cloud SQL, Artifact Registry ni Secret
-    # Manager. No mueve tráfico. No ejecuta ninguna migración.
     permissions: {}
     steps:
-      - name: Validar input recibido (sin efectos, sin cloud)
+      - name: Validar todos los inputs (sin efectos, sin cloud)
         shell: bash
+        env:
+          SOURCE_SHA: ${{ inputs.source_sha }}
+          IMMUTABLE_REF: ${{ inputs.immutable_ref }}
+          SERVICE_NAME: ${{ inputs.service_name }}
+          CPU: ${{ inputs.cpu }}
+          MEMORY: ${{ inputs.memory }}
+          CONCURRENCY: ${{ inputs.concurrency }}
+          MIN_INSTANCES: ${{ inputs.min_instances }}
+          MAX_INSTANCES: ${{ inputs.max_instances }}
+          INGRESS: ${{ inputs.ingress }}
+          ALLOW_UNAUTH: ${{ inputs.allow_unauthenticated }}
+          CORS_ALLOWED_ORIGINS: ${{ inputs.cors_allowed_origins }}
+          VPC_EGRESS_MODE: ${{ inputs.vpc_egress_mode }}
+          MIGRATION_CONFIRMED: ${{ inputs.migration_precondition_confirmed }}
         run: |
-          if [ -z "${{ inputs.source_sha }}" ]; then
-            echo "::error::source_sha vacío"
+          set -euo pipefail
+          fail() { echo "::error::$1"; exit 1; }
+
+          [[ "$SOURCE_SHA" =~ ^[0-9a-f]{40}$ ]] || fail "source_sha no es un SHA-1 completo (40 hex): '$SOURCE_SHA'"
+
+          case "$IMMUTABLE_REF" in
+            southamerica-east1-docker.pkg.dev/ridepro-dbafe/korixa-backend/api@sha256:*)
+              DIGEST="${IMMUTABLE_REF#*@}"
+              [[ "$DIGEST" =~ ^sha256:[0-9a-f]{64}$ ]] || fail "immutable_ref no tiene un digest sha256 válido: '$IMMUTABLE_REF'"
+              ;;
+            *)
+              fail "immutable_ref debe ser exactamente repository@sha256:<digest> del repositorio de Production, nunca un tag ni 'latest': '$IMMUTABLE_REF'"
+              ;;
+          esac
+
+          [[ -n "$SERVICE_NAME" ]] || fail "service_name vacío"
+          [[ "$SERVICE_NAME" =~ ^[a-z]([a-z0-9-]{0,61}[a-z0-9])?$ ]] || fail "service_name no cumple el formato de nombre de servicio Cloud Run: '$SERVICE_NAME'"
+
+          [[ -n "$CPU" ]] || fail "cpu vacío"
+          [[ -n "$MEMORY" ]] || fail "memory vacío"
+
+          [[ "$CONCURRENCY" =~ ^[0-9]+$ ]] || fail "concurrency debe ser un entero: '$CONCURRENCY'"
+          [[ "$MIN_INSTANCES" =~ ^[0-9]+$ ]] || fail "min_instances debe ser un entero: '$MIN_INSTANCES'"
+          [[ "$MAX_INSTANCES" =~ ^[0-9]+$ ]] || fail "max_instances debe ser un entero: '$MAX_INSTANCES'"
+          if [ "$MIN_INSTANCES" -gt "$MAX_INSTANCES" ]; then
+            fail "min_instances ($MIN_INSTANCES) no puede ser mayor que max_instances ($MAX_INSTANCES)"
+          fi
+
+          case "$INGRESS" in
+            all|internal|internal-and-cloud-load-balancing) ;;
+            *) fail "ingress debe ser all|internal|internal-and-cloud-load-balancing: '$INGRESS'" ;;
+          esac
+
+          case "$ALLOW_UNAUTH" in
+            true|false) ;;
+            *) fail "allow_unauthenticated debe ser exactamente true o false: '$ALLOW_UNAUTH'" ;;
+          esac
+
+          [[ -n "$CORS_ALLOWED_ORIGINS" ]] || fail "cors_allowed_origins vacío — un backend de producción sin este valor cierra CORS por completo (fail-closed en el propio código), bloqueando cualquier cliente Web; debe ser una decisión explícita, no un olvido"
+
+          case "$VPC_EGRESS_MODE" in
+            private-ranges-only|all-traffic) ;;
+            *) fail "vpc_egress_mode debe ser private-ranges-only|all-traffic: '$VPC_EGRESS_MODE'" ;;
+          esac
+
+          if [ "$MIGRATION_CONFIRMED" != "true" ]; then
+            fail "migration_precondition_confirmed no es exactamente 'true' — este reusable no ejecuta migraciones; sin esta confirmación externa explícita, el despliegue no continúa (ver migration-gate más abajo, que revalida esto de forma independiente)."
+          fi
+
+          echo "CONTRACT_VALID=YES"
+
+  # =============================================================================
+  # Job 2 — autenticar, desplegar candidata SIN tráfico, validar salud de
+  # la candidata ANTES de mover tráfico (vía --tag).
+  # =============================================================================
+  deploy-candidate:
+    name: Deploy candidate (--no-traffic) + pre-traffic health
+    needs: validate-contract
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    environment: production
+    permissions:
+      contents: read
+      id-token: write
+    outputs:
+      first_deploy: ${{ steps.capture-previous.outputs.first_deploy }}
+      previous_revision: ${{ steps.capture-previous.outputs.previous_revision }}
+      new_revision: ${{ steps.identify-new-revision.outputs.new_revision }}
+      candidate_url: ${{ steps.candidate-url.outputs.candidate_url }}
+      pre_fingerprint: ${{ steps.capture-previous.outputs.pre_fingerprint }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Verificar SHA fuente exacto antes de autenticar
+        id: source
+        run: |
+          set -euo pipefail
+          CHECKED_OUT_SHA="$(git rev-parse HEAD)"
+          if [ "$CHECKED_OUT_SHA" != "${{ inputs.source_sha }}" ]; then
+            echo "::error::El working tree del runner ($CHECKED_OUT_SHA) no coincide con source_sha declarado ('${{ inputs.source_sha }}')."
             exit 1
           fi
-          echo "SOURCE_SHA recibido (solo validación): ${{ inputs.source_sha }}"
-          echo "Este reusable todavía no despliega nada a Cloud Run. La capacidad real (WIF, environment: production, no-traffic/candidate/switch/health/no-drift/rollback) se habilita en un bloque posterior, autorizado por separado, junto con PRODUCTION_DEPLOYER_SA y el GitHub Environment production."
+          echo "SOURCE_SHA_VERIFIED=YES"
+
+      - id: auth
+        uses: google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093 # v3
+        with:
+          project_id: ${{ env.PRODUCTION_PROJECT }}
+          workload_identity_provider: projects/731660820861/locations/global/workloadIdentityPools/github-actions-pool/providers/github-production-deployer
+          service_account: ${{ env.DEPLOYER_SA }}
+
+      - uses: google-github-actions/setup-gcloud@aa5489c8933f4cc7a4f7d45035b3b1440c9c10db # v3
+
+      - name: Verificar projectId ANTES de cualquier acceso a Production
+        run: |
+          set -euo pipefail
+          ACTUAL_PROJECT="$(gcloud config get-value project)"
+          if [ "$ACTUAL_PROJECT" != "${{ env.PRODUCTION_PROJECT }}" ]; then
+            echo "::error::PROJECT MISMATCH: esperado ${{ env.PRODUCTION_PROJECT }}, obtenido '$ACTUAL_PROJECT'"
+            exit 1
+          fi
+
+      - name: Verificar que immutable_ref resuelve realmente en Artifact Registry
+        run: |
+          set -euo pipefail
+          gcloud artifacts docker images describe "${{ inputs.immutable_ref }}" \
+            --project="${{ env.PRODUCTION_PROJECT }}" \
+            --format="value(image_summary.digest)" >/dev/null
+
+      - name: Capturar PREVIOUS_REVISION (o confirmar primer despliegue) y huella de configuración
+        id: capture-previous
+        run: |
+          set -euo pipefail
+          SERVICE="${{ inputs.service_name }}"
+          REGION="${{ env.PRODUCTION_REGION }}"
+          PROJECT="${{ env.PRODUCTION_PROJECT }}"
+
+          if ! gcloud run services describe "$SERVICE" --project="$PROJECT" --region="$REGION" --format="value(metadata.name)" >/dev/null 2>&1; then
+            echo "Ningún servicio '$SERVICE' existe todavía en $PROJECT/$REGION — este es el PRIMER despliegue. PREVIOUS_REVISION=NONE."
+            echo "first_deploy=true" >> "$GITHUB_OUTPUT"
+            echo "previous_revision=" >> "$GITHUB_OUTPUT"
+            echo "pre_fingerprint=" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          echo "first_deploy=false" >> "$GITHUB_OUTPUT"
+
+          TRAFFIC_JSON="$(gcloud run services describe "$SERVICE" --project="$PROJECT" --region="$REGION" --format='json(status.traffic)')"
+          COUNT="$(echo "$TRAFFIC_JSON" | jq '.status.traffic | length')"
+          if [ "$COUNT" != "1" ]; then
+            echo "::error::Estado de tráfico ambiguo: se esperaba exactamente 1 entrada en status.traffic, se encontraron $COUNT — FAIL CLOSED."
+            exit 1
+          fi
+
+          PREV_REV="$(echo "$TRAFFIC_JSON" | jq -r '.status.traffic[0].revisionName')"
+          PREV_PCT="$(echo "$TRAFFIC_JSON" | jq -r '.status.traffic[0].percent')"
+          [ -n "$PREV_REV" ] && [ "$PREV_REV" != "null" ] || { echo "::error::PREVIOUS_REVISION vacío — FAIL CLOSED"; exit 1; }
+          [ "$PREV_PCT" = "100" ] || { echo "::error::La única entrada de tráfico no tiene 100% (tiene $PREV_PCT%) — FAIL CLOSED"; exit 1; }
+
+          READY="$(gcloud run revisions describe "$PREV_REV" --project="$PROJECT" --region="$REGION" --format=json | jq -r '.status.conditions[] | select(.type=="Ready") | .status')"
+          [ "$READY" = "True" ] || { echo "::error::PREVIOUS_REVISION ($PREV_REV) no está Ready=True — FAIL CLOSED"; exit 1; }
+
+          echo "previous_revision=$PREV_REV" >> "$GITHUB_OUTPUT"
+
+          FINGERPRINT="$(gcloud run services describe "$SERVICE" --project="$PROJECT" --region="$REGION" --format=json | jq -S -c '{serviceAccount: .spec.template.spec.serviceAccountName, network: .spec.template.metadata.annotations["run.googleapis.com/network-interfaces"], ingress: .metadata.annotations["run.googleapis.com/ingress"]}')"
+          echo "pre_fingerprint=$FINGERPRINT" >> "$GITHUB_OUTPUT"
+
+      - name: Deploy candidata por digest inmutable, SIN tráfico, con --tag
+        run: |
+          set -euo pipefail
+          gcloud run deploy "${{ inputs.service_name }}" \
+            --image="${{ inputs.immutable_ref }}" \
+            --no-traffic \
+            --tag=candidate \
+            --region="${{ env.PRODUCTION_REGION }}" \
+            --project="${{ env.PRODUCTION_PROJECT }}" \
+            --service-account="${{ env.RUNTIME_SA }}" \
+            --cpu="${{ inputs.cpu }}" \
+            --memory="${{ inputs.memory }}" \
+            --concurrency="${{ inputs.concurrency }}" \
+            --min-instances="${{ inputs.min_instances }}" \
+            --max-instances="${{ inputs.max_instances }}" \
+            --ingress="${{ inputs.ingress }}" \
+            --network="${{ env.PRODUCTION_VPC_NETWORK }}" \
+            --subnet="${{ env.PRODUCTION_VPC_SUBNET }}" \
+            --vpc-egress="${{ inputs.vpc_egress_mode }}" \
+            --set-secrets="${{ env.JWT_PRIVATE_KEY_MOUNT_PATH }}=${{ env.SECRET_JWT_PRIVATE_KEY }}:latest,${{ env.JWT_PUBLIC_KEY_MOUNT_PATH }}=${{ env.SECRET_JWT_PUBLIC_KEY }}:latest,DATABASE_URL=${{ env.SECRET_DATABASE_URL }}:latest,REDIS_URL=${{ env.SECRET_REDIS_URL }}:latest" \
+            --set-env-vars="BACKEND_ENVIRONMENT=production,NODE_ENV=production,JWT_PRIVATE_KEY_PATH=${{ env.JWT_PRIVATE_KEY_MOUNT_PATH }},JWT_PUBLIC_KEY_PATH=${{ env.JWT_PUBLIC_KEY_MOUNT_PATH }},FIREBASE_PROJECT_ID=${{ env.PRODUCTION_PROJECT }},CORS_ALLOWED_ORIGINS=${{ inputs.cors_allowed_origins }},TRUST_PROXY=true" \
+            $( [ "${{ inputs.allow_unauthenticated }}" = "true" ] && echo "--allow-unauthenticated" || echo "--no-allow-unauthenticated" ) \
+            --quiet
+
+      - name: Identificar NEW_REVISION sin ambigüedad
+        id: identify-new-revision
+        run: |
+          set -euo pipefail
+          NEW_REV="$(gcloud run services describe "${{ inputs.service_name }}" --project="${{ env.PRODUCTION_PROJECT }}" --region="${{ env.PRODUCTION_REGION }}" --format='value(status.latestCreatedRevisionName)')"
+          [ -n "$NEW_REV" ] || { echo "::error::latestCreatedRevisionName vacío tras el deploy"; exit 1; }
+          if [ -n "${{ steps.capture-previous.outputs.previous_revision }}" ] && [ "$NEW_REV" = "${{ steps.capture-previous.outputs.previous_revision }}" ]; then
+            echo "::error::latestCreatedRevisionName ($NEW_REV) es igual a PREVIOUS_REVISION — el deploy no creó una revisión nueva"
+            exit 1
+          fi
+          echo "new_revision=$NEW_REV" >> "$GITHUB_OUTPUT"
+
+      - name: Validar candidata (Ready + imagen exacta por digest) ANTES de health/tráfico
+        run: |
+          set -euo pipefail
+          NEW_REV="${{ steps.identify-new-revision.outputs.new_revision }}"
+          REV_JSON="$(gcloud run revisions describe "$NEW_REV" --project="${{ env.PRODUCTION_PROJECT }}" --region="${{ env.PRODUCTION_REGION }}" --format=json)"
+
+          READY="$(echo "$REV_JSON" | jq -r '.status.conditions[] | select(.type=="Ready") | .status')"
+          [ "$READY" = "True" ] || { echo "::error::Candidata $NEW_REV no está Ready=True (obtenido: '$READY')"; exit 1; }
+
+          # A diferencia de Development (que despliega por tag y compara
+          # digests potencialmente distintos entre índice multi-plataforma
+          # y manifest concreto), aquí se desplegó directamente por
+          # immutable_ref (repository@sha256:...) — Cloud Run debe
+          # reflejar ese MISMO string exacto en spec.containers[0].image,
+          # así que se compara por igualdad estricta, una garantía más
+          # fuerte, no solo "cambió respecto a la anterior".
+          ACTUAL_IMAGE="$(echo "$REV_JSON" | jq -r '.spec.containers[0].image')"
+          if [ "$ACTUAL_IMAGE" != "${{ inputs.immutable_ref }}" ]; then
+            echo "::error::La imagen de la candidata ('$ACTUAL_IMAGE') no coincide exactamente con immutable_ref ('${{ inputs.immutable_ref }}')"
+            exit 1
+          fi
+
+          TRAFFIC_JSON="$(gcloud run services describe "${{ inputs.service_name }}" --project="${{ env.PRODUCTION_PROJECT }}" --region="${{ env.PRODUCTION_REGION }}" --format='json(status.traffic)')"
+          NEW_PCT="$(echo "$TRAFFIC_JSON" | jq -r --arg rev "$NEW_REV" '[.status.traffic[] | select(.revisionName==$rev) | .percent][0] // 0')"
+          if [ "$NEW_PCT" != "0" ]; then
+            echo "::error::La candidata ya recibe tráfico distinto de 0% antes del switch explícito ($NEW_PCT%)"
+            exit 1
+          fi
+
+      - name: Resolver URL etiquetada de la candidata (--tag=candidate, 0% de tráfico)
+        id: candidate-url
+        run: |
+          set -euo pipefail
+          CANDIDATE_URL="$(gcloud run services describe "${{ inputs.service_name }}" --project="${{ env.PRODUCTION_PROJECT }}" --region="${{ env.PRODUCTION_REGION }}" --format=json | jq -r '.status.traffic[] | select(.tag=="candidate") | .url')"
+          [ -n "$CANDIDATE_URL" ] && [ "$CANDIDATE_URL" != "null" ] || { echo "::error::No se pudo resolver la URL etiquetada 'candidate'"; exit 1; }
+          echo "candidate_url=$CANDIDATE_URL" >> "$GITHUB_OUTPUT"
+
+      - name: Health check de la CANDIDATA antes de mover tráfico (mejora sobre el patrón de Development)
+        run: |
+          set -euo pipefail
+          URL="${{ steps.candidate-url.outputs.candidate_url }}"
+          MAX_ATTEMPTS=6
+          ATTEMPT=1
+          SUCCESS=false
+          while [ $ATTEMPT -le $MAX_ATTEMPTS ]; do
+            # Intento sin autenticar primero (cubre allow_unauthenticated=true).
+            RESPONSE="$(curl -sS --connect-timeout 5 --max-time 15 -w '\n%{http_code}' "$URL/v1/health" || true)"
+            HTTP_CODE="$(echo "$RESPONSE" | tail -n1)"
+            BODY="$(echo "$RESPONSE" | sed '$d')"
+
+            if [ "$HTTP_CODE" = "401" ] || [ "$HTTP_CODE" = "403" ]; then
+              # Cubre allow_unauthenticated=false: reintenta con un
+              # identity token de la propia identidad WIF ya autenticada
+              # (el invoker debe tener roles/run.invoker sobre el
+              # servicio — verificación de esa autorización queda fuera
+              # de este workflow, es una decisión de IAM futura).
+              TOKEN="$(gcloud auth print-identity-token --audiences="$URL" 2>/dev/null || true)"
+              if [ -n "$TOKEN" ]; then
+                RESPONSE="$(curl -sS --connect-timeout 5 --max-time 15 -H "Authorization: Bearer $TOKEN" -w '\n%{http_code}' "$URL/v1/health" || true)"
+                HTTP_CODE="$(echo "$RESPONSE" | tail -n1)"
+                BODY="$(echo "$RESPONSE" | sed '$d')"
+              fi
+            fi
+
+            if [ "$HTTP_CODE" = "200" ] && echo "$BODY" | jq -e '.status=="ok" and .database=="connected"' >/dev/null 2>&1; then
+              SUCCESS=true
+              break
+            fi
+            ATTEMPT=$((ATTEMPT+1))
+            sleep 5
+          done
+          if [ "$SUCCESS" != "true" ]; then
+            echo "::error::Health check de la candidata no alcanzó 200 + status=ok + database=connected tras $MAX_ATTEMPTS intentos — tráfico NUNCA se movió, la candidata queda en 0%."
+            exit 1
+          fi
+
+  # =============================================================================
+  # Job 3 — gate de migración, independiente del despliegue de la
+  # candidata. Revalida la confirmación externa; nunca ejecuta nada.
+  # =============================================================================
+  migration-gate:
+    name: Migration precondition gate (sin ejecutar ninguna migración)
+    needs: deploy-candidate
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions: {}
+    steps:
+      - name: Revalidar confirmación externa (independiente de validate-contract)
+        run: |
+          set -euo pipefail
+          if [ "${{ inputs.migration_precondition_confirmed }}" != "true" ]; then
+            echo "::error::migration_precondition_confirmed no es 'true' — bloqueando el switch de tráfico. Este job NUNCA ejecuta migraciones (sin acceso al secreto korixa-production-migration-database-url, verificado sin bindings IAM); solo confirma que un proceso externo, todavía sin diseñar, ya lo hizo."
+            exit 1
+          fi
+          echo "MIGRATION_PRECONDITION=CONFIRMED (no verificado técnicamente por este workflow, solo declarado por el llamador)"
+
+  # =============================================================================
+  # Job 4 — switch de tráfico explícito. Requiere candidata sana Y el
+  # gate de migración. Caso especial: primer despliegue (sin revisión
+  # previa) vs. despliegue subsecuente (con rollback real disponible).
+  # =============================================================================
+  traffic-switch:
+    name: Explicit traffic switch + post-switch health + conditional rollback
+    needs: [deploy-candidate, migration-gate]
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    environment: production
+    permissions:
+      contents: read
+      id-token: write
+    outputs:
+      result: ${{ steps.set-result.outputs.result }}
+    steps:
+      - id: auth
+        uses: google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093 # v3
+        with:
+          project_id: ${{ env.PRODUCTION_PROJECT }}
+          workload_identity_provider: projects/731660820861/locations/global/workloadIdentityPools/github-actions-pool/providers/github-production-deployer
+          service_account: ${{ env.DEPLOYER_SA }}
+
+      - uses: google-github-actions/setup-gcloud@aa5489c8933f4cc7a4f7d45035b3b1440c9c10db # v3
+
+      - name: Verificar projectId
+        run: |
+          set -euo pipefail
+          ACTUAL_PROJECT="$(gcloud config get-value project)"
+          [ "$ACTUAL_PROJECT" = "${{ env.PRODUCTION_PROJECT }}" ] || { echo "::error::PROJECT MISMATCH"; exit 1; }
+
+      - name: Recheck de no-drift — el estado previo capturado no cambió mientras corría migration-gate
+        id: recheck
+        run: |
+          set -euo pipefail
+          SERVICE="${{ inputs.service_name }}"
+          PROJECT="${{ env.PRODUCTION_PROJECT }}"
+          REGION="${{ env.PRODUCTION_REGION }}"
+          FIRST_DEPLOY="${{ needs.deploy-candidate.outputs.first_deploy }}"
+
+          if [ "$FIRST_DEPLOY" != "true" ]; then
+            CURRENT_TRAFFIC_JSON="$(gcloud run services describe "$SERVICE" --project="$PROJECT" --region="$REGION" --format='json(status.traffic)')"
+            CURRENT_PREV_REV="$(echo "$CURRENT_TRAFFIC_JSON" | jq -r '[.status.traffic[] | select(.percent==100)][0].revisionName // ""')"
+            if [ "$CURRENT_PREV_REV" != "${{ needs.deploy-candidate.outputs.previous_revision }}" ]; then
+              echo "::error::DRIFT: la revisión con 100% de tráfico cambió entre deploy-candidate y traffic-switch (era '${{ needs.deploy-candidate.outputs.previous_revision }}', ahora es '$CURRENT_PREV_REV') — otra ejecución pudo haber corrido en paralelo. FAIL CLOSED, no se mueve tráfico."
+              exit 1
+            fi
+          fi
+          echo "NO_DRIFT_CONFIRMED=YES"
+
+      - name: Mover 100% del tráfico a NEW_REVISION
+        id: switch-traffic
+        run: |
+          set -euo pipefail
+          gcloud run services update-traffic "${{ inputs.service_name }}" \
+            --to-revisions "${{ needs.deploy-candidate.outputs.new_revision }}=100" \
+            --region="${{ env.PRODUCTION_REGION }}" \
+            --project="${{ env.PRODUCTION_PROJECT }}" \
+            --quiet
+
+      - name: Verificar split de tráfico tras el switch
+        id: verify-traffic-split
+        run: |
+          set -euo pipefail
+          TRAFFIC_JSON="$(gcloud run services describe "${{ inputs.service_name }}" --project="${{ env.PRODUCTION_PROJECT }}" --region="${{ env.PRODUCTION_REGION }}" --format='json(status.traffic)')"
+          NEW_PCT="$(echo "$TRAFFIC_JSON" | jq -r --arg rev "${{ needs.deploy-candidate.outputs.new_revision }}" '[.status.traffic[] | select(.revisionName==$rev) | .percent][0] // 0')"
+          TOTAL="$(echo "$TRAFFIC_JSON" | jq '[.status.traffic[].percent] | add')"
+          if [ "$NEW_PCT" != "100" ] || [ "$TOTAL" != "100" ]; then
+            echo "::error::Split de tráfico inesperado: new=$NEW_PCT% total=$TOTAL%"
+            exit 1
+          fi
+
+      - name: Health check tras el switch (URL principal del servicio)
+        id: health-check
+        run: |
+          set -euo pipefail
+          URL="$(gcloud run services describe "${{ inputs.service_name }}" --project="${{ env.PRODUCTION_PROJECT }}" --region="${{ env.PRODUCTION_REGION }}" --format='value(status.url)')"
+          MAX_ATTEMPTS=6
+          ATTEMPT=1
+          SUCCESS=false
+          while [ $ATTEMPT -le $MAX_ATTEMPTS ]; do
+            RESPONSE="$(curl -sS --connect-timeout 5 --max-time 15 -w '\n%{http_code}' "$URL/v1/health" || true)"
+            HTTP_CODE="$(echo "$RESPONSE" | tail -n1)"
+            BODY="$(echo "$RESPONSE" | sed '$d')"
+            if [ "$HTTP_CODE" = "401" ] || [ "$HTTP_CODE" = "403" ]; then
+              TOKEN="$(gcloud auth print-identity-token --audiences="$URL" 2>/dev/null || true)"
+              if [ -n "$TOKEN" ]; then
+                RESPONSE="$(curl -sS --connect-timeout 5 --max-time 15 -H "Authorization: Bearer $TOKEN" -w '\n%{http_code}' "$URL/v1/health" || true)"
+                HTTP_CODE="$(echo "$RESPONSE" | tail -n1)"
+                BODY="$(echo "$RESPONSE" | sed '$d')"
+              fi
+            fi
+            if [ "$HTTP_CODE" = "200" ] && echo "$BODY" | jq -e '.status=="ok" and .database=="connected"' >/dev/null 2>&1; then
+              SUCCESS=true
+              break
+            fi
+            ATTEMPT=$((ATTEMPT+1))
+            sleep 5
+          done
+          [ "$SUCCESS" = "true" ] || { echo "::error::Health check post-switch no alcanzó 200 + status=ok + database=connected tras $MAX_ATTEMPTS intentos"; exit 1; }
+
+      - name: Confirmar ausencia de drift en configuración no relacionada con el deploy (solo si NO es el primer despliegue)
+        id: no-drift-check
+        if: needs.deploy-candidate.outputs.first_deploy != 'true'
+        run: |
+          set -euo pipefail
+          POST_FINGERPRINT="$(gcloud run services describe "${{ inputs.service_name }}" --project="${{ env.PRODUCTION_PROJECT }}" --region="${{ env.PRODUCTION_REGION }}" --format=json | jq -S -c '{serviceAccount: .spec.template.spec.serviceAccountName, network: .spec.template.metadata.annotations["run.googleapis.com/network-interfaces"], ingress: .metadata.annotations["run.googleapis.com/ingress"]}')"
+          PRE_FINGERPRINT='${{ needs.deploy-candidate.outputs.pre_fingerprint }}'
+          if [ "$POST_FINGERPRINT" != "$PRE_FINGERPRINT" ]; then
+            echo "::error::DRIFT DETECTADO en configuración que no debía cambiar con este deploy. ANTES: $PRE_FINGERPRINT DESPUES: $POST_FINGERPRINT"
+            exit 1
+          fi
+
+      # ---------------------------------------------------------------
+      # Rollback — DOS ramas mutuamente excluyentes. Nunca se intenta
+      # "volver a la revisión anterior" cuando no existe ninguna (T-F1.2
+      # Fase 20 del preflight): el caso de primer despliegue retira el
+      # tráfico de la candidata fallida en vez de apuntar a una
+      # PREVIOUS_REVISION inexistente.
+      # ---------------------------------------------------------------
+      - name: Rollback condicionado — despliegue SUBSECUENTE (existe PREVIOUS_REVISION)
+        id: rollback-subsequent
+        if: |
+          always() && needs.deploy-candidate.outputs.first_deploy != 'true' &&
+          (steps.switch-traffic.outcome == 'failure' || steps.verify-traffic-split.outcome == 'failure' || steps.health-check.outcome == 'failure' || steps.no-drift-check.outcome == 'failure')
+        run: |
+          echo "Iniciando rollback de tráfico a PREVIOUS_REVISION=${{ needs.deploy-candidate.outputs.previous_revision }}"
+          gcloud run services update-traffic "${{ inputs.service_name }}" \
+            --to-revisions "${{ needs.deploy-candidate.outputs.previous_revision }}=100" \
+            --region="${{ env.PRODUCTION_REGION }}" \
+            --project="${{ env.PRODUCTION_PROJECT }}" \
+            --quiet
+          exit 1
+
+      - name: Rollback condicionado — PRIMER despliegue (sin PREVIOUS_REVISION — retirar tráfico, nunca apuntar a una revisión inexistente)
+        id: rollback-first-deploy
+        if: |
+          always() && needs.deploy-candidate.outputs.first_deploy == 'true' &&
+          (steps.switch-traffic.outcome == 'failure' || steps.verify-traffic-split.outcome == 'failure' || steps.health-check.outcome == 'failure')
+        run: |
+          echo "Primer despliegue falló después de mover tráfico — no existe PREVIOUS_REVISION. Retirando el 100% de tráfico de la candidata (--to-revisions=...=0), Production queda con el servicio creado pero SIN tráfico servido, en vez de intentar un rollback hacia una revisión inexistente."
+          gcloud run services update-traffic "${{ inputs.service_name }}" \
+            --to-revisions "${{ needs.deploy-candidate.outputs.new_revision }}=0" \
+            --region="${{ env.PRODUCTION_REGION }}" \
+            --project="${{ env.PRODUCTION_PROJECT }}" \
+            --quiet
+          exit 1
+
+      - name: Fijar resultado final
+        id: set-result
+        if: always()
+        run: |
+          if [ "${{ steps.rollback-subsequent.outcome }}" = "failure" ]; then
+            echo "result=rolled_back" >> "$GITHUB_OUTPUT"
+          elif [ "${{ steps.rollback-first-deploy.outcome }}" = "failure" ]; then
+            echo "result=first_deploy_traffic_removed" >> "$GITHUB_OUTPUT"
+          elif [ "${{ steps.health-check.outcome }}" = "success" ]; then
+            echo "result=success" >> "$GITHUB_OUTPUT"
+          else
+            echo "result=unattempted" >> "$GITHUB_OUTPUT"
+          fi
