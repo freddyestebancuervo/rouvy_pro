@@ -569,6 +569,14 @@ function passingGateFakes() {
     checkNightGuardInstalledFn: () => ({ installed: true, reason: 'OK' }),
     getGitStatusPathsFn: () => ({ ok: true, paths: [] }),
     runAllVerificationCommandsFn: () => ({ allPass: true, results: [{ pass: true, family: 'NODE_VERSION', errorFamily: null }] }),
+    // Phase 1B: auditAndCertifyGreenTaskResult (reached on the real PASS
+    // path) resolves headSha via resolveLocalHeadShaFn — faked here too, for
+    // the same reason every other gate above is faked: this file's own
+    // invariant is that REAL_CLAUDE_AGENT_RUNS contributed by it is always
+    // 0, which requires zero real subprocess spawns of ANY kind against the
+    // fake '/fake/repo' repoRoot, not just the ones that existed before this
+    // wiring landed.
+    resolveLocalHeadShaFn: () => 'b'.repeat(40),
   };
 }
 
