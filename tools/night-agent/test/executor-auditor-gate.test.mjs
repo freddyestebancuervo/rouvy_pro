@@ -332,16 +332,15 @@ test('evidenceCitations genuinely omitted (undefined) is still a normal, valid "
 });
 
 // =============================================================================
-// DISCLOSED TRUST BOUNDARY (documented in this module's header, deliberately
-// not closed in this revision — nothing calls this module yet, so there is
-// no live exploitation path). This test exists so a future wiring task
-// cannot miss it: it PROVES the current shape-only trust, so closing it (via
-// unforgeable attestation, mirroring evidence-policy.mjs's own
-// WeakSet-branded TRUSTED_EVIDENCE_REGISTRY pattern) must be part of that
-// future task, not assumed already handled here.
+// TRUST BOUNDARY (Phase 1B, Section 4/8) — CLOSED for redTeamPhaseResult.
+// This gap used to be open, and a prior revision of this exact test proved
+// it (a hand-fabricated `{completed:true, blocking:false}` object was
+// accepted identically to a genuine one). It no longer is: red-team-gate.mjs
+// now brands every real runRedTeamPhase() return value in an unexported,
+// unforgeable WeakSet, and this module rejects anything not in that set.
 // =============================================================================
 
-test('DISCLOSED TRUST BOUNDARY: a hand-fabricated redTeamPhaseResult (never produced by a real runRedTeamPhase() call) is currently accepted identically to a genuine one', () => {
+test('a hand-fabricated redTeamPhaseResult (never produced by a real runRedTeamPhase() call) is REJECTED, even when it exactly matches the real shape', () => {
   const fabricated = { completed: true, blocking: false }; // never actually ran any of the 16 checks
   const result = certifyIndependentAuditResult({
     requestedState: 'PASS',
@@ -350,8 +349,32 @@ test('DISCLOSED TRUST BOUNDARY: a hand-fabricated redTeamPhaseResult (never prod
     evidenceCitations: PROVEN_EVIDENCE,
     redTeamPhaseResult: fabricated,
   });
-  // This SUCCEEDS today -- that is the point of this test. A future wiring
-  // task must close this (see the module header's "DISCLOSED TRUST
-  // BOUNDARY" comment) before handing this function real, untrusted input.
+  assert.equal(result.finalState, 'HOLD');
+  assert.equal(result.reason, 'HOLD_RED_TEAM_RESULT_NOT_ATTESTED');
+});
+
+test('a hand-fabricated redTeamPhaseResult that is a deep-clone of a genuine result (identical fields, different object identity) is STILL rejected', () => {
+  const genuine = cleanRedTeamResult();
+  const deepClone = JSON.parse(JSON.stringify(genuine)); // same shape, different identity -- never touched runRedTeamPhase
+  const result = certifyIndependentAuditResult({
+    requestedState: 'PASS',
+    executorContextId: 'exec-1',
+    auditorContextId: 'audit-2',
+    evidenceCitations: PROVEN_EVIDENCE,
+    redTeamPhaseResult: deepClone,
+  });
+  assert.equal(result.finalState, 'HOLD');
+  assert.equal(result.reason, 'HOLD_RED_TEAM_RESULT_NOT_ATTESTED');
+});
+
+test('a genuinely attested redTeamPhaseResult (the real, unmodified return value of runRedTeamPhase()) is accepted', () => {
+  const genuine = cleanRedTeamResult();
+  const result = certifyIndependentAuditResult({
+    requestedState: 'PASS',
+    executorContextId: 'exec-1',
+    auditorContextId: 'audit-2',
+    evidenceCitations: PROVEN_EVIDENCE,
+    redTeamPhaseResult: genuine,
+  });
   assert.equal(result.finalState, 'PASS');
 });

@@ -58,6 +58,36 @@ const RED_TEAM_CHECK_ID_SET = new Set(RED_TEAM_CHECK_IDS);
 const CHECK_STATUSES = Object.freeze(['CLEAR', 'FINDING']);
 
 // ---------------------------------------------------------------------------
+// Trust boundary (Phase 1B, Section 4/8): a module-private, unexported
+// WeakSet — never derivable from any property on the result object itself
+// (BRAND_UNFORGEABLE), mirroring evidence-policy.mjs's own
+// TRUSTED_EVIDENCE_REGISTRY pattern. The ONLY place anything is ever added to
+// it is inside runRedTeamPhase, right before that function returns — so
+// membership means, unforgeably, "this exact object was really produced by a
+// real runRedTeamPhase() call", never "this object happens to have the right
+// shape". A caller (e.g. executor-auditor-gate.mjs's
+// certifyIndependentAuditResult) can check `isAttestedRedTeamPhaseResult`
+// against whatever redTeamPhaseResult it was handed and refuse anything that
+// fails the check, closing exactly the gap this module's own former header
+// comment (and executor-auditor-gate.mjs's) used to disclose as open: "a
+// hand-fabricated `{completed:true, blocking:false, ...}` object is
+// currently accepted identically to a genuine one".
+// ---------------------------------------------------------------------------
+
+const TRUSTED_RED_TEAM_RESULT_REGISTRY = new WeakSet();
+
+/**
+ * @param {unknown} candidate
+ * @returns {boolean} true only for an object identity that was really
+ *   returned by a real call to runRedTeamPhase() in THIS process — never
+ *   true for a hand-constructed object, no matter how closely it matches the
+ *   real shape (including a deep-cloned copy of a genuine result).
+ */
+export function isAttestedRedTeamPhaseResult(candidate) {
+  return typeof candidate === 'object' && candidate !== null && TRUSTED_RED_TEAM_RESULT_REGISTRY.has(candidate);
+}
+
+// ---------------------------------------------------------------------------
 // runRedTeamPhase — requires a COMPLETE, explicit verdict for every one of
 // the sixteen checks. Missing even one means the phase did not run (fails
 // closed to `completed: false`), never "assume the rest were fine".
@@ -88,7 +118,7 @@ export function runRedTeamPhase(input) {
   const missingCheckIds = RED_TEAM_CHECK_IDS.filter((id) => !byId.has(id));
 
   if (invalidEntries.length > 0 || missingCheckIds.length > 0) {
-    return Object.freeze({
+    const incompleteResult = Object.freeze({
       completed: false,
       blocking: true, // an incomplete red-team phase is treated as blocking by default -- never "probably fine"
       reason: invalidEntries.length > 0 ? 'INVALID_CHECK_ENTRY' : 'INCOMPLETE_CHECKLIST',
@@ -96,6 +126,8 @@ export function runRedTeamPhase(input) {
       invalidEntries: Object.freeze(invalidEntries),
       findings: Object.freeze([]),
     });
+    TRUSTED_RED_TEAM_RESULT_REGISTRY.add(incompleteResult);
+    return incompleteResult;
   }
 
   const findings = [...byId.values()].filter((c) => c.status === 'FINDING');
@@ -104,7 +136,7 @@ export function runRedTeamPhase(input) {
   // closed: silence about severity is never treated as "minor").
   const blocking = findings.some((f) => f.severity !== 'P2' && f.severity !== 'P3');
 
-  return Object.freeze({
+  const completedResult = Object.freeze({
     completed: true,
     blocking,
     reason: blocking ? 'BLOCKING_FINDING' : (findings.length > 0 ? 'NONBLOCKING_FINDINGS_ONLY' : 'CLEAR'),
@@ -112,6 +144,8 @@ export function runRedTeamPhase(input) {
     invalidEntries: Object.freeze([]),
     findings: Object.freeze(findings),
   });
+  TRUSTED_RED_TEAM_RESULT_REGISTRY.add(completedResult);
+  return completedResult;
 }
 
 // ---------------------------------------------------------------------------

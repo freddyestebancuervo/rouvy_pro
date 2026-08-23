@@ -46,27 +46,44 @@
 // task framing ("Fase 6 — No aumentar autonomía todavía"); these are tested,
 // standalone gates ready for a future, separately-authorized wiring task.
 //
-// DISCLOSED TRUST BOUNDARY (flagged by this revision's own independent
-// audit, not yet closed — deliberately, see below): `redTeamPhaseResult` and
-// each `evidenceCitations[]` entry are trusted by SHAPE alone. Nothing in
-// this module verifies that a `{completed: true, blocking: false, ...}`
-// object actually came from a real `runRedTeamPhase()` call, or that a
-// `PROVEN_BY_LIVE_READ_ONLY` evidence citation actually came from a real
-// observation rather than being hand-typed by whatever caller invokes this
-// function. This project's own `evidence-policy.mjs` established the
-// correct answer to exactly this class of risk — a WeakSet-branded,
-// unforgeable `TRUSTED_EVIDENCE_REGISTRY` that only real attestation
-// functions can populate — and this module deliberately does NOT reuse or
-// reimplement that machinery here, because nothing calls this module yet
-// (see "OUT OF SCOPE" above): there is no live path today for a caller to
-// exploit shape-only trust, since no caller exists. This is safe to leave
-// disclosed-but-open for a not-yet-wired module and unsafe to leave open
-// once a real wiring task hands these functions real, potentially
-// LLM-authored input — closing this gap (via the same WeakSet-branding
-// pattern, or an equivalent) MUST be part of that future wiring task, not
-// assumed already covered by this module's current test suite.
+// TRUST BOUNDARY — `redTeamPhaseResult` (Phase 1B, Section 4/8, CLOSED for
+// this half): this module now requires `redTeamPhaseResult` to be an object
+// identity that was really returned by a real `red-team-gate.mjs`
+// `runRedTeamPhase()` call in this process — see `isAttestedRedTeamPhaseResult`
+// (imported from red-team-gate.mjs, itself a module-private, unexported
+// WeakSet keyed on object identity, mirroring evidence-policy.mjs's own
+// `TRUSTED_EVIDENCE_REGISTRY` pattern exactly as this revision's prior audit
+// required). A hand-fabricated `{completed:true, blocking:false, ...}`
+// object — even one that is a byte-for-byte, deep-cloned copy of a genuine
+// result — fails the identity check and is rejected with
+// `HOLD_RED_TEAM_RESULT_NOT_ATTESTED`, indistinguishable in effect from
+// never having run the red-team phase at all.
+//
+// TRUST BOUNDARY — `evidenceCitations[]` (REMAINS PARTIALLY OPEN, by
+// necessity, not oversight): each citation's `evidenceLevel` (e.g.
+// `PROVEN_BY_LIVE_READ_ONLY`) is still trusted by the CALLER's say-so as
+// input to classifyClaimSet — this module has no way to independently verify
+// that a claim string was really observed live rather than hand-typed,
+// because unlike a red-team verdict (which this module's own dependency,
+// red-team-gate.mjs, can itself produce and brand) an evidence citation's
+// truth is a fact about the outside world that only a real attestation
+// (evidence-policy.mjs's `attestRemoteMainEvidence` /
+// `attestFilesystemEvidence` / `attestLocalRuntimeEvidence` /
+// `attestRemoteRuntimeEvidence`, or an equivalent) can establish, and that is
+// deliberately a separate module's job (see claim-taxonomy.mjs's own header:
+// "the two modules can be wired together by a future caller"). The mitigation
+// that IS in place: the real wiring (`runner.mjs`'s
+// `auditAndCertifyGreenTaskResult`) never lets the spawned Executor child
+// supply its own evidenceCitations — every citation passed to this module
+// from the real execution path is built by the deterministic, non-LLM
+// verification pipeline itself, directly from values it already computed
+// (verification-command pass/fail, scope-check pass/fail), never from
+// free text the child could have authored. A caller who bypasses that real
+// wiring and invokes this module directly with hand-typed citations is not
+// protected by this module alone — exactly as documented here.
 
 import { classifyClaimSet } from './claim-taxonomy.mjs';
+import { isAttestedRedTeamPhaseResult } from './red-team-gate.mjs';
 
 // ---------------------------------------------------------------------------
 // Executor side.
@@ -135,6 +152,7 @@ export const AUDIT_HOLD_REASONS = Object.freeze([
   'HOLD_INDEPENDENT_AUDIT_REQUIRED',
   'HOLD_INVALID_EVIDENCE_CITATIONS_SHAPE',
   'HOLD_RED_TEAM_NOT_RUN',
+  'HOLD_RED_TEAM_RESULT_NOT_ATTESTED',
   'HOLD_RED_TEAM_BLOCKING_FINDING',
   'HOLD_UNPROVEN_PRODUCTION_CLAIM',
 ]);
@@ -212,6 +230,14 @@ export function certifyIndependentAuditResult(input) {
     }
     if (!redTeamPhaseResult || redTeamPhaseResult.completed !== true) {
       return buildResult({ ...base, finalState: 'HOLD', reason: 'HOLD_RED_TEAM_NOT_RUN' });
+    }
+    // Phase 1B, Section 4/8: shape alone (even `completed:true, blocking:
+    // false` copied verbatim from a real result) is no longer sufficient --
+    // the object identity itself must have been really returned by a real
+    // runRedTeamPhase() call. A hand-fabricated or deep-cloned lookalike is
+    // rejected here, before its `blocking`/findings fields are ever trusted.
+    if (!isAttestedRedTeamPhaseResult(redTeamPhaseResult)) {
+      return buildResult({ ...base, finalState: 'HOLD', reason: 'HOLD_RED_TEAM_RESULT_NOT_ATTESTED' });
     }
     if (redTeamPhaseResult.blocking === true) {
       return buildResult({ ...base, finalState: 'HOLD', reason: 'HOLD_RED_TEAM_BLOCKING_FINDING' });
