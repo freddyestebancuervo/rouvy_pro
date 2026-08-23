@@ -30,8 +30,6 @@ import { RED_TEAM_CHECKS, runRedTeamPhase, isAttestedRedTeamPhaseResult } from '
 import { certifyIndependentAuditResult } from '../executor-auditor-gate.mjs';
 import { evaluateCommandSafety } from '../command-safety.mjs';
 
-const RUNNER_SRC_PATH = fileURLToPath(new URL('../runner.mjs', import.meta.url));
-
 function tempDir(t) {
   const dir = mkdtempSync(path.join(tmpdir(), 'korixa-night-wiring-'));
   t.after(() => rmSync(dir, { recursive: true, force: true }));
@@ -239,6 +237,123 @@ test('WIRING-6: a missing/incomplete red-team checklist (real runRedTeamPhase ca
 });
 
 // =============================================================================
+// SECTION A2 (Phase 1B-R1, independent-audit finding P1-1) — the audit gate
+// must genuinely RE-DERIVE its verdict from raw facts, never simply trust
+// its own verification/scopePaths/task inputs. Each test here reproduces,
+// against the REAL (unfaked) auditAndCertifyGreenTaskResult, one of the
+// exact bypasses the independent audit constructed live (B1-B4) plus the
+// separately-reported P2-5 (headSha unresolved) finding.
+// =============================================================================
+
+test('WIRING-20 (regression for audit finding B1/P1-1): verification.allPass=false with zero real pass results -> the real audit gate HOLDs, never certifies PASS', () => {
+  const audit = auditAndCertifyGreenTaskResult({
+    task: policyTaskFixture(),
+    attempt: 0,
+    baseSha: 'a'.repeat(40),
+    repoRoot: '/fake/repo',
+    spawnSyncFn: countingSpawnSyncFn(),
+    verification: { allPass: false, results: [{ pass: false, family: 'NODE_VERSION', errorFamily: 'VERIFICATION_FAILED' }] },
+    scopePaths: [],
+    runRedTeamPhaseFn: runRedTeamPhase,
+    finalizeExecutorResultFn: (input) => input,
+    certifyIndependentAuditResultFn: certifyIndependentAuditResult,
+    resolveLocalHeadShaFn: () => 'b'.repeat(40),
+  });
+  assert.equal(audit.finalState, 'HOLD', 'the real audit gate must independently re-verify verification.allPass, not trust it');
+});
+
+test('WIRING-21 (regression for audit finding B2/P1-1): an empty verification.results array (nothing actually verified) -> the real audit gate HOLDs', () => {
+  const audit = auditAndCertifyGreenTaskResult({
+    task: policyTaskFixture(),
+    attempt: 0,
+    baseSha: 'a'.repeat(40),
+    repoRoot: '/fake/repo',
+    spawnSyncFn: countingSpawnSyncFn(),
+    verification: { allPass: true, results: [] }, // vacuously "all pass" over zero commands
+    scopePaths: [],
+    runRedTeamPhaseFn: runRedTeamPhase,
+    finalizeExecutorResultFn: (input) => input,
+    certifyIndependentAuditResultFn: certifyIndependentAuditResult,
+    resolveLocalHeadShaFn: () => 'b'.repeat(40),
+  });
+  assert.equal(audit.finalState, 'HOLD', 'a vacuous "all pass over zero commands" must not certify PASS');
+});
+
+test('WIRING-22 (regression for audit finding B3/P1-1): scopePaths containing a path-traversal or absolute entry -> the real audit gate HOLDs', () => {
+  for (const suspiciousPaths of [['../../../etc/passwd'], ['C:/Windows/System32/config/SAM'], ['/etc/shadow'], [42], ['']]) {
+    const audit = auditAndCertifyGreenTaskResult({
+      task: policyTaskFixture(),
+      attempt: 0,
+      baseSha: 'a'.repeat(40),
+      repoRoot: '/fake/repo',
+      spawnSyncFn: countingSpawnSyncFn(),
+      verification: cleanVerification(),
+      scopePaths: suspiciousPaths,
+      runRedTeamPhaseFn: runRedTeamPhase,
+      finalizeExecutorResultFn: (input) => input,
+      certifyIndependentAuditResultFn: certifyIndependentAuditResult,
+      resolveLocalHeadShaFn: () => 'b'.repeat(40),
+    });
+    assert.equal(audit.finalState, 'HOLD', `scopePaths=${JSON.stringify(suspiciousPaths)} must not certify PASS`);
+  }
+});
+
+test('WIRING-23 (regression for audit finding P2-5): an unresolved headSha (git rev-parse HEAD failed) -> the real audit gate HOLDs, never certifies PASS with headSha:null', () => {
+  const audit = auditAndCertifyGreenTaskResult({
+    task: policyTaskFixture(),
+    attempt: 0,
+    baseSha: 'a'.repeat(40),
+    repoRoot: '/fake/repo',
+    spawnSyncFn: countingSpawnSyncFn(),
+    verification: cleanVerification(),
+    scopePaths: [],
+    runRedTeamPhaseFn: runRedTeamPhase,
+    finalizeExecutorResultFn: (input) => input,
+    certifyIndependentAuditResultFn: certifyIndependentAuditResult,
+    resolveLocalHeadShaFn: () => null, // the real resolveLocalHeadSha's documented failure return
+  });
+  assert.equal(audit.finalState, 'HOLD');
+});
+
+test('WIRING-24 (regression for audit finding P2-4): task.allowed_paths wildcarded (\'*\'/\'**\'/\'**/*\') -> the real audit gate HOLDs, IAM_TOO_BROAD genuinely fires', () => {
+  for (const wildcard of ['*', '**', '**/*']) {
+    const audit = auditAndCertifyGreenTaskResult({
+      task: policyTaskFixture({ allowed_paths: [wildcard] }),
+      attempt: 0,
+      baseSha: 'a'.repeat(40),
+      repoRoot: '/fake/repo',
+      spawnSyncFn: countingSpawnSyncFn(),
+      verification: cleanVerification(),
+      scopePaths: [],
+      runRedTeamPhaseFn: runRedTeamPhase,
+      finalizeExecutorResultFn: (input) => input,
+      certifyIndependentAuditResultFn: certifyIndependentAuditResult,
+      resolveLocalHeadShaFn: () => 'b'.repeat(40),
+    });
+    assert.equal(audit.finalState, 'HOLD', `allowed_paths=['${wildcard}'] must not certify PASS`);
+  }
+});
+
+test('WIRING-25: with every fact genuinely true (real verification, real scope, real headSha, bounded allowed_paths), the real audit gate still certifies PASS -- the fix does not break the legitimate path', () => {
+  const audit = auditAndCertifyGreenTaskResult({
+    task: policyTaskFixture(),
+    attempt: 0,
+    baseSha: 'a'.repeat(40),
+    repoRoot: '/fake/repo',
+    spawnSyncFn: countingSpawnSyncFn(),
+    verification: cleanVerification(),
+    scopePaths: ['examples/fixture-only.test.mjs'],
+    runRedTeamPhaseFn: runRedTeamPhase,
+    finalizeExecutorResultFn: (input) => ({ role: 'executor', ...input }),
+    certifyIndependentAuditResultFn: certifyIndependentAuditResult,
+    resolveLocalHeadShaFn: () => 'b'.repeat(40),
+  });
+  assert.equal(audit.finalState, 'PASS');
+  assert.equal(audit.redTeamResult.blocking, false);
+  assert.ok(Array.isArray(audit.checksPerformed) && audit.checksPerformed.length === RED_TEAM_CHECKS.length, 'checksPerformed with per-check detail must be observable on the returned object');
+});
+
+// =============================================================================
 // SECTION B — command-safety.mjs wired into runVerificationCommand (Section
 // 6/7): CLASSIFY -> AUTHORIZE -> EXECUTE, never execute-then-classify.
 // =============================================================================
@@ -390,6 +505,25 @@ test('WIRING-15: a malformed audit-gate return (no real finalState) fails closed
   assert.equal(result.status, 'HOLD');
 });
 
+test('WIRING-15b (regression for audit finding P2-1): a null or undefined audit-gate return resolves to HOLD, never an unhandled rejection', async (t) => {
+  for (const malformedReturn of [null, undefined]) {
+    const args = executeTaskFixtureArgs(t, {
+      auditAndCertifyGreenTaskResultFn: () => malformedReturn,
+    });
+    const child = makeFakeChild();
+    const resultPromise = executeControlledGreenTask({ ...args, spawnFn: () => child });
+    child.emit('close', 0);
+    // Must resolve, not reject -- a prior version of this code read
+    // `.finalState` off the raw return OUTSIDE the try/catch guard, which
+    // threw a real, reproduced TypeError here instead of resolving to HOLD.
+    const result = await resultPromise;
+    assert.equal(result.status, 'HOLD', `auditAndCertifyGreenTaskResultFn returning ${malformedReturn} must resolve to HOLD, not throw`);
+    const finalCheckpoint = JSON.parse(readFileSync(args.checkpointFilePath, 'utf8'));
+    assert.equal(finalCheckpoint.state, 'HOLD');
+    assert.equal(finalCheckpoint.last_error_family, 'AUDIT_GATE_MALFORMED_RESULT');
+  }
+});
+
 test('WIRING-16: an exception thrown inside the audit gate is caught and resolves to HOLD -- never an unhandled rejection, never PASS', async (t) => {
   const args = executeTaskFixtureArgs(t, {
     auditAndCertifyGreenTaskResultFn: () => { throw new Error('simulated auditor/red-team crash'); },
@@ -419,14 +553,62 @@ test('WIRING-17: a HOLD written by the audit gate, looked up again via the pre-e
   assert.notEqual(recovery.decision, 'START_FRESH');
 });
 
-test('WIRING-18: exactly one code path in runner.mjs ever writes checkpoint state PASS -- a static regression guard against a second/alternate finalization path being added later', () => {
-  const src = readFileSync(RUNNER_SRC_PATH, 'utf8');
-  const passWrites = [...src.matchAll(/state:\s*'PASS'/g)];
-  // Exactly one runtime PASS-state transition (the audited line inside
-  // executeControlledGreenTask). If this ever grows to 2+, a second
-  // finalization path has been introduced and must be re-audited before
-  // this test is updated to match.
-  assert.equal(passWrites.length, 1, `expected exactly one 'state: \\'PASS\\'' checkpoint write in runner.mjs, found ${passWrites.length}`);
+// Phase 1B-R1 (independent audit finding P2-2): a prior version of this test
+// was a source-text regex (`/state:\s*'PASS'/g`) claimed to be "a regression
+// guard against a second/alternate finalization path". The audit
+// constructed 7 of 8 trivially-real syntax variants (double quotes, a
+// template literal, a quoted key, variable indirection, string
+// concatenation, shorthand property, a computed key) that would each add a
+// second real PASS-write while leaving the regex's count at 1 -- so the
+// guard did not survive even an ordinary Prettier reformat. Replaced with a
+// BEHAVIORAL guard: run executeControlledGreenTask across every gate-failure
+// scenario this file's own SECTION B/C tests already establish individually,
+// using a SHARED checkpoint-write spy, and assert that a PASS checkpoint
+// state is written if and only if every single gate passed AND the REAL
+// (unfaked) audit gate genuinely certifies PASS -- this holds regardless of
+// what JS syntax a future refactor uses to write the literal.
+test('WIRING-18: a PASS checkpoint state is written if and only if every gate passed AND the real audit gate genuinely certifies PASS -- across every gate-failure scenario, never once elsewhere', async (t) => {
+  const writtenStates = [];
+  function recordingWriteCheckpointFn(filePath, checkpoint) {
+    writtenStates.push(checkpoint.state);
+  }
+
+  async function runScenario(name, overrides) {
+    const args = executeTaskFixtureArgs(t, { writeCheckpointFn: recordingWriteCheckpointFn, ...overrides });
+    const child = makeFakeChild();
+    const resultPromise = executeControlledGreenTask({ ...args, spawnFn: () => child });
+    child.emit('close', 0);
+    await resultPromise;
+  }
+
+  await runScenario('dirty worktree', { checkWorktreeCleanFn: () => ({ clean: false, reason: 'DIRTY' }) });
+  await runScenario('guard not installed', { checkNightGuardInstalledFn: () => ({ installed: false, reason: 'NOT_INSTALLED' }) });
+  await runScenario('verification fails ordinarily', { runAllVerificationCommandsFn: () => ({ allPass: false, results: [{ pass: false, family: 'NODE_VERSION', errorFamily: 'VERIFICATION_FAILED' }] }) });
+  await runScenario('verification fails via command-safety', { runAllVerificationCommandsFn: () => ({ allPass: false, results: [{ pass: false, family: 'NODE_VERSION', errorFamily: 'COMMAND_SAFETY_UNAUTHORIZED', commandSafetyClass: 'UNKNOWN' }] }) });
+  await runScenario('scope check #1 fails', { getGitStatusPathsFn: () => ({ ok: true, paths: ['backend/unauthorized.ts'] }) });
+  await runScenario('scope check #2 fails', {
+    getGitStatusPathsFn: (() => {
+      let call = 0;
+      return () => { call += 1; return call === 1 ? { ok: true, paths: [] } : { ok: true, paths: ['backend/unauthorized.ts'] }; };
+    })(),
+  });
+  await runScenario('audit gate forced HOLD (all upstream gates genuinely pass)', {
+    auditAndCertifyGreenTaskResultFn: () => ({ finalState: 'HOLD', reason: 'HOLD_FORCED_FOR_TEST', auditResult: {} }),
+  });
+  await runScenario('audit gate returns a malformed (null) result', {
+    auditAndCertifyGreenTaskResultFn: () => null,
+  });
+  await runScenario('audit gate throws', {
+    auditAndCertifyGreenTaskResultFn: () => { throw new Error('simulated crash'); },
+  });
+  // The only scenario where every gate is genuinely satisfied AND the audit
+  // gate is the REAL, unfaked auditAndCertifyGreenTaskResult -- this is the
+  // sole legitimate path to PASS.
+  await runScenario('every gate genuinely passes, real (unfaked) audit gate', {});
+
+  const passCount = writtenStates.filter((s) => s === 'PASS').length;
+  assert.equal(passCount, 1, `expected exactly one PASS checkpoint write across all 10 scenarios, found ${passCount} (states written: ${writtenStates.join(', ')})`);
+  assert.equal(writtenStates[writtenStates.length - 1], 'PASS', 'the PASS write must belong to the fully-legitimate final scenario, not an earlier failure scenario');
 });
 
 test('WIRING-19: KORIXA_NIGHT_REAL_SPAWN is never read from process.env anywhere in the newly-wired modules (command-safety.mjs, red-team-gate.mjs, executor-auditor-gate.mjs)', () => {

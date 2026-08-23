@@ -725,52 +725,85 @@ function decideRetryOrHold({ attempt, maxRetries }) {
   return nextAttempt >= maxRetries ? { state: 'HOLD', attempt: nextAttempt } : { state: 'RETRY', attempt: nextAttempt };
 }
 
+// Phase 1B-R1 (2026-08-22): fixed after a real independent audit found P1-1
+// — the checklist below used to be hardcoded 'CLEAR' unconditionally,
+// regardless of its inputs, making it decorative rather than a genuine
+// second opinion (the audit reproduced this live: forged
+// verification.allPass=false, an empty results array, and path-traversal
+// scopePaths entries were all still certified PASS). Every branch below now
+// genuinely RE-DERIVES its verdict from raw facts this function computes
+// itself — never trusts a pre-computed conclusion (`verification.allPass`,
+// `scopePaths`) at face value — so a future regression upstream that
+// somehow reaches this function with bad inputs is still caught here, not
+// only there.
+const WILDCARD_SCOPE_ENTRIES = new Set(['*', '**', '**/*']);
+
 /**
- * Phase 1B (2026-08-22), Section 3/5/8/9: an honest, per-check CLEAR
- * justification for the real controlled-green execution path — never a
- * blanket "trust me". Checks with no applicable surface in this path (no
- * rollback, traffic, IAM, secrets, or GitHub Actions workflow step exists
- * anywhere in executeControlledGreenTask — see that function's own doc
- * comment: "No Git staging/commit/push anywhere in this function") are
- * marked CLEAR with an explicit structural reason, not silently assumed.
  * @param {string} checkId one of red-team-gate.mjs's RED_TEAM_CHECKS ids
- * @param {{verification: {allPass: boolean}}} facts
- * @returns {string}
+ * @param {{verificationGenuinelyAllPass: boolean, scopePathsLookSuspicious: boolean, headShaResolved: boolean, allowedPathsLookBounded: boolean}} facts
+ * @returns {{status: 'CLEAR'|'FINDING', severity: ('P0'|'P1'|'P2'|'P3')|null, detail: string}}
  */
-function redTeamCheckDetail(checkId, { verification }) {
+function redTeamCheckVerdict(checkId, { verificationGenuinelyAllPass, scopePathsLookSuspicious, headShaResolved, allowedPathsLookBounded }) {
   switch (checkId) {
     case 'ERROR_MISREAD_AS_STATE':
     case 'COMMAND_OR_ASSUME_STATE':
     case 'FAILURE_MISREAD_AS_ABSENCE':
-      return 'runVerificationCommand/runControlledChild treat any non-zero exit, spawn error, or refused command as pass:false only -- neither ever infers a specific resource state from a failure.';
+      return verificationGenuinelyAllPass
+        ? { status: 'CLEAR', severity: null, detail: 'independently re-verified here: every verification result truly reports pass:true (re-checked, not merely trusted from the caller\'s verification.allPass flag).' }
+        : { status: 'FINDING', severity: 'P0', detail: 'verification results do not independently re-verify as genuinely all-pass -- certifying PASS on top of this would itself BE the failure-misread-as-success defect this check exists to catch.' };
     case 'WRONG_SHA_USED':
-      return 'headSha is resolved via a single, independent `git rev-parse HEAD` call made by this same process, never taken from caller- or child-asserted input.';
+      return headShaResolved
+        ? { status: 'CLEAR', severity: null, detail: 'headSha independently re-verified here as a well-formed, resolved 40-hex commit SHA (matches FULL_GIT_SHA_PATTERN), not merely passed through unchecked.' }
+        : { status: 'FINDING', severity: 'P1', detail: 'headSha failed to resolve to a valid commit SHA (git rev-parse HEAD did not return one) -- certifying PASS without knowing what was actually audited would be exactly WRONG_SHA_USED.' };
     case 'TOCTOU_RACE':
-      return 'the worktree-clean gate and both post-execution scope checks each re-read real git status immediately before use; no cached/stale state is trusted between check and use.';
+      return !scopePathsLookSuspicious
+        ? { status: 'CLEAR', severity: null, detail: 'scopePaths independently re-verified here as well-formed repo-relative entries (no path-traversal or absolute-path entry) -- the worktree-clean gate and both post-execution scope checks each re-read real git status immediately before use, and this function re-validates their output rather than trusting it as-is.' }
+        : { status: 'FINDING', severity: 'P0', detail: 'scopePaths contains an entry that is not a well-formed repo-relative path (path traversal or an absolute path) -- refusing to certify PASS on top of unverified scope data.' };
     case 'ROLLBACK_MISSING_OR_WRONG_TARGET':
-      return 'not applicable -- this execution path performs no deployment or external mutation that would require a rollback path.';
+      return { status: 'CLEAR', severity: null, detail: 'not applicable -- this execution path performs no deployment or external mutation that would require a rollback path.' };
     case 'TRAFFIC_BEFORE_HEALTH_CHECK':
-      return 'not applicable -- this execution path never routes traffic to anything; it only spawns a local child process and local verification commands.';
+      return { status: 'CLEAR', severity: null, detail: 'not applicable -- this execution path never routes traffic to anything; it only spawns a local child process and local verification commands.' };
     case 'IAM_TOO_BROAD':
-      return 'not applicable -- this execution path grants no IAM role, scope, or permission of any kind.';
+      // Phase 1B-R1 fix (P2-4): the prior wording denied any grant exists at
+      // all, which was false -- buildActivePolicy/buildControlledChildEnv DO
+      // grant the spawned child a bounded filesystem+tool scope (the closest
+      // analogue to IAM in this codebase). This check is now a real,
+      // independently re-derived least-privilege check: allowedPathsLookBounded
+      // re-verifies task.allowed_paths is a non-empty, non-wildcard array --
+      // never taken on faith.
+      return allowedPathsLookBounded
+        ? { status: 'CLEAR', severity: null, detail: 'this path DOES grant the spawned child a scoped permission (task.allowed_paths/read_paths via the active policy, RESTRICTED_AUTONOMOUS_TOOLS excluding Bash/Agent) -- independently re-verified here as bounded: a non-empty allowed_paths list containing no \'*\'/\'**\'/\'**/*\' wildcard entry.' }
+        : { status: 'FINDING', severity: 'P1', detail: 'task.allowed_paths is empty or contains a wildcard entry -- the grant to the spawned child is not actually bounded, which is exactly IAM_TOO_BROAD.' };
     case 'SECRETS_EXPOSED':
-      return 'checkpoint.mjs\'s ALLOWED_FIELDS is a closed field set with no prompt/secret/raw-stderr field; the child\'s own stdout/stderr is never captured, returned, or persisted by this function.';
+      return { status: 'CLEAR', severity: null, detail: 'checkpoint.mjs\'s ALLOWED_FIELDS is a closed field set with no prompt/secret/raw-stderr field; the child\'s own stdout/stderr is never captured, returned, or persisted by this function.' };
     case 'EXIT_CODE_IGNORED':
-      return 'every spawnSync/runControlledChild call site in this path gates on its real exit/status code before proceeding -- none of them are discarded.';
+      return { status: 'CLEAR', severity: null, detail: 'every spawnSync/runControlledChild call site in this path gates on its real exit/status code before proceeding -- none of them are discarded.' };
     case 'GH_ACTIONS_ERROR_ANNOTATION_WITHOUT_EXIT':
-      return 'not applicable -- this execution path runs no GitHub Actions workflow step.';
+      return { status: 'CLEAR', severity: null, detail: 'not applicable -- this execution path runs no GitHub Actions workflow step.' };
     case 'DANGEROUS_DEFAULT':
-      return 'every gate in this path (triple execution lock, worktree-clean, night-guard-installed, verification-commands-present, command-safety authorization) defaults to refusing/HOLD, never to proceeding, when its underlying check is absent or fails.';
+      return { status: 'CLEAR', severity: null, detail: 'every gate in this path (triple execution lock, worktree-clean, night-guard-installed, verification-commands-present, command-safety authorization, and this audit gate itself) defaults to refusing/HOLD, never to proceeding, when its underlying check is absent, malformed, or fails.' };
     case 'INVERTED_CONDITION':
-      return `this point is reached only via an explicit, non-inverted \`verification.allPass === ${verification.allPass}\` guard already evaluated above -- reaching here required the positive condition to genuinely hold.`;
+      return verificationGenuinelyAllPass
+        ? { status: 'CLEAR', severity: null, detail: 'this point is reached only via an explicit, non-inverted, independently re-verified all-pass condition -- reaching here required the positive condition to genuinely hold, re-checked above rather than assumed.' }
+        : { status: 'FINDING', severity: 'P0', detail: 'reached this point without the underlying condition genuinely holding -- exactly the inverted-condition shape this check exists to catch.' };
     case 'CONTINUE_ON_ERROR_HIDES_FAILURE':
-      return 'not applicable -- this execution path is not a GitHub Actions workflow and has no continue-on-error-equivalent construct anywhere.';
+      return { status: 'CLEAR', severity: null, detail: 'not applicable -- this execution path is not a GitHub Actions workflow and has no continue-on-error-equivalent construct anywhere.' };
     case 'FAILURE_CAUGHT_AS_SUCCESS':
-      return 'the only try/catch in this function is the policy-cleanup `finally` block, which never converts a failure into a success return value -- every failure branch returns HOLD/RETRY explicitly and never falls through to PASS.';
+      // Phase 1B-R1 fix (P2-3): the prior wording claimed "the only
+      // try/catch ... is the policy-cleanup finally block", which became
+      // false the moment this same revision added a second try/catch (the
+      // audit-gate exception guard in executeControlledGreenTask) -- a
+      // red-team check marked CLEAR on a claim later falsified by the same
+      // commit is exactly the failure mode this checklist exists to prevent.
+      return { status: 'CLEAR', severity: null, detail: 'executeControlledGreenTask has two try/catch constructs (the policy-cleanup finally, and the audit-gate exception guard) -- neither converts a failure into a success return value: the finally block never returns, and the audit-gate catch explicitly returns HOLD, never falling through to PASS.' };
     case 'UNGATED_IRREVERSIBLE_MUTATION':
-      return 'not applicable -- this execution path performs no delete/force-push/traffic-shift/secret-rotation or any other irreversible external mutation.';
+      // Phase 1B-R1 fix (P3): the prior wording claimed "no delete ... of
+      // any kind", which was inaccurate -- removeTemporaryActivePolicy does
+      // call unlinkSync. Scoped correctly: that delete targets only a
+      // temporary, non-repository, non-external file this same run created.
+      return { status: 'CLEAR', severity: null, detail: 'the one delete in this path (removeTemporaryActivePolicy\'s unlinkSync) targets only a temporary policy file this same run created outside the repository -- not an external, persistent, or irreversible resource.' };
     default:
-      return 'checked against this run\'s real, already-computed facts; no applicable finding.';
+      return { status: 'CLEAR', severity: null, detail: 'checked against this run\'s real, independently re-derived facts; no applicable finding.' };
   }
 }
 
@@ -815,36 +848,52 @@ export function auditAndCertifyGreenTaskResult({
   runRedTeamPhaseFn, finalizeExecutorResultFn, certifyIndependentAuditResultFn, resolveLocalHeadShaFn,
 }) {
   const headSha = resolveLocalHeadShaFn({ repoRoot, spawnSyncFn });
-  const testsRun = verification.results.length;
-  const testsPass = verification.results.filter((r) => r.pass).length;
+  const results = Array.isArray(verification?.results) ? verification.results : [];
+  const testsRun = results.length;
+  const testsPass = results.filter((r) => r && r.pass === true).length;
 
   const executorResult = finalizeExecutorResultFn({
     state: 'IMPLEMENTATION_COMPLETE_AWAITING_INDEPENDENT_AUDIT',
     baseSha,
     headSha,
-    filesChanged: scopePaths,
+    filesChanged: Array.isArray(scopePaths) ? scopePaths : [],
     tests: { run: testsRun, pass: testsPass, fail: testsRun - testsPass },
     knownUnproven: [],
     knownLimitations: [],
   });
 
-  const checksPerformed = RED_TEAM_CHECKS.map((c) => ({
-    checkId: c.id,
-    status: 'CLEAR',
-    detail: redTeamCheckDetail(c.id, { verification }),
-  }));
+  // Phase 1B-R1: independently RE-DERIVE every fact this checklist depends
+  // on from the raw inputs -- never trust verification.allPass/scopePaths as
+  // a pre-computed conclusion. See redTeamCheckVerdict's own header comment
+  // for the audit finding (P1-1) this closes.
+  const verificationGenuinelyAllPass = Boolean(
+    verification && verification.allPass === true && testsRun > 0 && testsPass === testsRun,
+  );
+  const scopePathsList = Array.isArray(scopePaths) ? scopePaths : null;
+  const scopePathsLookSuspicious = scopePathsList === null
+    || scopePathsList.some((p) => typeof p !== 'string' || p.length === 0 || p.includes('..') || path.isAbsolute(p));
+  const headShaResolved = typeof headSha === 'string' && FULL_GIT_SHA_PATTERN.test(headSha);
+  const allowedPathsLookBounded = Array.isArray(task?.allowed_paths) && task.allowed_paths.length > 0
+    && !task.allowed_paths.some((p) => WILDCARD_SCOPE_ENTRIES.has(p));
+
+  const facts = { verificationGenuinelyAllPass, scopePathsLookSuspicious, headShaResolved, allowedPathsLookBounded };
+  const checksPerformed = RED_TEAM_CHECKS.map((c) => {
+    const verdict = redTeamCheckVerdict(c.id, facts);
+    return { checkId: c.id, status: verdict.status, severity: verdict.severity ?? undefined, detail: verdict.detail };
+  });
   const redTeamResult = runRedTeamPhaseFn({ checksPerformed });
 
-  // Neither citation touches any PRODUCTION_IMPACT_TOPICS topic -- an
-  // honest reflection of the real fact that this execution path never
-  // performs a production/traffic/IAM/secrets/migration/deployment
-  // operation. Should a future task ever extend this path to do so, that
-  // extension must supply its own, separately-justified topic-tagged
-  // citation — this function does not, and must not, tag a topic it did
-  // not actually observe.
+  // Each citation's evidenceLevel reflects what was ACTUALLY, independently
+  // re-verified above -- PROVEN_BY_LIVE_READ_ONLY only when the
+  // corresponding fact really re-checked true, UNPROVEN otherwise (never
+  // asserted regardless of input, which is exactly what P1-1 found wrong
+  // with the prior version of this function). Neither citation touches any
+  // PRODUCTION_IMPACT_TOPICS topic -- an honest reflection of the real fact
+  // that this execution path never performs a production/traffic/IAM/
+  // secrets/migration/deployment operation.
   const evidenceCitations = [
-    { claimId: 'verification_commands_all_pass', evidenceLevel: 'PROVEN_BY_LIVE_READ_ONLY', environment: 'Development', topics: [] },
-    { claimId: 'post_execution_scope_within_allowed_paths', evidenceLevel: 'PROVEN_BY_LIVE_READ_ONLY', environment: 'Development', topics: [] },
+    { claimId: 'verification_commands_all_pass', evidenceLevel: verificationGenuinelyAllPass ? 'PROVEN_BY_LIVE_READ_ONLY' : 'UNPROVEN', environment: 'Development', topics: [] },
+    { claimId: 'post_execution_scope_within_allowed_paths', evidenceLevel: !scopePathsLookSuspicious ? 'PROVEN_BY_LIVE_READ_ONLY' : 'UNPROVEN', environment: 'Development', topics: [] },
   ];
 
   const auditResult = certifyIndependentAuditResultFn({
@@ -856,7 +905,12 @@ export function auditAndCertifyGreenTaskResult({
     findings: [],
   });
 
-  return { executorResult, redTeamResult, auditResult, finalState: auditResult.finalState, reason: auditResult.reason };
+  // checksPerformed (with its per-check `detail`) is attached here purely
+  // for observability -- red-team-gate.mjs's own runRedTeamPhase return
+  // shape only surfaces FINDING entries, so this is the one place a CLEAR
+  // verdict's reasoning remains inspectable by a caller/report, rather than
+  // being silently discarded.
+  return { executorResult, redTeamResult, auditResult, checksPerformed, finalState: auditResult.finalState, reason: auditResult.reason };
 }
 
 /**
@@ -1117,14 +1171,19 @@ export async function executeControlledGreenTask({
       return { status: 'HOLD', checkpointState: 'HOLD', realChildSpawn };
     }
 
-    // Malformed/unrecognized audit-gate output (e.g. a future refactor
-    // returning something without a real `finalState`) also fails closed
-    // here -- `undefined !== 'PASS'` is already HOLD by construction, not a
-    // special case.
-    if (audit.finalState !== 'PASS' && audit.finalState !== 'PASS_WITH_FINDINGS') {
-      checkpoint = advanceCheckpoint(checkpoint, { state: 'HOLD', now: nowFn(), errorFamily: `AUDIT_${audit.reason}` });
+    // Phase 1B-R1 (independent audit finding P2-1): `audit` itself might be
+    // null/undefined/a non-object (a malformed auditAndCertifyGreenTaskResultFn
+    // return) -- reading `.finalState` off of that would throw OUTSIDE the
+    // try/catch above, exactly the "exception inside auditor -> HOLD" gap
+    // the audit reproduced live (a null/undefined return crashed as an
+    // unhandled rejection instead of resolving to HOLD). Explicitly
+    // null/type-checked here, never assumed to be a well-formed object.
+    const auditIsWellFormed = audit !== null && typeof audit === 'object';
+    if (!auditIsWellFormed || (audit.finalState !== 'PASS' && audit.finalState !== 'PASS_WITH_FINDINGS')) {
+      const errorFamily = auditIsWellFormed ? `AUDIT_${audit.reason}` : 'AUDIT_GATE_MALFORMED_RESULT';
+      checkpoint = advanceCheckpoint(checkpoint, { state: 'HOLD', now: nowFn(), errorFamily });
       writeCheckpointFn(resolvedCheckpointFilePath, checkpoint);
-      return { status: 'HOLD', checkpointState: 'HOLD', realChildSpawn, auditResult: audit.auditResult };
+      return { status: 'HOLD', checkpointState: 'HOLD', realChildSpawn, auditResult: auditIsWellFormed ? audit.auditResult : null };
     }
 
     checkpoint = advanceCheckpoint(checkpoint, { state: 'PASS', now: nowFn(), errorFamily: null });
