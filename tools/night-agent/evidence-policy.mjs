@@ -999,6 +999,17 @@ function decideOutcome({ severity, effectiveClusters, unresolvedConflicts, total
 
 const TRUSTED_EVIDENCE_REGISTRY = new WeakSet();
 
+// Phase 1B (Night Agent secure real-path wiring, 2026-08-22): a minimal,
+// read-only membership check, exported so OTHER modules (e.g.
+// claim-taxonomy.mjs / executor-auditor-gate.mjs / a future runner.mjs
+// caller) can verify "was this evidence object really produced by one of
+// this module's real attest* functions" without this module needing to know
+// anything about who's asking or why. Deliberately the only new export this
+// change adds — the registry itself, and every attestor, are unchanged.
+export function isAttestedEvidence(candidate) {
+  return typeof candidate === 'object' && candidate !== null && TRUSTED_EVIDENCE_REGISTRY.has(candidate);
+}
+
 function isPlainParamsObject(value) {
   return value !== null && typeof value === 'object' && !Array.isArray(value);
 }

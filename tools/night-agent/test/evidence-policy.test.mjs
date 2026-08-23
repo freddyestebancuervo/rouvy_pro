@@ -1350,7 +1350,7 @@ test('AUTHORITATIVE_DECISION_PATHS: evaluateClaim is the only export whose resul
   assert.deepEqual(names.sort(), [
     'attestFilesystemEvidence', 'attestRemoteMainEvidence', 'attestLocalRuntimeEvidence', 'attestRemoteRuntimeEvidence',
     'buildCiFingerprint', 'buildFilesystemFingerprint', 'buildGitFingerprint', 'buildRuntimeFingerprint',
-    'evaluateClaim', 'sameUnderlyingSource',
+    'evaluateClaim', 'sameUnderlyingSource', 'isAttestedEvidence',
   ].sort());
   // None of the four attest* functions return a `decision` field at all —
   // they return { evidence, error } — so none of them are decision-capable

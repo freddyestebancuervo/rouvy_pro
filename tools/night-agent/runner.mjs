@@ -75,6 +75,9 @@ import {
 } from './checkpoint.mjs';
 import { isRepoRelativePath, isPathWithinScope } from './path-safety.mjs';
 import { notifySlackBestEffort } from './notify.mjs';
+import { evaluateCommandSafety } from './command-safety.mjs';
+import { RED_TEAM_CHECKS, runRedTeamPhase } from './red-team-gate.mjs';
+import { finalizeExecutorResult, certifyIndependentAuditResult } from './executor-auditor-gate.mjs';
 
 // Best-effort notification call-site wrapper: defense-in-depth on top of
 // notifySlackBestEffort's own try/catch. A notification (or a test's
@@ -486,12 +489,27 @@ export function checkNightGuardInstalled({ repoRoot, existsSyncFn = existsSync, 
 
 const DEFAULT_VERIFICATION_TIMEOUT_MS = 60000;
 
+// Phase 1B-R3 (independent audit finding P3-1, real reproduction): the R2
+// fix that made the audit-gate call `await`-ed closed a real crash (an
+// unhandled rejection) but opened a narrower one -- a gate function that
+// returns a never-settling thenable (a plain object with a `.then` that
+// never calls its resolve/reject) now hangs executeControlledGreenTask
+// forever, leaving the checkpoint stuck at VERIFYING (never HOLD) and
+// leaking the temporary policy file (the `finally` cleanup never runs,
+// since the function never returns). Before R2, the same input was treated
+// as a plain non-Promise object and correctly resolved to HOLD. A bounded
+// timeout, raced against the real call, restores "always eventually
+// resolves to HOLD or PASS" without reintroducing the R1/R2 crash this
+// await was added to fix.
+const DEFAULT_AUDIT_GATE_TIMEOUT_MS = 30000;
+const AUDIT_GATE_TIMEOUT_SENTINEL = Symbol('AUDIT_GATE_TIMEOUT');
+
 /**
  * @param {any} vc a single verification_commands entry
  * @param {{repoRoot: string, task: any, spawnSyncFn?: typeof spawnSync, existsSyncFn?: typeof existsSync, timeoutMs?: number}} params
  * @returns {{pass: boolean, family: string, errorFamily: string|null}}
  */
-export function runVerificationCommand(vc, { repoRoot, task, spawnSyncFn = spawnSync, existsSyncFn = existsSync, timeoutMs = DEFAULT_VERIFICATION_TIMEOUT_MS }) {
+export function runVerificationCommand(vc, { repoRoot, task, spawnSyncFn = spawnSync, existsSyncFn = existsSync, timeoutMs = DEFAULT_VERIFICATION_TIMEOUT_MS, evaluateCommandSafetyFn = evaluateCommandSafety }) {
   if (!vc || !VALID_VERIFICATION_FAMILIES.has(vc.family)) {
     return { pass: false, family: vc?.family ?? null, errorFamily: 'UNKNOWN_VERIFICATION_FAMILY' };
   }
@@ -515,11 +533,36 @@ export function runVerificationCommand(vc, { repoRoot, task, spawnSyncFn = spawn
 
   const { command, args } = vc.family === 'NODE_VERSION' ? { command: 'node', args: ['--version'] } : { command: 'node', args: ['--test', vc.target] };
 
+  // Phase 1B, Section 6: command-safety.mjs is now the mandatory gate
+  // immediately before the one real spawn in this function -- strict order
+  // RECEIVE -> CLASSIFY -> AUTHORIZE -> EXECUTE, never execute-then-classify.
+  // `targetEnvironment: 'Local'` is correct and honest here (not a stand-in
+  // for "trust it"): every command this function can ever construct comes
+  // from the closed, schema-validated NODE_TEST/NODE_VERSION family set
+  // (queue.mjs's VALID_VERIFICATION_FAMILIES), runs with cwd:repoRoot, and
+  // never targets a remote/Production resource -- there is no path through
+  // this function that could honestly claim a different targetEnvironment.
+  // An UNAUTHORIZED verdict (UNKNOWN, or any class this policy does not
+  // grant standing authorization to) means the command is NEVER executed --
+  // `errorFamily: 'COMMAND_SAFETY_UNAUTHORIZED'` is treated as an
+  // unconditional HOLD by executeControlledGreenTask, never RETRY (see its
+  // own comment on UNAUTHORIZED_SCOPE for why retrying a policy violation,
+  // rather than a flaky failure, is never appropriate).
+  const commandSafety = evaluateCommandSafetyFn({
+    command: [command, ...args].join(' '),
+    targetEnvironment: 'Local',
+    currentBranchName: null,
+    explicitAuthorizationGranted: false,
+  });
+  if (!commandSafety.authorized) {
+    return { pass: false, family: vc.family, errorFamily: 'COMMAND_SAFETY_UNAUTHORIZED', commandSafetyClass: commandSafety.commandSafetyClass };
+  }
+
   const result = spawnSyncFn(command, args, { cwd: repoRoot, encoding: 'utf8', shell: false, timeout: timeoutMs });
   if (!result || result.error || result.status !== 0) {
     return { pass: false, family: vc.family, errorFamily: 'VERIFICATION_FAILED' };
   }
-  return { pass: true, family: vc.family, errorFamily: null };
+  return { pass: true, family: vc.family, errorFamily: null, commandSafetyClass: commandSafety.commandSafetyClass };
 }
 
 /**
@@ -697,6 +740,216 @@ function decideRetryOrHold({ attempt, maxRetries }) {
   return nextAttempt >= maxRetries ? { state: 'HOLD', attempt: nextAttempt } : { state: 'RETRY', attempt: nextAttempt };
 }
 
+// Phase 1B-R1 (2026-08-22): fixed after a real independent audit found P1-1
+// — the checklist below used to be hardcoded 'CLEAR' unconditionally,
+// regardless of its inputs, making it decorative rather than a genuine
+// second opinion (the audit reproduced this live: forged
+// verification.allPass=false, an empty results array, and path-traversal
+// scopePaths entries were all still certified PASS). Every branch below now
+// genuinely RE-DERIVES its verdict from raw facts this function computes
+// itself — never trusts a pre-computed conclusion (`verification.allPass`,
+// `scopePaths`) at face value — so a future regression upstream that
+// somehow reaches this function with bad inputs is still caught here, not
+// only there.
+const WILDCARD_SCOPE_ENTRIES = new Set(['*', '**', '**/*']);
+
+// Phase 1B-R2 (independent audit finding P2-3, real reproductions): an
+// earlier revision of this check used a hand-rolled regex
+// (`/^(\/|[A-Za-z]:[\\/]|\\\\|\/\/)/`) fixed after a real CI failure showed
+// `path.isAbsolute()` was platform-dependent. A fresh independent audit then
+// showed that hand-rolled regex was ITSELF incomplete -- it missed a
+// drive-relative path with no separator ('C:temp', 'C:'), an NTFS
+// alternate-data-stream suffix ('src/file.txt:hidden'), an embedded NUL
+// byte, an embedded newline, and a leading-space variant -- and reproduced
+// two of them reaching a real PASS checkpoint end-to-end. The fix is not a
+// third hand-rolled pattern: `path-safety.mjs`'s `isRepoRelativePath`
+// (already imported into this file, already this project's single source
+// of truth for "is this a safe, canonical, alias-free repo-relative path",
+// already used to scope-check `vc.target` in runVerificationCommand) is
+// strictly stricter than anything this function could reasonably
+// reimplement -- it independently rejects backslashes, NUL/control
+// characters, colons (drive letters AND ADS), leading/trailing whitespace,
+// leading '/', trailing '/', and any '..' segment. Reusing it here removes
+// an entire class of "the backstop reimplements a weaker copy of a
+// validator that already exists" defect.
+function looksLikeSuspiciousScopePath(p) {
+  return !isRepoRelativePath(p);
+}
+
+/**
+ * @param {string} checkId one of red-team-gate.mjs's RED_TEAM_CHECKS ids
+ * @param {{verificationGenuinelyAllPass: boolean, scopePathsLookSuspicious: boolean, headShaResolved: boolean, allowedPathsLookBounded: boolean}} facts
+ * @returns {{status: 'CLEAR'|'FINDING', severity: ('P0'|'P1'|'P2'|'P3')|null, detail: string}}
+ */
+function redTeamCheckVerdict(checkId, { verificationGenuinelyAllPass, scopePathsLookSuspicious, headShaResolved, allowedPathsLookBounded }) {
+  switch (checkId) {
+    case 'ERROR_MISREAD_AS_STATE':
+    case 'COMMAND_OR_ASSUME_STATE':
+    case 'FAILURE_MISREAD_AS_ABSENCE':
+      return verificationGenuinelyAllPass
+        ? { status: 'CLEAR', severity: null, detail: 'independently re-verified here: every verification result truly reports pass:true (re-checked, not merely trusted from the caller\'s verification.allPass flag).' }
+        : { status: 'FINDING', severity: 'P0', detail: 'verification results do not independently re-verify as genuinely all-pass -- certifying PASS on top of this would itself BE the failure-misread-as-success defect this check exists to catch.' };
+    case 'WRONG_SHA_USED':
+      return headShaResolved
+        ? { status: 'CLEAR', severity: null, detail: 'headSha independently re-verified here as a well-formed, resolved 40-hex commit SHA (matches FULL_GIT_SHA_PATTERN), not merely passed through unchecked.' }
+        : { status: 'FINDING', severity: 'P1', detail: 'headSha failed to resolve to a valid commit SHA (git rev-parse HEAD did not return one) -- certifying PASS without knowing what was actually audited would be exactly WRONG_SHA_USED.' };
+    case 'TOCTOU_RACE':
+      return !scopePathsLookSuspicious
+        ? { status: 'CLEAR', severity: null, detail: 'scopePaths independently re-verified here as well-formed repo-relative entries (no path-traversal or absolute-path entry) -- the worktree-clean gate and both post-execution scope checks each re-read real git status immediately before use, and this function re-validates their output rather than trusting it as-is.' }
+        : { status: 'FINDING', severity: 'P0', detail: 'scopePaths contains an entry that is not a well-formed repo-relative path (path traversal or an absolute path) -- refusing to certify PASS on top of unverified scope data.' };
+    case 'ROLLBACK_MISSING_OR_WRONG_TARGET':
+      return { status: 'CLEAR', severity: null, detail: 'not applicable -- this execution path performs no deployment or external mutation that would require a rollback path.' };
+    case 'TRAFFIC_BEFORE_HEALTH_CHECK':
+      return { status: 'CLEAR', severity: null, detail: 'not applicable -- this execution path never routes traffic to anything; it only spawns a local child process and local verification commands.' };
+    case 'IAM_TOO_BROAD':
+      // Phase 1B-R1 fix (P2-4): the prior wording denied any grant exists at
+      // all, which was false -- buildActivePolicy/buildControlledChildEnv DO
+      // grant the spawned child a bounded filesystem+tool scope (the closest
+      // analogue to IAM in this codebase). This check is now a real,
+      // independently re-derived least-privilege check: allowedPathsLookBounded
+      // re-verifies task.allowed_paths is a non-empty, non-wildcard array --
+      // never taken on faith.
+      return allowedPathsLookBounded
+        ? { status: 'CLEAR', severity: null, detail: 'this path DOES grant the spawned child a scoped permission (task.allowed_paths/read_paths via the active policy, RESTRICTED_AUTONOMOUS_TOOLS excluding Bash/Agent) -- independently re-verified here as bounded: a non-empty allowed_paths list containing no \'*\'/\'**\'/\'**/*\' wildcard entry.' }
+        : { status: 'FINDING', severity: 'P1', detail: 'task.allowed_paths is empty or contains a wildcard entry -- the grant to the spawned child is not actually bounded, which is exactly IAM_TOO_BROAD.' };
+    case 'SECRETS_EXPOSED':
+      return { status: 'CLEAR', severity: null, detail: 'checkpoint.mjs\'s ALLOWED_FIELDS is a closed field set with no prompt/secret/raw-stderr field; the child\'s own stdout/stderr is never captured, returned, or persisted by this function.' };
+    case 'EXIT_CODE_IGNORED':
+      return { status: 'CLEAR', severity: null, detail: 'every spawnSync/runControlledChild call site in this path gates on its real exit/status code before proceeding -- none of them are discarded.' };
+    case 'GH_ACTIONS_ERROR_ANNOTATION_WITHOUT_EXIT':
+      return { status: 'CLEAR', severity: null, detail: 'not applicable -- this execution path runs no GitHub Actions workflow step.' };
+    case 'DANGEROUS_DEFAULT':
+      return { status: 'CLEAR', severity: null, detail: 'every gate in this path (triple execution lock, worktree-clean, night-guard-installed, verification-commands-present, command-safety authorization, and this audit gate itself) defaults to refusing/HOLD, never to proceeding, when its underlying check is absent, malformed, or fails.' };
+    case 'INVERTED_CONDITION':
+      return verificationGenuinelyAllPass
+        ? { status: 'CLEAR', severity: null, detail: 'this point is reached only via an explicit, non-inverted, independently re-verified all-pass condition -- reaching here required the positive condition to genuinely hold, re-checked above rather than assumed.' }
+        : { status: 'FINDING', severity: 'P0', detail: 'reached this point without the underlying condition genuinely holding -- exactly the inverted-condition shape this check exists to catch.' };
+    case 'CONTINUE_ON_ERROR_HIDES_FAILURE':
+      return { status: 'CLEAR', severity: null, detail: 'not applicable -- this execution path is not a GitHub Actions workflow and has no continue-on-error-equivalent construct anywhere.' };
+    case 'FAILURE_CAUGHT_AS_SUCCESS':
+      // Phase 1B-R1 fix (P2-3): the prior wording claimed "the only
+      // try/catch ... is the policy-cleanup finally block", which became
+      // false the moment this same revision added a second try/catch (the
+      // audit-gate exception guard in executeControlledGreenTask) -- a
+      // red-team check marked CLEAR on a claim later falsified by the same
+      // commit is exactly the failure mode this checklist exists to prevent.
+      return { status: 'CLEAR', severity: null, detail: 'executeControlledGreenTask has two try/catch constructs (the policy-cleanup finally, and the audit-gate exception guard) -- neither converts a failure into a success return value: the finally block never returns, and the audit-gate catch explicitly returns HOLD, never falling through to PASS.' };
+    case 'UNGATED_IRREVERSIBLE_MUTATION':
+      // Phase 1B-R1 fix (P3): the prior wording claimed "no delete ... of
+      // any kind", which was inaccurate -- removeTemporaryActivePolicy does
+      // call unlinkSync. Scoped correctly: that delete targets only a
+      // temporary, non-repository, non-external file this same run created.
+      return { status: 'CLEAR', severity: null, detail: 'the one delete in this path (removeTemporaryActivePolicy\'s unlinkSync) targets only a temporary policy file this same run created outside the repository -- not an external, persistent, or irreversible resource.' };
+    default:
+      return { status: 'CLEAR', severity: null, detail: 'checked against this run\'s real, independently re-derived facts; no applicable finding.' };
+  }
+}
+
+/**
+ * Phase 1B, Section 3/8/9: the real Executor≠Auditor certification step.
+ * Structurally distinct identities, not merely differently-named strings:
+ * the Executor is the spawned `claude` child that did the actual work — it
+ * never calls certifyIndependentAuditResultFn itself, and
+ * finalizeExecutorResultFn structurally cannot return anything PASS-shaped
+ * (see executor-auditor-gate.mjs). The Auditor is THIS function — the
+ * deterministic, non-agentic verification pipeline inside runner.mjs, which
+ * the child never controls and cannot influence beyond the real scope/
+ * verification facts it already, separately, had to earn by having its
+ * changes and commands pass real, independently-computed checks.
+ * `auditorContextId` is a fixed, code-level constant — never derived from
+ * `task` or anything the child produced — so the independence check inside
+ * certifyIndependentAuditResultFn cannot be defeated by a caller picking a
+ * matching name.
+ *
+ * `evidenceCitations` are built ONLY from values this function already
+ * computed for real (verification pass/fail counts, the already-verified
+ * post-execution scope) — never from anything the spawned child said about
+ * itself. This is the mitigation executor-auditor-gate.mjs's own header
+ * documents for why evidenceCitations stay trustworthy in this real path
+ * even though that module cannot verify a citation's truth in isolation.
+ * @param {object} params
+ * @param {any} params.task
+ * @param {number} params.attempt
+ * @param {string} params.baseSha
+ * @param {string} params.repoRoot
+ * @param {typeof spawnSync} params.spawnSyncFn
+ * @param {{allPass: boolean, results: any[]}} params.verification
+ * @param {string[]} params.scopePaths
+ * @param {typeof runRedTeamPhase} params.runRedTeamPhaseFn
+ * @param {typeof finalizeExecutorResult} params.finalizeExecutorResultFn
+ * @param {typeof certifyIndependentAuditResult} params.certifyIndependentAuditResultFn
+ * @param {typeof resolveLocalHeadSha} params.resolveLocalHeadShaFn
+ * @returns {{finalState: string, reason: string, executorResult: object, redTeamResult: object, auditResult: object}}
+ */
+export function auditAndCertifyGreenTaskResult({
+  task, attempt, baseSha, repoRoot, spawnSyncFn, verification, scopePaths,
+  runRedTeamPhaseFn, finalizeExecutorResultFn, certifyIndependentAuditResultFn, resolveLocalHeadShaFn,
+}) {
+  const headSha = resolveLocalHeadShaFn({ repoRoot, spawnSyncFn });
+  const results = Array.isArray(verification?.results) ? verification.results : [];
+  const testsRun = results.length;
+  const testsPass = results.filter((r) => r && r.pass === true).length;
+
+  const executorResult = finalizeExecutorResultFn({
+    state: 'IMPLEMENTATION_COMPLETE_AWAITING_INDEPENDENT_AUDIT',
+    baseSha,
+    headSha,
+    filesChanged: Array.isArray(scopePaths) ? scopePaths : [],
+    tests: { run: testsRun, pass: testsPass, fail: testsRun - testsPass },
+    knownUnproven: [],
+    knownLimitations: [],
+  });
+
+  // Phase 1B-R1: independently RE-DERIVE every fact this checklist depends
+  // on from the raw inputs -- never trust verification.allPass/scopePaths as
+  // a pre-computed conclusion. See redTeamCheckVerdict's own header comment
+  // for the audit finding (P1-1) this closes.
+  const verificationGenuinelyAllPass = Boolean(
+    verification && verification.allPass === true && testsRun > 0 && testsPass === testsRun,
+  );
+  const scopePathsList = Array.isArray(scopePaths) ? scopePaths : null;
+  const scopePathsLookSuspicious = scopePathsList === null || scopePathsList.some(looksLikeSuspiciousScopePath);
+  const headShaResolved = typeof headSha === 'string' && FULL_GIT_SHA_PATTERN.test(headSha);
+  const allowedPathsLookBounded = Array.isArray(task?.allowed_paths) && task.allowed_paths.length > 0
+    && !task.allowed_paths.some((p) => WILDCARD_SCOPE_ENTRIES.has(p));
+
+  const facts = { verificationGenuinelyAllPass, scopePathsLookSuspicious, headShaResolved, allowedPathsLookBounded };
+  const checksPerformed = RED_TEAM_CHECKS.map((c) => {
+    const verdict = redTeamCheckVerdict(c.id, facts);
+    return { checkId: c.id, status: verdict.status, severity: verdict.severity ?? undefined, detail: verdict.detail };
+  });
+  const redTeamResult = runRedTeamPhaseFn({ checksPerformed });
+
+  // Each citation's evidenceLevel reflects what was ACTUALLY, independently
+  // re-verified above -- PROVEN_BY_LIVE_READ_ONLY only when the
+  // corresponding fact really re-checked true, UNPROVEN otherwise (never
+  // asserted regardless of input, which is exactly what P1-1 found wrong
+  // with the prior version of this function). Neither citation touches any
+  // PRODUCTION_IMPACT_TOPICS topic -- an honest reflection of the real fact
+  // that this execution path never performs a production/traffic/IAM/
+  // secrets/migration/deployment operation.
+  const evidenceCitations = [
+    { claimId: 'verification_commands_all_pass', evidenceLevel: verificationGenuinelyAllPass ? 'PROVEN_BY_LIVE_READ_ONLY' : 'UNPROVEN', environment: 'Development', topics: [] },
+    { claimId: 'post_execution_scope_within_allowed_paths', evidenceLevel: !scopePathsLookSuspicious ? 'PROVEN_BY_LIVE_READ_ONLY' : 'UNPROVEN', environment: 'Development', topics: [] },
+  ];
+
+  const auditResult = certifyIndependentAuditResultFn({
+    requestedState: 'PASS',
+    executorContextId: `night-agent-executor-child:${task?.id}:attempt-${attempt}`,
+    auditorContextId: 'night-agent-deterministic-verification-pipeline',
+    evidenceCitations,
+    redTeamPhaseResult: redTeamResult,
+    findings: [],
+  });
+
+  // checksPerformed (with its per-check `detail`) is attached here purely
+  // for observability -- red-team-gate.mjs's own runRedTeamPhase return
+  // shape only surfaces FINDING entries, so this is the one place a CLEAR
+  // verdict's reasoning remains inspectable by a caller/report, rather than
+  // being silently discarded.
+  return { executorResult, redTeamResult, auditResult, checksPerformed, finalState: auditResult.finalState, reason: auditResult.reason };
+}
+
 /**
  * NIGHT-V1-D: the real controlled-execution function, extended from
  * NIGHT-V1-C with the full pre-spawn safety pipeline (section 24) and the
@@ -786,6 +1039,13 @@ export async function executeControlledGreenTask({
   checkNightGuardInstalledFn = checkNightGuardInstalled,
   getGitStatusPathsFn = getGitStatusPaths,
   runAllVerificationCommandsFn = runAllVerificationCommands,
+  evaluateCommandSafetyFn = evaluateCommandSafety,
+  runRedTeamPhaseFn = runRedTeamPhase,
+  finalizeExecutorResultFn = finalizeExecutorResult,
+  certifyIndependentAuditResultFn = certifyIndependentAuditResult,
+  resolveLocalHeadShaFn = resolveLocalHeadSha,
+  auditAndCertifyGreenTaskResultFn = auditAndCertifyGreenTaskResult,
+  auditGateTimeoutMs = DEFAULT_AUDIT_GATE_TIMEOUT_MS,
   notifySlackFn = notifySlackBestEffort,
   spawnFn,
   baseEnv = process.env,
@@ -880,8 +1140,18 @@ export async function executeControlledGreenTask({
     writeCheckpointFn(resolvedCheckpointFilePath, checkpoint);
     safeNotify(notifySlackFn, { label: 'CHECKPOINT', fields: { taskId: task.id, state: 'VERIFYING', attempt, timestamp: nowFn() } });
 
-    const verification = runAllVerificationCommandsFn(task, { repoRoot, spawnSyncFn, existsSyncFn, timeoutMs: resolvedVerificationTimeoutMs });
+    const verification = runAllVerificationCommandsFn(task, { repoRoot, spawnSyncFn, existsSyncFn, timeoutMs: resolvedVerificationTimeoutMs, evaluateCommandSafetyFn });
     if (!verification.allPass) {
+      const lastResult = verification.results[verification.results.length - 1];
+      // Phase 1B, Section 7: a command-safety refusal is a policy violation,
+      // not a flaky failure -- retrying the identical, already-classified
+      // command cannot make it become authorized. Unconditional HOLD, never
+      // RETRY, mirroring UNAUTHORIZED_SCOPE just above.
+      if (lastResult?.errorFamily === 'COMMAND_SAFETY_UNAUTHORIZED') {
+        checkpoint = advanceCheckpoint(checkpoint, { state: 'HOLD', now: nowFn(), errorFamily: 'COMMAND_SAFETY_UNAUTHORIZED' });
+        writeCheckpointFn(resolvedCheckpointFilePath, checkpoint);
+        return { status: 'HOLD', checkpointState: 'HOLD', realChildSpawn, commandSafetyClass: lastResult.commandSafetyClass };
+      }
       const decision = decideRetryOrHold({ attempt, maxRetries: task.max_retries });
       checkpoint = advanceCheckpoint(checkpoint, { state: decision.state, now: nowFn(), errorFamily: 'VERIFICATION_FAILED' });
       checkpoint = { ...checkpoint, attempt: decision.attempt };
@@ -902,9 +1172,86 @@ export async function executeControlledGreenTask({
       return { status: 'HOLD', checkpointState: 'HOLD', realChildSpawn, unauthorizedPaths: scopeResult2.unauthorized };
     }
 
-    checkpoint = advanceCheckpoint(checkpoint, { state: 'PASS', now: nowFn(), errorFamily: null });
+    // Phase 1B, Section 3/8/9: CHILD_EXIT_0 != TASK_PASS extends all the way
+    // here -- every real verification/scope fact this run produced is now
+    // handed to the real Executor<>Auditor certification gate. Only a
+    // PASS-shaped certifyIndependentAuditResultFn verdict may advance the
+    // checkpoint to PASS; any HOLD verdict (self-certification, missing/
+    // unattested red-team result, blocking red-team finding, or an UNPROVEN
+    // production-impact claim) is terminal HOLD here, exactly like every
+    // other HOLD branch in this function -- there is no fallback, retry, or
+    // alternate path back to PASS from this point.
+    // Section 11/16's "exception inside auditor/red-team -> HOLD": a thrown
+    // error from ANY step of the certification pipeline (finalizeExecutorResultFn,
+    // runRedTeamPhaseFn, certifyIndependentAuditResultFn, or the headSha
+    // resolution) is caught here and treated exactly like any other
+    // audit-gate refusal -- HOLD, never an uncaught rejection that could
+    // leave the checkpoint in an ambiguous RUNNING/VERIFYING state, and
+    // never a swallowed exception that falls through to PASS.
+    //
+    // Phase 1B-R2 (independent audit finding P2-1/P2-2, real reproductions):
+    // the R1 fix only widened the try/catch far enough to cover a
+    // null/undefined `audit` -- it left the result-inspection step (reading
+    // `.finalState`/`.reason`) OUTSIDE the try, so a Proxy or a getter that
+    // throws on property access, or a `.reason` that is a Symbol (making the
+    // `AUDIT_${audit.reason}` template literal itself throw a TypeError),
+    // still escaped as an unhandled rejection. Separately, the call was
+    // never awaited, so an async `auditAndCertifyGreenTaskResultFn` that
+    // REJECTS (rather than throwing synchronously) also escaped uncaught,
+    // reproduced live as a process-terminating unhandled rejection.
+    // Fixed by moving EVERY step that could throw -- the call itself
+    // (now awaited, so it safely handles both a sync throw and an async
+    // rejection), the well-formedness check, and the property reads used to
+    // build `errorFamily` -- inside one try, with one catch that always
+    // resolves to HOLD no matter what failed or how.
+    let checkpointDecision;
+    let auditGateTimeoutHandle;
+    try {
+      // Phase 1B-R3: raced against a bounded timeout (see
+      // DEFAULT_AUDIT_GATE_TIMEOUT_MS's comment) -- a hung or never-settling
+      // gate function can no longer stall this function forever. The
+      // orphaned real call (if it was actually hung) is simply abandoned;
+      // Node does not need it cancelled for this function to make progress
+      // and reach its own `finally` cleanup.
+      const timeoutPromise = new Promise((resolve) => {
+        auditGateTimeoutHandle = setTimeout(() => resolve(AUDIT_GATE_TIMEOUT_SENTINEL), auditGateTimeoutMs);
+      });
+      const audit = await Promise.race([
+        auditAndCertifyGreenTaskResultFn({
+          task,
+          attempt,
+          baseSha,
+          repoRoot,
+          spawnSyncFn,
+          verification,
+          scopePaths: scopeCheck2.paths,
+          runRedTeamPhaseFn,
+          finalizeExecutorResultFn,
+          certifyIndependentAuditResultFn,
+          resolveLocalHeadShaFn,
+        }),
+        timeoutPromise,
+      ]);
+      if (audit === AUDIT_GATE_TIMEOUT_SENTINEL) {
+        checkpointDecision = { state: 'HOLD', errorFamily: 'AUDIT_GATE_TIMEOUT', status: 'HOLD', auditResult: null };
+      } else {
+        const auditIsWellFormed = audit !== null && typeof audit === 'object';
+        if (!auditIsWellFormed || (audit.finalState !== 'PASS' && audit.finalState !== 'PASS_WITH_FINDINGS')) {
+          const errorFamily = auditIsWellFormed ? `AUDIT_${String(audit.reason)}` : 'AUDIT_GATE_MALFORMED_RESULT';
+          checkpointDecision = { state: 'HOLD', errorFamily, status: 'HOLD', auditResult: auditIsWellFormed ? audit.auditResult : null };
+        } else {
+          checkpointDecision = { state: 'PASS', errorFamily: null, status: 'PASS', auditResult: audit.auditResult };
+        }
+      }
+    } catch {
+      checkpointDecision = { state: 'HOLD', errorFamily: 'AUDIT_GATE_EXCEPTION', status: 'HOLD', auditResult: null };
+    } finally {
+      clearTimeout(auditGateTimeoutHandle);
+    }
+
+    checkpoint = advanceCheckpoint(checkpoint, { state: checkpointDecision.state, now: nowFn(), errorFamily: checkpointDecision.errorFamily });
     writeCheckpointFn(resolvedCheckpointFilePath, checkpoint);
-    return { status: 'PASS', checkpointState: 'PASS', realChildSpawn };
+    return { status: checkpointDecision.status, checkpointState: checkpointDecision.state, realChildSpawn, auditResult: checkpointDecision.auditResult };
   } finally {
     if (policyPath !== null) removeTemporaryActivePolicy(policyPath, { existsSyncFn, unlinkSyncFn });
   }
