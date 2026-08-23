@@ -68,7 +68,7 @@ const READ_ONLY_PREFIXES = Object.freeze([
   'git merge-base --is-ancestor',
   'gh pr view', 'gh pr checks', 'gh pr list', 'gh pr diff',
   'gh run view', 'gh run list',
-  'gh api repos', // GET-only usage is a caller responsibility -- see note below.
+  'gh api repos', // GET-only -- gated separately by GH_API_MUTATING_METHOD_PATTERN below, never treated as safe on prefix match alone.
   'gcloud config get-value',
   'node --version', 'node --check', 'node --test',
   'pwd',
@@ -79,13 +79,54 @@ const READ_ONLY_PREFIXES = Object.freeze([
 // prefix list above, used only for the gcloud-resource-verb check below.
 const READ_ONLY_RESOURCE_VERB_PATTERN = /\b(describe|list|get-iam-policy|get|view)\b/;
 
+// NIGHT_HARDENING_2-R4 SECURITY CORRECTION (this revision) closes
+// COMMAND-SAFETY-CHAIN-001 (CRITICAL), reproduced live by an independent
+// audit: `matchesReadOnlyAllowlist`/`LOCAL_ONLY_MUTATION_PREFIXES`/
+// `isOwnBranchGitHubOperation` only ever verified that a command STARTED
+// WITH a known-safe invocation, never that it consisted of ONLY that
+// invocation. `git status && rm -rf /`, `gh pr edit 73 && gcloud run deploy
+// svc --project=prod`, and `gh pr create --draft --title x && gcloud iam
+// service-accounts keys create k.json` all classified READ_ONLY or
+// standing-authorized REMOTE_NONPROD_MUTATION, with `authorized: true` and
+// zero explicit grant, because DESTRUCTIVE_PATTERNS/target-environment logic
+// was never reached once a prefix matched. Fixed by refusing EVERY prefix-
+// allowlist / standing-authorization shortcut outright whenever the command
+// contains any shell chaining/substitution metacharacter -- a chained
+// command can only ever resolve via DESTRUCTIVE_PATTERNS (still a
+// whole-string scan, unaffected) or the general mutation-verb + declared-
+// target-environment path, both of which require either a recognized
+// destructive pattern or an explicit target/authorization to reach anything
+// but UNKNOWN. This is a deliberately blunt, conservative rule (a real
+// argument value containing a literal `|` character would also trip it,
+// pushing a legitimate command to UNKNOWN rather than READ_ONLY) -- fail-
+// safe over-restriction is the accepted cost, consistent with this
+// module's own stated non-goal of being a complete shell parser.
+const SHELL_CHAINING_PATTERN = /(&&|\|\||;|\||`|\$\()/;
+
+function containsShellChaining(command) {
+  return SHELL_CHAINING_PATTERN.test(command);
+}
+
+// Same audit finding, second half: the fixed `gh api` prefix accepted any
+// HTTP method, including mutating ones a caller could pass via `-X`/
+// `--method`. `gh api repos/x/y -X DELETE` (or PUT/POST/PATCH) classified
+// READ_ONLY with zero authorization. Fixed by refusing the READ_ONLY match
+// outright whenever a mutating method is present -- GET (the default when
+// no method flag appears at all) remains the only path to READ_ONLY here.
+const GH_API_MUTATING_METHOD_PATTERN = /(-X|--method)\s+(POST|PUT|PATCH|DELETE)\b/i;
+
 function matchesReadOnlyAllowlist(command) {
+  if (containsShellChaining(command)) return false;
   // A prefix matches when followed by a word boundary (space, slash, or
   // end-of-string) -- not merely by `startsWith`, which would also match an
   // unrelated command that happens to share a text prefix (e.g. "git status"
   // must not match "git statusline"), but must still match "gh api repos/..."
   // where the prefix is immediately followed by "/", not a space.
-  if (READ_ONLY_PREFIXES.some((p) => new RegExp(`^${escapeRegExp(p)}(\\s|/|$)`).test(command))) return true;
+  for (const p of READ_ONLY_PREFIXES) {
+    if (!new RegExp(`^${escapeRegExp(p)}(\\s|/|$)`).test(command)) continue;
+    if (p === 'gh api repos' && GH_API_MUTATING_METHOD_PATTERN.test(command)) return false;
+    return true;
+  }
   // A `gcloud <service> <resource>` invocation is READ_ONLY only when its
   // verb is one of the recognized read verbs AND it contains no recognized
   // mutation verb at all (a command can't be trusted read-only just because
@@ -118,6 +159,8 @@ const DESTRUCTIVE_PATTERNS = Object.freeze([
   /\bsql\s+instances\s+delete\b/i,
   /\brun\s+(services|jobs)\s+delete\b/i,
   /\bcompute\s+instances\s+delete\b/i,
+  /\bfirestore\s+databases\s+delete\b/i,
+  /\bsecrets?\s+delete\b/i,
 ]);
 
 // ---------------------------------------------------------------------------
@@ -148,8 +191,11 @@ const STANDING_AUTHORIZED_GH_PREFIXES = Object.freeze(['gh pr create --draft', '
 // Shared by classifyCommandSafety (to route these commands away from the
 // target-environment-required branch) and isStandingAuthorized (to actually
 // grant standing authorization) -- kept as one definition so the two never
-// silently drift apart.
+// silently drift apart. Refuses outright on any chained command (see
+// NIGHT_HARDENING_2-R4 above) -- standing authorization NEVER applies to a
+// command that isn't provably just the one recognized invocation.
 function isOwnBranchGitHubOperation(command, currentBranchName) {
+  if (containsShellChaining(command)) return false;
   if (STANDING_AUTHORIZED_GH_PREFIXES.some((p) => command.startsWith(p))) return true;
   if (!currentBranchName || currentBranchName === 'main' || currentBranchName === 'master') return false;
   const ownBranchPushPattern = new RegExp(`^git push(\\s+-u)?\\s+origin\\s+${escapeRegExp(currentBranchName)}(\\s|$)`);
@@ -167,19 +213,34 @@ export function classifyCommandSafety(input) {
     return Object.freeze({ commandSafetyClass: 'UNKNOWN', reason: 'empty_or_non_string_command' });
   }
 
-  if (matchesReadOnlyAllowlist(command)) {
-    return Object.freeze({ commandSafetyClass: 'READ_ONLY', reason: 'matched_read_only_allowlist' });
-  }
-
-  // DESTRUCTIVE is checked before target-environment logic and is
-  // unconditional -- a destructive command aimed at Development is still
-  // DESTRUCTIVE, never downgraded to REMOTE_NONPROD_MUTATION merely because
-  // the target isn't Production.
+  // NIGHT_HARDENING_2-R4: DESTRUCTIVE is checked FIRST, before READ_ONLY and
+  // before target-environment logic, and is unconditional -- a destructive
+  // command aimed at Development is still DESTRUCTIVE, never downgraded to
+  // REMOTE_NONPROD_MUTATION merely because the target isn't Production, and
+  // (the actual point of moving this check first) never masked by a
+  // READ_ONLY-looking prefix earlier in the command string. This is a
+  // whole-string scan, so it still catches a destructive pattern anywhere in
+  // a chained command regardless of what precedes it.
   if (DESTRUCTIVE_PATTERNS.some((p) => p.test(command))) {
     return Object.freeze({ commandSafetyClass: 'DESTRUCTIVE', reason: 'matched_destructive_pattern' });
   }
 
-  if (LOCAL_ONLY_MUTATION_PREFIXES.some((p) => command === p || command.startsWith(`${p} `))) {
+  // NIGHT_HARDENING_2-R4: every remaining "safe shortcut" path
+  // (READ_ONLY allowlist, LOCAL_ONLY_MUTATION_PREFIXES, own-branch/gh-pr
+  // standing authorization) is refused outright for any command containing
+  // shell chaining/substitution syntax -- none of these prefix-based checks
+  // can ever prove the command consists of ONLY the matched invocation once
+  // a second command could be appended. A chained command can only resolve
+  // via the DESTRUCTIVE scan above (already run) or the general mutation-
+  // verb + declared-target-environment path below, which requires an
+  // explicit authorization for anything beyond UNKNOWN.
+  const chained = containsShellChaining(command);
+
+  if (!chained && matchesReadOnlyAllowlist(command)) {
+    return Object.freeze({ commandSafetyClass: 'READ_ONLY', reason: 'matched_read_only_allowlist' });
+  }
+
+  if (!chained && LOCAL_ONLY_MUTATION_PREFIXES.some((p) => command === p || command.startsWith(`${p} `))) {
     return Object.freeze({ commandSafetyClass: 'LOCAL_MUTATION', reason: 'matched_local_only_mutation_prefix' });
   }
 
@@ -191,8 +252,10 @@ export function classifyCommandSafety(input) {
   // Checked before the target-environment-required branch below;
   // `isStandingAuthorized` still separately confirms the branch really is
   // the caller's own current branch (never main/master) before treating
-  // this as pre-authorized routine work.
-  if (isOwnBranchGitHubOperation(command, input?.currentBranchName)) {
+  // this as pre-authorized routine work. (isOwnBranchGitHubOperation
+  // already refuses chained commands internally -- no `!chained` guard
+  // needed here specifically, kept for defense-in-depth/readability.)
+  if (!chained && isOwnBranchGitHubOperation(command, input?.currentBranchName)) {
     return Object.freeze({ commandSafetyClass: 'REMOTE_NONPROD_MUTATION', reason: 'matched_own_branch_github_operation' });
   }
 
@@ -232,6 +295,16 @@ export function isStandingAuthorized(input) {
   const commandSafetyClass = input?.commandSafetyClass;
   const command = typeof input?.command === 'string' ? input.command.trim() : '';
   const currentBranchName = typeof input?.currentBranchName === 'string' && input.currentBranchName.length > 0 ? input.currentBranchName : null;
+
+  // Defense-in-depth: `evaluateCommandSafety` always derives
+  // `commandSafetyClass` from the real `classifyCommandSafety(input)` (which
+  // already refuses to label a chained command LOCAL_MUTATION), so this
+  // branch is unreachable via that intended entry point. Guarded again here
+  // in case this exported function is ever called directly with a
+  // caller-asserted `commandSafetyClass` that doesn't actually match
+  // `command` -- a chained command must never be treated as standing-
+  // authorized no matter what class a caller claims for it.
+  if (containsShellChaining(command)) return false;
 
   if (commandSafetyClass === 'LOCAL_MUTATION') return true;
 
