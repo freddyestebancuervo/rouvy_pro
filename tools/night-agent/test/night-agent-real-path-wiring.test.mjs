@@ -14,7 +14,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { EventEmitter } from 'node:events';
-import { mkdtempSync, rmSync, readFileSync } from 'node:fs';
+import { mkdtempSync, rmSync, readFileSync, readdirSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -669,6 +669,34 @@ test('WIRING-16e: an async auditAndCertifyGreenTaskResultFn that RESOLVES to a g
   assert.equal(result.status, 'PASS');
 });
 
+// Phase 1B-R3 (regression for independent audit finding P3-1): before this
+// fix, a gate function returning a never-settling thenable (an object with
+// a `.then` method that never calls its resolve/reject) hung
+// executeControlledGreenTask forever -- the checkpoint was left stuck at
+// VERIFYING (never HOLD), and the temporary policy file leaked because the
+// `finally` cleanup never ran (the function never returned). A bounded
+// timeout, raced against the real call, now guarantees this always
+// eventually resolves to HOLD, runs the cleanup, and does not silently
+// resurrect this exact behavior as a live TypeError/rejection either.
+test('WIRING-16f (regression for audit finding P3-1): a never-settling thenable resolves to HOLD within the bounded timeout -- no hang, no leaked policy file', async (t) => {
+  const dir = tempDir(t);
+  const args = executeTaskFixtureArgs(t, {
+    tmpDirFn: () => dir,
+    auditGateTimeoutMs: 50,
+    auditAndCertifyGreenTaskResultFn: () => ({ then() { /* never calls resolve/reject -- a hostile thenable */ } }),
+  });
+  const child = makeFakeChild();
+  const resultPromise = executeControlledGreenTask({ ...args, spawnFn: () => child });
+  child.emit('close', 0);
+  const result = await resultPromise; // must resolve, not hang forever
+  assert.equal(result.status, 'HOLD');
+  const finalCheckpoint = JSON.parse(readFileSync(args.checkpointFilePath, 'utf8'));
+  assert.equal(finalCheckpoint.state, 'HOLD');
+  assert.equal(finalCheckpoint.last_error_family, 'AUDIT_GATE_TIMEOUT');
+  const remainingPolicyFiles = readdirSync(dir).filter((f) => f.startsWith('korixa-night-policy-'));
+  assert.deepEqual(remainingPolicyFiles, [], 'the temporary policy file must be cleaned up, not leaked, once the bounded timeout resolves the hang');
+});
+
 test('WIRING-17: a HOLD written by the audit gate, looked up again via the pre-existing checkpoint recovery logic, resolves to HOLD_EXISTING_HOLD -- never RESUME_RETRY or START_FRESH', async (t) => {
   const args = executeTaskFixtureArgs(t, {
     auditAndCertifyGreenTaskResultFn: () => ({ finalState: 'HOLD', reason: 'HOLD_UNPROVEN_PRODUCTION_CLAIM', auditResult: {} }),
@@ -704,19 +732,31 @@ test('WIRING-18: a PASS checkpoint state is written if and only if every gate pa
     writtenStates.push(checkpoint.state);
   }
 
-  // Phase 1B-R2 (independent audit finding P3): a prior version of this
-  // matrix covered only 8 of the 14 real return points in
+  // Phase 1B-R2/R3 (independent audit findings P3, then P3-4): a prior
+  // version of this matrix covered only 8 of the 13 real return points in
   // executeControlledGreenTask (missing the triple-lock, invalid-task,
   // no-verification-commands, raw scope-check-itself-failed [distinct from
   // "scope check found an unauthorized path", already covered], and --
-  // notably -- the flagship CHILD_EXIT_0 != TASK_PASS gate itself). All are
-  // now exercised. `closeCode` lets a scenario simulate a genuinely failed
-  // child exit instead of the default successful close.
-  async function runScenario(name, overrides, { closeCode = 0 } = {}) {
+  // notably -- the flagship CHILD_EXIT_0 != TASK_PASS gate itself); R3's
+  // audit then found 2 sub-branches of that same return point (the
+  // infra-level spawn ERROR path, and the retry-budget-exhausted path) were
+  // still untested at branch granularity, even though covered at
+  // return-statement granularity. All 13 return points, including both
+  // sub-branches, are now exercised. `closeCode` lets a scenario simulate a
+  // genuinely failed child exit instead of the default successful close;
+  // `emitEvent`/`emitArg` let a scenario emit 'error' instead of 'close'.
+  // Phase 1B-R3 (independent audit finding P3-2): the scenario count below
+  // is tracked dynamically, not hardcoded into the closing assertion
+  // message -- a prior version of this message went stale (still said "10
+  // scenarios" after the matrix had grown to 16) exactly because nothing
+  // forced it to stay in sync with the scenario list above it.
+  let scenarioCount = 0;
+  async function runScenario(name, overrides, { closeCode = 0, emitEvent = 'close', emitArg = closeCode } = {}) {
+    scenarioCount += 1;
     const args = executeTaskFixtureArgs(t, { writeCheckpointFn: recordingWriteCheckpointFn, ...overrides });
     const child = makeFakeChild();
     const resultPromise = executeControlledGreenTask({ ...args, spawnFn: () => child });
-    child.emit('close', closeCode);
+    child.emit(emitEvent, emitArg);
     await resultPromise;
   }
 
@@ -726,6 +766,10 @@ test('WIRING-18: a PASS checkpoint state is written if and only if every gate pa
   await runScenario('guard not installed', { checkNightGuardInstalledFn: () => ({ installed: false, reason: 'NOT_INSTALLED' }) });
   await runScenario('no verification commands present', { task: policyTaskFixture({ verification_commands: [] }) });
   await runScenario('child exec exits non-zero (CHILD_EXIT_0 != TASK_PASS)', {}, { closeCode: 1 });
+  await runScenario('child spawn ERROR (infra-level, not budget-checked)', {}, { emitEvent: 'error', emitArg: new Error('simulated ENOENT spawn error') });
+  await runScenario('child exec fails ordinarily but retry budget is exhausted -> HOLD, not RETRY', {
+    task: policyTaskFixture({ max_retries: 1 }),
+  }, { closeCode: 1 });
   await runScenario('raw scope check #1 itself fails (git status call failed)', { getGitStatusPathsFn: () => ({ ok: false }) });
   await runScenario('scope check #1 finds an unauthorized path', { getGitStatusPathsFn: () => ({ ok: true, paths: ['backend/unauthorized.ts'] }) });
   await runScenario('verification fails ordinarily', { runAllVerificationCommandsFn: () => ({ allPass: false, results: [{ pass: false, family: 'NODE_VERSION', errorFamily: 'VERIFICATION_FAILED' }] }) });
@@ -751,13 +795,19 @@ test('WIRING-18: a PASS checkpoint state is written if and only if every gate pa
   await runScenario('audit gate throws', {
     auditAndCertifyGreenTaskResultFn: () => { throw new Error('simulated crash'); },
   });
+  // Phase 1B-R3 (independent audit finding P3-1): a never-settling thenable
+  // must resolve to HOLD via the bounded timeout, never hang forever.
+  await runScenario('audit gate returns a never-settling thenable (bounded timeout fires)', {
+    auditGateTimeoutMs: 50,
+    auditAndCertifyGreenTaskResultFn: () => ({ then() { /* never calls resolve/reject */ } }),
+  });
   // The only scenario where every gate is genuinely satisfied AND the audit
   // gate is the REAL, unfaked auditAndCertifyGreenTaskResult -- this is the
   // sole legitimate path to PASS.
   await runScenario('every gate genuinely passes, real (unfaked) audit gate', {});
 
   const passCount = writtenStates.filter((s) => s === 'PASS').length;
-  assert.equal(passCount, 1, `expected exactly one PASS checkpoint write across all 10 scenarios, found ${passCount} (states written: ${writtenStates.join(', ')})`);
+  assert.equal(passCount, 1, `expected exactly one PASS checkpoint write across all ${scenarioCount} scenarios, found ${passCount} (states written: ${writtenStates.join(', ')})`);
   assert.equal(writtenStates[writtenStates.length - 1], 'PASS', 'the PASS write must belong to the fully-legitimate final scenario, not an earlier failure scenario');
 });
 

@@ -489,6 +489,21 @@ export function checkNightGuardInstalled({ repoRoot, existsSyncFn = existsSync, 
 
 const DEFAULT_VERIFICATION_TIMEOUT_MS = 60000;
 
+// Phase 1B-R3 (independent audit finding P3-1, real reproduction): the R2
+// fix that made the audit-gate call `await`-ed closed a real crash (an
+// unhandled rejection) but opened a narrower one -- a gate function that
+// returns a never-settling thenable (a plain object with a `.then` that
+// never calls its resolve/reject) now hangs executeControlledGreenTask
+// forever, leaving the checkpoint stuck at VERIFYING (never HOLD) and
+// leaking the temporary policy file (the `finally` cleanup never runs,
+// since the function never returns). Before R2, the same input was treated
+// as a plain non-Promise object and correctly resolved to HOLD. A bounded
+// timeout, raced against the real call, restores "always eventually
+// resolves to HOLD or PASS" without reintroducing the R1/R2 crash this
+// await was added to fix.
+const DEFAULT_AUDIT_GATE_TIMEOUT_MS = 30000;
+const AUDIT_GATE_TIMEOUT_SENTINEL = Symbol('AUDIT_GATE_TIMEOUT');
+
 /**
  * @param {any} vc a single verification_commands entry
  * @param {{repoRoot: string, task: any, spawnSyncFn?: typeof spawnSync, existsSyncFn?: typeof existsSync, timeoutMs?: number}} params
@@ -1030,6 +1045,7 @@ export async function executeControlledGreenTask({
   certifyIndependentAuditResultFn = certifyIndependentAuditResult,
   resolveLocalHeadShaFn = resolveLocalHeadSha,
   auditAndCertifyGreenTaskResultFn = auditAndCertifyGreenTaskResult,
+  auditGateTimeoutMs = DEFAULT_AUDIT_GATE_TIMEOUT_MS,
   notifySlackFn = notifySlackBestEffort,
   spawnFn,
   baseEnv = process.env,
@@ -1189,29 +1205,48 @@ export async function executeControlledGreenTask({
     // build `errorFamily` -- inside one try, with one catch that always
     // resolves to HOLD no matter what failed or how.
     let checkpointDecision;
+    let auditGateTimeoutHandle;
     try {
-      const audit = await auditAndCertifyGreenTaskResultFn({
-        task,
-        attempt,
-        baseSha,
-        repoRoot,
-        spawnSyncFn,
-        verification,
-        scopePaths: scopeCheck2.paths,
-        runRedTeamPhaseFn,
-        finalizeExecutorResultFn,
-        certifyIndependentAuditResultFn,
-        resolveLocalHeadShaFn,
+      // Phase 1B-R3: raced against a bounded timeout (see
+      // DEFAULT_AUDIT_GATE_TIMEOUT_MS's comment) -- a hung or never-settling
+      // gate function can no longer stall this function forever. The
+      // orphaned real call (if it was actually hung) is simply abandoned;
+      // Node does not need it cancelled for this function to make progress
+      // and reach its own `finally` cleanup.
+      const timeoutPromise = new Promise((resolve) => {
+        auditGateTimeoutHandle = setTimeout(() => resolve(AUDIT_GATE_TIMEOUT_SENTINEL), auditGateTimeoutMs);
       });
-      const auditIsWellFormed = audit !== null && typeof audit === 'object';
-      if (!auditIsWellFormed || (audit.finalState !== 'PASS' && audit.finalState !== 'PASS_WITH_FINDINGS')) {
-        const errorFamily = auditIsWellFormed ? `AUDIT_${String(audit.reason)}` : 'AUDIT_GATE_MALFORMED_RESULT';
-        checkpointDecision = { state: 'HOLD', errorFamily, status: 'HOLD', auditResult: auditIsWellFormed ? audit.auditResult : null };
+      const audit = await Promise.race([
+        auditAndCertifyGreenTaskResultFn({
+          task,
+          attempt,
+          baseSha,
+          repoRoot,
+          spawnSyncFn,
+          verification,
+          scopePaths: scopeCheck2.paths,
+          runRedTeamPhaseFn,
+          finalizeExecutorResultFn,
+          certifyIndependentAuditResultFn,
+          resolveLocalHeadShaFn,
+        }),
+        timeoutPromise,
+      ]);
+      if (audit === AUDIT_GATE_TIMEOUT_SENTINEL) {
+        checkpointDecision = { state: 'HOLD', errorFamily: 'AUDIT_GATE_TIMEOUT', status: 'HOLD', auditResult: null };
       } else {
-        checkpointDecision = { state: 'PASS', errorFamily: null, status: 'PASS', auditResult: audit.auditResult };
+        const auditIsWellFormed = audit !== null && typeof audit === 'object';
+        if (!auditIsWellFormed || (audit.finalState !== 'PASS' && audit.finalState !== 'PASS_WITH_FINDINGS')) {
+          const errorFamily = auditIsWellFormed ? `AUDIT_${String(audit.reason)}` : 'AUDIT_GATE_MALFORMED_RESULT';
+          checkpointDecision = { state: 'HOLD', errorFamily, status: 'HOLD', auditResult: auditIsWellFormed ? audit.auditResult : null };
+        } else {
+          checkpointDecision = { state: 'PASS', errorFamily: null, status: 'PASS', auditResult: audit.auditResult };
+        }
       }
     } catch {
       checkpointDecision = { state: 'HOLD', errorFamily: 'AUDIT_GATE_EXCEPTION', status: 'HOLD', auditResult: null };
+    } finally {
+      clearTimeout(auditGateTimeoutHandle);
     }
 
     checkpoint = advanceCheckpoint(checkpoint, { state: checkpointDecision.state, now: nowFn(), errorFamily: checkpointDecision.errorFamily });
