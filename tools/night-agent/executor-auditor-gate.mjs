@@ -139,11 +139,26 @@ export const AUDIT_HOLD_REASONS = Object.freeze([
   'HOLD_UNPROVEN_PRODUCTION_CLAIM',
 ]);
 
+// NIGHT_HARDENING_2-R3: normalizes an identity string for the sole purpose
+// of the independence COMPARISON -- trims leading/trailing whitespace,
+// collapses internal runs of whitespace to a single space, and case-folds.
+// Deliberately narrow: this does not attempt to catch every conceivable way
+// two identity strings could denote "the same actor" (that is an identity-
+// management problem this module cannot solve), only the specific class of
+// "simple ambiguous name variation" this task calls out — trivial
+// casing/whitespace cosmetics a caller could otherwise use to make one
+// identity look like two.
+function normalizeContextIdentity(rawId) {
+  if (typeof rawId !== 'string') return null;
+  const normalized = rawId.trim().replace(/\s+/g, ' ').toLowerCase();
+  return normalized.length > 0 ? normalized : null;
+}
+
 /**
  * @param {object} input
  * @param {string} input.requestedState - one of AUDITOR_RESULT_STATES.
  * @param {string} input.executorContextId - identity of the session/context that produced the work under review.
- * @param {string} input.auditorContextId - identity of THIS review's session/context. Must differ from executorContextId.
+ * @param {string} input.auditorContextId - identity of THIS review's session/context. Must differ from executorContextId (compared case/whitespace-insensitively — see normalizeContextIdentity).
  * @param {Array} [input.evidenceCitations] - claim-taxonomy.mjs claim objects backing this decision.
  * @param {object} [input.redTeamPhaseResult] - the return value of red-team-gate.mjs's runRedTeamPhase.
  * @param {Array} [input.findings] - free-form findings list, carried through for reporting only; never itself a source of authority.
@@ -152,6 +167,14 @@ export function certifyIndependentAuditResult(input) {
   const requestedState = input?.requestedState;
   const executorContextId = typeof input?.executorContextId === 'string' && input.executorContextId.length > 0 ? input.executorContextId : null;
   const auditorContextId = typeof input?.auditorContextId === 'string' && input.auditorContextId.length > 0 ? input.auditorContextId : null;
+  // NIGHT_HARDENING_2-R3: identity independence must not be evadable by a
+  // "simple ambiguous name variation" (trailing/leading whitespace, case,
+  // internal whitespace collapsing) -- raw strict equality alone lets
+  // 'session-1' and 'Session-1 ' pass as "distinct" when they plausibly name
+  // the same actor. Both raw values are still reported for transparency, but
+  // the actual independence DECISION is made on the normalized form.
+  const executorContextIdNormalized = normalizeContextIdentity(executorContextId);
+  const auditorContextIdNormalized = normalizeContextIdentity(auditorContextId);
   // NIGHT_HARDENING_1-R2: `evidenceCitations` PRESENT but not an array (e.g.
   // a single citation object passed bare instead of wrapped in `[...]`) is a
   // malformed input shape, not "zero citations" -- silently coercing it to
@@ -172,39 +195,42 @@ export function certifyIndependentAuditResult(input) {
   // because a self-audited HOLD is *also* not a real independent audit and
   // callers should not be able to hide that behind an otherwise-conservative
   // requestedState.
+  const independent = Boolean(executorContextIdNormalized && auditorContextIdNormalized && executorContextIdNormalized !== auditorContextIdNormalized);
+  const base = { requestedState, executorContextId, auditorContextId, independent, claimSet, redTeamPhaseResult, findings };
+
   if (!AUDITOR_RESULT_STATES.includes(requestedState)) {
-    return buildResult({ finalState: 'HOLD', reason: 'INVALID_REQUESTED_STATE', requestedState, executorContextId, auditorContextId, claimSet, redTeamPhaseResult, findings });
+    return buildResult({ ...base, finalState: 'HOLD', reason: 'INVALID_REQUESTED_STATE' });
   }
 
-  if (!executorContextId || !auditorContextId || auditorContextId === executorContextId) {
-    return buildResult({ finalState: 'HOLD', reason: 'HOLD_INDEPENDENT_AUDIT_REQUIRED', requestedState, executorContextId, auditorContextId, claimSet, redTeamPhaseResult, findings });
+  if (!independent) {
+    return buildResult({ ...base, finalState: 'HOLD', reason: 'HOLD_INDEPENDENT_AUDIT_REQUIRED' });
   }
 
   if (PASS_SHAPED_STATES.includes(requestedState)) {
     if (!evidenceCitationsShapeValid) {
-      return buildResult({ finalState: 'HOLD', reason: 'HOLD_INVALID_EVIDENCE_CITATIONS_SHAPE', requestedState, executorContextId, auditorContextId, claimSet, redTeamPhaseResult, findings });
+      return buildResult({ ...base, finalState: 'HOLD', reason: 'HOLD_INVALID_EVIDENCE_CITATIONS_SHAPE' });
     }
     if (!redTeamPhaseResult || redTeamPhaseResult.completed !== true) {
-      return buildResult({ finalState: 'HOLD', reason: 'HOLD_RED_TEAM_NOT_RUN', requestedState, executorContextId, auditorContextId, claimSet, redTeamPhaseResult, findings });
+      return buildResult({ ...base, finalState: 'HOLD', reason: 'HOLD_RED_TEAM_NOT_RUN' });
     }
     if (redTeamPhaseResult.blocking === true) {
-      return buildResult({ finalState: 'HOLD', reason: 'HOLD_RED_TEAM_BLOCKING_FINDING', requestedState, executorContextId, auditorContextId, claimSet, redTeamPhaseResult, findings });
+      return buildResult({ ...base, finalState: 'HOLD', reason: 'HOLD_RED_TEAM_BLOCKING_FINDING' });
     }
     if (claimSet.anyHold) {
-      return buildResult({ finalState: 'HOLD', reason: 'HOLD_UNPROVEN_PRODUCTION_CLAIM', requestedState, executorContextId, auditorContextId, claimSet, redTeamPhaseResult, findings });
+      return buildResult({ ...base, finalState: 'HOLD', reason: 'HOLD_UNPROVEN_PRODUCTION_CLAIM' });
     }
   }
 
-  return buildResult({ finalState: requestedState, reason: 'REQUESTED_STATE_GRANTED', requestedState, executorContextId, auditorContextId, claimSet, redTeamPhaseResult, findings });
+  return buildResult({ ...base, finalState: requestedState, reason: 'REQUESTED_STATE_GRANTED' });
 }
 
-function buildResult({ finalState, reason, requestedState, executorContextId, auditorContextId, claimSet, redTeamPhaseResult, findings }) {
+function buildResult({ finalState, reason, requestedState, executorContextId, auditorContextId, independent, claimSet, redTeamPhaseResult, findings }) {
   return Object.freeze({
     role: 'independent_auditor',
     requestedState: requestedState ?? null,
     finalState,
     reason,
-    independent: Boolean(executorContextId && auditorContextId && executorContextId !== auditorContextId),
+    independent,
     executorContextId,
     auditorContextId,
     evidence: claimSet,

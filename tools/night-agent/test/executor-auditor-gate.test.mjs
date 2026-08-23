@@ -112,6 +112,61 @@ test('genuinely distinct contexts + clean evidence + clean red-team -> PASS gran
 });
 
 // =============================================================================
+// NIGHT_HARDENING_2-R3 REGRESSION: identity independence must not be
+// evadable via a trivial, ambiguous name variation (casing, leading/
+// trailing/internal whitespace) -- these must be treated as the SAME
+// identity, not as two distinct ones.
+// =============================================================================
+
+test('R3 REGRESSION: case-only variation of the same identity -> HOLD_INDEPENDENT_AUDIT_REQUIRED', () => {
+  const result = certifyIndependentAuditResult({
+    requestedState: 'PASS',
+    executorContextId: 'Session-1',
+    auditorContextId: 'session-1',
+    evidenceCitations: PROVEN_EVIDENCE,
+    redTeamPhaseResult: cleanRedTeamResult(),
+  });
+  assert.equal(result.finalState, 'HOLD');
+  assert.equal(result.reason, 'HOLD_INDEPENDENT_AUDIT_REQUIRED');
+});
+
+test('R3 REGRESSION: trailing/leading whitespace variation of the same identity -> HOLD_INDEPENDENT_AUDIT_REQUIRED', () => {
+  const result = certifyIndependentAuditResult({
+    requestedState: 'PASS',
+    executorContextId: 'session-1',
+    auditorContextId: '  session-1  ',
+    evidenceCitations: PROVEN_EVIDENCE,
+    redTeamPhaseResult: cleanRedTeamResult(),
+  });
+  assert.equal(result.finalState, 'HOLD');
+  assert.equal(result.reason, 'HOLD_INDEPENDENT_AUDIT_REQUIRED');
+});
+
+test('R3 REGRESSION: internal whitespace-collapsing variation of the same identity -> HOLD_INDEPENDENT_AUDIT_REQUIRED', () => {
+  const result = certifyIndependentAuditResult({
+    requestedState: 'PASS',
+    executorContextId: 'agent  a executor',
+    auditorContextId: 'agent a executor',
+    evidenceCitations: PROVEN_EVIDENCE,
+    redTeamPhaseResult: cleanRedTeamResult(),
+  });
+  assert.equal(result.finalState, 'HOLD');
+  assert.equal(result.reason, 'HOLD_INDEPENDENT_AUDIT_REQUIRED');
+});
+
+test('genuinely distinct identities that merely LOOK superficially similar (different words, not just casing/whitespace) still count as independent', () => {
+  const result = certifyIndependentAuditResult({
+    requestedState: 'PASS',
+    executorContextId: 'agent-a-executor',
+    auditorContextId: 'agent-b-auditor',
+    evidenceCitations: PROVEN_EVIDENCE,
+    redTeamPhaseResult: cleanRedTeamResult(),
+  });
+  assert.equal(result.finalState, 'PASS');
+  assert.equal(result.independent, true);
+});
+
+// =============================================================================
 // TEST C (wired end-to-end here too): a Production-impact UNPROVEN claim
 // forces HOLD even with independence and a clean red-team phase.
 // =============================================================================
