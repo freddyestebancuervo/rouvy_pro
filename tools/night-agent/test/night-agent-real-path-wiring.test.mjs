@@ -298,6 +298,70 @@ test('WIRING-22 (regression for audit finding B3/P1-1): scopePaths containing a 
   }
 });
 
+// Phase 1B-R2 (independent audit finding P2-3): the R1 hand-rolled
+// suspicious-path regex missed several shapes a fresh audit reproduced
+// reaching a real PASS checkpoint end-to-end: a drive-relative path with no
+// separator, an NTFS alternate-data-stream suffix, an embedded NUL byte, an
+// embedded newline, and a leading-space variant. Fixed by delegating to
+// path-safety.mjs's isRepoRelativePath (this project's single source of
+// truth for path-safety, already imported elsewhere in this same file) --
+// each of these exact shapes is re-tested here against the real audit gate.
+test('WIRING-22b (regression for audit finding P2-3): every previously-missed suspicious scopePaths shape now HOLDs', () => {
+  const previouslyMissedShapes = [
+    'C:temp', // drive-relative, no separator after colon
+    'c:foo/bar',
+    'C:',
+    'src/file.txt:hidden', // NTFS alternate-data-stream suffix
+    `src/a${String.fromCharCode(0)}.txt`, // embedded NUL byte
+    'src/a\n/etc/shadow', // embedded newline
+    ' /etc/shadow', // leading space defeats a naively-anchored regex
+  ];
+  for (const shape of previouslyMissedShapes) {
+    const audit = auditAndCertifyGreenTaskResult({
+      task: policyTaskFixture(),
+      attempt: 0,
+      baseSha: 'a'.repeat(40),
+      repoRoot: '/fake/repo',
+      spawnSyncFn: countingSpawnSyncFn(),
+      verification: cleanVerification(),
+      scopePaths: [shape],
+      runRedTeamPhaseFn: runRedTeamPhase,
+      finalizeExecutorResultFn: (input) => input,
+      certifyIndependentAuditResultFn: certifyIndependentAuditResult,
+      resolveLocalHeadShaFn: () => 'b'.repeat(40),
+    });
+    assert.equal(audit.finalState, 'HOLD', `scopePaths=[${JSON.stringify(shape)}] must not certify PASS`);
+  }
+});
+
+test('WIRING-22c: legitimate scopePaths shapes a real git-status call could produce are NOT over-rejected -- the P2-3 fix does not break the legitimate path', () => {
+  const legitimateShapes = [
+    'tools/night-agent/runner.mjs',
+    'docs/my report final.md', // spaces
+    '.claude/settings.json', // leading dot
+    '.gitignore',
+    'docs/informe-auditoria.md', // non-ASCII-adjacent but valid
+    'pkg/scope/a+b.ts',
+    'a'.repeat(200) + '/deep/file.ts',
+  ];
+  for (const shape of legitimateShapes) {
+    const audit = auditAndCertifyGreenTaskResult({
+      task: policyTaskFixture({ allowed_paths: [shape] }),
+      attempt: 0,
+      baseSha: 'a'.repeat(40),
+      repoRoot: '/fake/repo',
+      spawnSyncFn: countingSpawnSyncFn(),
+      verification: cleanVerification(),
+      scopePaths: [shape],
+      runRedTeamPhaseFn: runRedTeamPhase,
+      finalizeExecutorResultFn: (input) => input,
+      certifyIndependentAuditResultFn: certifyIndependentAuditResult,
+      resolveLocalHeadShaFn: () => 'b'.repeat(40),
+    });
+    assert.equal(audit.finalState, 'PASS', `legitimate scopePaths=[${JSON.stringify(shape)}] must still certify PASS`);
+  }
+});
+
 test('WIRING-23 (regression for audit finding P2-5): an unresolved headSha (git rev-parse HEAD failed) -> the real audit gate HOLDs, never certifies PASS with headSha:null', () => {
   const audit = auditAndCertifyGreenTaskResult({
     task: policyTaskFixture(),
@@ -538,6 +602,73 @@ test('WIRING-16: an exception thrown inside the audit gate is caught and resolve
   assert.equal(finalCheckpoint.last_error_family, 'AUDIT_GATE_EXCEPTION');
 });
 
+// Phase 1B-R2 (independent audit finding P2-1/P2-2): the R1 fix for "audit
+// gate exception -> HOLD" only widened the try/catch far enough to catch a
+// synchronous throw and a null/undefined return. A fresh audit reproduced,
+// live through the real executeControlledGreenTask, three narrower gaps
+// that all still escaped: (1) a Proxy or getter that throws only when a
+// SPECIFIC property (`.finalState`/`.reason`) is accessed, rather than the
+// whole object being unusable; (2) a `.reason` value that is a Symbol,
+// which throws a TypeError when coerced to a string inside the
+// `AUDIT_${...}` template literal; (3) an async `auditAndCertifyGreenTaskResultFn`
+// that REJECTS (rather than throwing synchronously) escaped as a real,
+// process-terminating unhandled rejection, because the call was never
+// awaited. Each is reproduced here against the real, fixed code.
+test('WIRING-16b (regression for audit finding P2-1): a Proxy that throws only on .finalState/.reason access resolves to HOLD, never an unhandled rejection', async (t) => {
+  const throwingProxy = new Proxy({}, {
+    get(target, prop) {
+      if (prop === 'finalState' || prop === 'reason') throw new Error(`simulated property-access trap on ${String(prop)}`);
+      return target[prop];
+    },
+  });
+  const args = executeTaskFixtureArgs(t, {
+    auditAndCertifyGreenTaskResultFn: () => throwingProxy,
+  });
+  const child = makeFakeChild();
+  const resultPromise = executeControlledGreenTask({ ...args, spawnFn: () => child });
+  child.emit('close', 0);
+  const result = await resultPromise; // must not reject
+  assert.equal(result.status, 'HOLD');
+  const finalCheckpoint = JSON.parse(readFileSync(args.checkpointFilePath, 'utf8'));
+  assert.equal(finalCheckpoint.state, 'HOLD');
+});
+
+test('WIRING-16c (regression for audit finding P2-1): a plain object whose .reason is a Symbol resolves to HOLD, never a TypeError from string coercion', async (t) => {
+  const args = executeTaskFixtureArgs(t, {
+    auditAndCertifyGreenTaskResultFn: () => ({ finalState: 'HOLD', reason: Symbol('unstringifiable'), auditResult: {} }),
+  });
+  const child = makeFakeChild();
+  const resultPromise = executeControlledGreenTask({ ...args, spawnFn: () => child });
+  child.emit('close', 0);
+  const result = await resultPromise; // must not reject
+  assert.equal(result.status, 'HOLD');
+});
+
+test('WIRING-16d (regression for audit finding P2-2): an async auditAndCertifyGreenTaskResultFn that REJECTS resolves to HOLD, never an unhandled rejection', async (t) => {
+  const args = executeTaskFixtureArgs(t, {
+    auditAndCertifyGreenTaskResultFn: async () => { throw new Error('simulated async auditor crash'); },
+  });
+  const child = makeFakeChild();
+  const resultPromise = executeControlledGreenTask({ ...args, spawnFn: () => child });
+  child.emit('close', 0);
+  const result = await resultPromise; // must not reject, and must not crash the process
+  assert.equal(result.status, 'HOLD');
+  const finalCheckpoint = JSON.parse(readFileSync(args.checkpointFilePath, 'utf8'));
+  assert.equal(finalCheckpoint.state, 'HOLD');
+  assert.equal(finalCheckpoint.last_error_family, 'AUDIT_GATE_EXCEPTION');
+});
+
+test('WIRING-16e: an async auditAndCertifyGreenTaskResultFn that RESOLVES to a genuine PASS-shaped object is still honored (await does not break the legitimate async case)', async (t) => {
+  const args = executeTaskFixtureArgs(t, {
+    auditAndCertifyGreenTaskResultFn: async () => ({ finalState: 'PASS', reason: 'REQUESTED_STATE_GRANTED', auditResult: { independent: true } }),
+  });
+  const child = makeFakeChild();
+  const resultPromise = executeControlledGreenTask({ ...args, spawnFn: () => child });
+  child.emit('close', 0);
+  const result = await resultPromise;
+  assert.equal(result.status, 'PASS');
+});
+
 test('WIRING-17: a HOLD written by the audit gate, looked up again via the pre-existing checkpoint recovery logic, resolves to HOLD_EXISTING_HOLD -- never RESUME_RETRY or START_FRESH', async (t) => {
   const args = executeTaskFixtureArgs(t, {
     auditAndCertifyGreenTaskResultFn: () => ({ finalState: 'HOLD', reason: 'HOLD_UNPROVEN_PRODUCTION_CLAIM', auditResult: {} }),
@@ -573,20 +704,39 @@ test('WIRING-18: a PASS checkpoint state is written if and only if every gate pa
     writtenStates.push(checkpoint.state);
   }
 
-  async function runScenario(name, overrides) {
+  // Phase 1B-R2 (independent audit finding P3): a prior version of this
+  // matrix covered only 8 of the 14 real return points in
+  // executeControlledGreenTask (missing the triple-lock, invalid-task,
+  // no-verification-commands, raw scope-check-itself-failed [distinct from
+  // "scope check found an unauthorized path", already covered], and --
+  // notably -- the flagship CHILD_EXIT_0 != TASK_PASS gate itself). All are
+  // now exercised. `closeCode` lets a scenario simulate a genuinely failed
+  // child exit instead of the default successful close.
+  async function runScenario(name, overrides, { closeCode = 0 } = {}) {
     const args = executeTaskFixtureArgs(t, { writeCheckpointFn: recordingWriteCheckpointFn, ...overrides });
     const child = makeFakeChild();
     const resultPromise = executeControlledGreenTask({ ...args, spawnFn: () => child });
-    child.emit('close', 0);
+    child.emit('close', closeCode);
     await resultPromise;
   }
 
+  await runScenario('triple execution lock not satisfied', { realSpawnEnvValue: undefined });
+  await runScenario('invalid task (missing required fields)', { task: { id: 'x' } });
   await runScenario('dirty worktree', { checkWorktreeCleanFn: () => ({ clean: false, reason: 'DIRTY' }) });
   await runScenario('guard not installed', { checkNightGuardInstalledFn: () => ({ installed: false, reason: 'NOT_INSTALLED' }) });
+  await runScenario('no verification commands present', { task: policyTaskFixture({ verification_commands: [] }) });
+  await runScenario('child exec exits non-zero (CHILD_EXIT_0 != TASK_PASS)', {}, { closeCode: 1 });
+  await runScenario('raw scope check #1 itself fails (git status call failed)', { getGitStatusPathsFn: () => ({ ok: false }) });
+  await runScenario('scope check #1 finds an unauthorized path', { getGitStatusPathsFn: () => ({ ok: true, paths: ['backend/unauthorized.ts'] }) });
   await runScenario('verification fails ordinarily', { runAllVerificationCommandsFn: () => ({ allPass: false, results: [{ pass: false, family: 'NODE_VERSION', errorFamily: 'VERIFICATION_FAILED' }] }) });
   await runScenario('verification fails via command-safety', { runAllVerificationCommandsFn: () => ({ allPass: false, results: [{ pass: false, family: 'NODE_VERSION', errorFamily: 'COMMAND_SAFETY_UNAUTHORIZED', commandSafetyClass: 'UNKNOWN' }] }) });
-  await runScenario('scope check #1 fails', { getGitStatusPathsFn: () => ({ ok: true, paths: ['backend/unauthorized.ts'] }) });
-  await runScenario('scope check #2 fails', {
+  await runScenario('raw scope check #2 itself fails (git status call failed)', {
+    getGitStatusPathsFn: (() => {
+      let call = 0;
+      return () => { call += 1; return call === 1 ? { ok: true, paths: [] } : { ok: false }; };
+    })(),
+  });
+  await runScenario('scope check #2 finds an unauthorized path', {
     getGitStatusPathsFn: (() => {
       let call = 0;
       return () => { call += 1; return call === 1 ? { ok: true, paths: [] } : { ok: true, paths: ['backend/unauthorized.ts'] }; };

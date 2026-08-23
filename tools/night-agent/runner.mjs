@@ -738,20 +738,27 @@ function decideRetryOrHold({ attempt, maxRetries }) {
 // only there.
 const WILDCARD_SCOPE_ENTRIES = new Set(['*', '**', '**/*']);
 
-// Phase 1B-R2 (independent-audit-of-remediation finding, real CI failure):
-// `path.isAbsolute()` is PLATFORM-DEPENDENT -- on POSIX (the real GitHub
-// Actions runner, `ubuntu-latest`) it returns false for a Windows-style
-// absolute path like 'C:/Windows/System32/config/SAM', since POSIX only
-// recognizes a leading '/'. This let the exact WIRING-22 regression pass
-// locally on a Windows dev machine while failing to catch the same input on
-// real Linux CI. `git status` output is always forward-slash, repo-relative
-// text regardless of host OS, so a legitimate scopePaths entry should never
-// contain a drive letter, a backslash, or a UNC prefix on ANY platform --
-// this check is now explicit about every one of those shapes, independent
-// of process.platform.
-const SUSPICIOUS_SCOPE_PATH_PATTERN = /^(\/|[A-Za-z]:[\\/]|\\\\|\/\/)/;
+// Phase 1B-R2 (independent audit finding P2-3, real reproductions): an
+// earlier revision of this check used a hand-rolled regex
+// (`/^(\/|[A-Za-z]:[\\/]|\\\\|\/\/)/`) fixed after a real CI failure showed
+// `path.isAbsolute()` was platform-dependent. A fresh independent audit then
+// showed that hand-rolled regex was ITSELF incomplete -- it missed a
+// drive-relative path with no separator ('C:temp', 'C:'), an NTFS
+// alternate-data-stream suffix ('src/file.txt:hidden'), an embedded NUL
+// byte, an embedded newline, and a leading-space variant -- and reproduced
+// two of them reaching a real PASS checkpoint end-to-end. The fix is not a
+// third hand-rolled pattern: `path-safety.mjs`'s `isRepoRelativePath`
+// (already imported into this file, already this project's single source
+// of truth for "is this a safe, canonical, alias-free repo-relative path",
+// already used to scope-check `vc.target` in runVerificationCommand) is
+// strictly stricter than anything this function could reasonably
+// reimplement -- it independently rejects backslashes, NUL/control
+// characters, colons (drive letters AND ADS), leading/trailing whitespace,
+// leading '/', trailing '/', and any '..' segment. Reusing it here removes
+// an entire class of "the backstop reimplements a weaker copy of a
+// validator that already exists" defect.
 function looksLikeSuspiciousScopePath(p) {
-  return typeof p !== 'string' || p.length === 0 || p.includes('..') || p.includes('\\') || SUSPICIOUS_SCOPE_PATH_PATTERN.test(p);
+  return !isRepoRelativePath(p);
 }
 
 /**
@@ -913,7 +920,7 @@ export function auditAndCertifyGreenTaskResult({
 
   const auditResult = certifyIndependentAuditResultFn({
     requestedState: 'PASS',
-    executorContextId: `night-agent-executor-child:${task.id}:attempt-${attempt}`,
+    executorContextId: `night-agent-executor-child:${task?.id}:attempt-${attempt}`,
     auditorContextId: 'night-agent-deterministic-verification-pipeline',
     evidenceCitations,
     redTeamPhaseResult: redTeamResult,
@@ -1165,9 +1172,25 @@ export async function executeControlledGreenTask({
     // audit-gate refusal -- HOLD, never an uncaught rejection that could
     // leave the checkpoint in an ambiguous RUNNING/VERIFYING state, and
     // never a swallowed exception that falls through to PASS.
-    let audit;
+    //
+    // Phase 1B-R2 (independent audit finding P2-1/P2-2, real reproductions):
+    // the R1 fix only widened the try/catch far enough to cover a
+    // null/undefined `audit` -- it left the result-inspection step (reading
+    // `.finalState`/`.reason`) OUTSIDE the try, so a Proxy or a getter that
+    // throws on property access, or a `.reason` that is a Symbol (making the
+    // `AUDIT_${audit.reason}` template literal itself throw a TypeError),
+    // still escaped as an unhandled rejection. Separately, the call was
+    // never awaited, so an async `auditAndCertifyGreenTaskResultFn` that
+    // REJECTS (rather than throwing synchronously) also escaped uncaught,
+    // reproduced live as a process-terminating unhandled rejection.
+    // Fixed by moving EVERY step that could throw -- the call itself
+    // (now awaited, so it safely handles both a sync throw and an async
+    // rejection), the well-formedness check, and the property reads used to
+    // build `errorFamily` -- inside one try, with one catch that always
+    // resolves to HOLD no matter what failed or how.
+    let checkpointDecision;
     try {
-      audit = auditAndCertifyGreenTaskResultFn({
+      const audit = await auditAndCertifyGreenTaskResultFn({
         task,
         attempt,
         baseSha,
@@ -1180,30 +1203,20 @@ export async function executeControlledGreenTask({
         certifyIndependentAuditResultFn,
         resolveLocalHeadShaFn,
       });
+      const auditIsWellFormed = audit !== null && typeof audit === 'object';
+      if (!auditIsWellFormed || (audit.finalState !== 'PASS' && audit.finalState !== 'PASS_WITH_FINDINGS')) {
+        const errorFamily = auditIsWellFormed ? `AUDIT_${String(audit.reason)}` : 'AUDIT_GATE_MALFORMED_RESULT';
+        checkpointDecision = { state: 'HOLD', errorFamily, status: 'HOLD', auditResult: auditIsWellFormed ? audit.auditResult : null };
+      } else {
+        checkpointDecision = { state: 'PASS', errorFamily: null, status: 'PASS', auditResult: audit.auditResult };
+      }
     } catch {
-      checkpoint = advanceCheckpoint(checkpoint, { state: 'HOLD', now: nowFn(), errorFamily: 'AUDIT_GATE_EXCEPTION' });
-      writeCheckpointFn(resolvedCheckpointFilePath, checkpoint);
-      return { status: 'HOLD', checkpointState: 'HOLD', realChildSpawn };
+      checkpointDecision = { state: 'HOLD', errorFamily: 'AUDIT_GATE_EXCEPTION', status: 'HOLD', auditResult: null };
     }
 
-    // Phase 1B-R1 (independent audit finding P2-1): `audit` itself might be
-    // null/undefined/a non-object (a malformed auditAndCertifyGreenTaskResultFn
-    // return) -- reading `.finalState` off of that would throw OUTSIDE the
-    // try/catch above, exactly the "exception inside auditor -> HOLD" gap
-    // the audit reproduced live (a null/undefined return crashed as an
-    // unhandled rejection instead of resolving to HOLD). Explicitly
-    // null/type-checked here, never assumed to be a well-formed object.
-    const auditIsWellFormed = audit !== null && typeof audit === 'object';
-    if (!auditIsWellFormed || (audit.finalState !== 'PASS' && audit.finalState !== 'PASS_WITH_FINDINGS')) {
-      const errorFamily = auditIsWellFormed ? `AUDIT_${audit.reason}` : 'AUDIT_GATE_MALFORMED_RESULT';
-      checkpoint = advanceCheckpoint(checkpoint, { state: 'HOLD', now: nowFn(), errorFamily });
-      writeCheckpointFn(resolvedCheckpointFilePath, checkpoint);
-      return { status: 'HOLD', checkpointState: 'HOLD', realChildSpawn, auditResult: auditIsWellFormed ? audit.auditResult : null };
-    }
-
-    checkpoint = advanceCheckpoint(checkpoint, { state: 'PASS', now: nowFn(), errorFamily: null });
+    checkpoint = advanceCheckpoint(checkpoint, { state: checkpointDecision.state, now: nowFn(), errorFamily: checkpointDecision.errorFamily });
     writeCheckpointFn(resolvedCheckpointFilePath, checkpoint);
-    return { status: 'PASS', checkpointState: 'PASS', realChildSpawn, auditResult: audit.auditResult };
+    return { status: checkpointDecision.status, checkpointState: checkpointDecision.state, realChildSpawn, auditResult: checkpointDecision.auditResult };
   } finally {
     if (policyPath !== null) removeTemporaryActivePolicy(policyPath, { existsSyncFn, unlinkSyncFn });
   }
