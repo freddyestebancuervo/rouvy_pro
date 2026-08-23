@@ -738,6 +738,22 @@ function decideRetryOrHold({ attempt, maxRetries }) {
 // only there.
 const WILDCARD_SCOPE_ENTRIES = new Set(['*', '**', '**/*']);
 
+// Phase 1B-R2 (independent-audit-of-remediation finding, real CI failure):
+// `path.isAbsolute()` is PLATFORM-DEPENDENT -- on POSIX (the real GitHub
+// Actions runner, `ubuntu-latest`) it returns false for a Windows-style
+// absolute path like 'C:/Windows/System32/config/SAM', since POSIX only
+// recognizes a leading '/'. This let the exact WIRING-22 regression pass
+// locally on a Windows dev machine while failing to catch the same input on
+// real Linux CI. `git status` output is always forward-slash, repo-relative
+// text regardless of host OS, so a legitimate scopePaths entry should never
+// contain a drive letter, a backslash, or a UNC prefix on ANY platform --
+// this check is now explicit about every one of those shapes, independent
+// of process.platform.
+const SUSPICIOUS_SCOPE_PATH_PATTERN = /^(\/|[A-Za-z]:[\\/]|\\\\|\/\/)/;
+function looksLikeSuspiciousScopePath(p) {
+  return typeof p !== 'string' || p.length === 0 || p.includes('..') || p.includes('\\') || SUSPICIOUS_SCOPE_PATH_PATTERN.test(p);
+}
+
 /**
  * @param {string} checkId one of red-team-gate.mjs's RED_TEAM_CHECKS ids
  * @param {{verificationGenuinelyAllPass: boolean, scopePathsLookSuspicious: boolean, headShaResolved: boolean, allowedPathsLookBounded: boolean}} facts
@@ -870,8 +886,7 @@ export function auditAndCertifyGreenTaskResult({
     verification && verification.allPass === true && testsRun > 0 && testsPass === testsRun,
   );
   const scopePathsList = Array.isArray(scopePaths) ? scopePaths : null;
-  const scopePathsLookSuspicious = scopePathsList === null
-    || scopePathsList.some((p) => typeof p !== 'string' || p.length === 0 || p.includes('..') || path.isAbsolute(p));
+  const scopePathsLookSuspicious = scopePathsList === null || scopePathsList.some(looksLikeSuspiciousScopePath);
   const headShaResolved = typeof headSha === 'string' && FULL_GIT_SHA_PATTERN.test(headSha);
   const allowedPathsLookBounded = Array.isArray(task?.allowed_paths) && task.allowed_paths.length > 0
     && !task.allowed_paths.some((p) => WILDCARD_SCOPE_ENTRIES.has(p));
