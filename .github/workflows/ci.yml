@@ -269,6 +269,13 @@ jobs:
           openssl genrsa -out secrets/jwt_private.pem 2048
           openssl rsa -in secrets/jwt_private.pem -pubout -out secrets/jwt_public.pem
 
+      # T-F1.2 (P2): backend/src/**/*.spec.ts no corría en ningún required
+      # check — jest.config.js (rootDir=src, testRegex=.spec.ts$) es
+      # exclusivamente unitario (pg/firebase-admin mockeados, sin acceso
+      # real a red/DB/Redis/GCP), así que corre antes de tocar Postgres.
+      - name: Correr los tests unitarios (backend/src/**/*.spec.ts)
+        run: npm test -- --runInBand
+
       # Hallazgo de auditoría 2026-07-23: este paso solo aplicaba
       # 0001_init.sql con psql -f directo — desde que 0002-0004 existen
       # (Bloque C/D), tanto el arranque del servidor como los e2e de
