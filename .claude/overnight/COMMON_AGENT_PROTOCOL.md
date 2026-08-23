@@ -12,7 +12,26 @@ from a long prose instruction each time.
 atomic persistence) and `tools/night-agent/role-protocol.mjs` (role/state
 machine, handoff contract, evidence binding, human gates). **Tests**:
 `tools/night-agent/test/protocol-state.test.mjs`,
-`tools/night-agent/test/role-protocol.test.mjs` (58 tests).
+`tools/night-agent/test/role-protocol.test.mjs` (74 tests).
+
+**Status: MACHINE_ENFORCED_PRIMITIVE, not RUNTIME_WIRED_ENFORCEMENT.** These
+are tested, correct functions a caller can invoke to get a real, fail-closed
+decision — but nothing in this repository currently *requires* an agent to
+invoke them while actually role-switching (there is no orchestrator file
+this is wired into, unlike e.g. `command-safety.mjs`'s real wiring into
+`runner.mjs`). An independent audit of this exact question (B, Round 1)
+confirmed no repository evidence proves otherwise. This is Task 2's own
+stated scope — wiring into a real runner is explicitly future work, not
+overclaimed here as already done.
+
+**Round 1 remediation (B audit → 2×P0, 2×P1, 1×P2, all fixed here):** a
+zero-width-Unicode identity-collision self-certification bypass, a
+malformed-finding-severity silent-non-blocking bypass, a malformed-evidence
+silent-coercion inconsistency, a cross-process WeakSet-attestation
+operability dead-end, and an underclaimed "cannot enforce B/C mutation"
+limitation. See the sections below — each carries the exact finding it
+closes in its own code comment (`grep -n "B audit Round 1"` in
+`role-protocol.mjs` finds all five).
 
 ## Why two new files instead of reusing Task 1's modules directly
 
@@ -50,13 +69,31 @@ NIGHT → A → B ─┬─→ C → HUMAN_GATE
   full re-audit only for P0/P1, a security-boundary change, or a
   Production-impacting change). `certifyAuditResult` is the only function
   able to grant a PASS-shaped auditor result, and only when the auditor
-  identity is genuinely independent (normalized-distinct) from the executor
-  identity, no finding is blocking (a P0/P1 blocks by default even if
-  `blocking` is omitted — never assumed non-blocking by silence), and every
-  evidence claim clears `claim-taxonomy.mjs`'s existing
+  identity is a genuinely distinct **canonical role identifier** from the
+  executor identity — `executorRole`/`auditorRole` must each be an EXACT
+  member of `ROLES` (`'NIGHT'|'A'|'B'|'C'`), not a fuzzily-normalized
+  free-form string. (Round 1: the original design trim/case-folded
+  free-form identities, mirroring `executor-auditor-gate.mjs`'s own rule —
+  appropriate there, where identities are open-ended session strings, but
+  wrong here, where the identity space is a genuinely closed 4-value
+  vocabulary. A zero-width space appended to `'A'` defeated the fuzzy
+  normalizer live; exact closed-set membership closes the whole class
+  structurally, the same lesson `command-safety.mjs`'s own blacklist→
+  whitelist rewrite already taught this project.) No finding may be
+  blocking-and-unnoticed (a P0/P1 blocks by default even if `blocking` is
+  omitted; any severity outside `FINDING_SEVERITIES` forces
+  `HOLD_MALFORMED_FINDING_SEVERITY` rather than silently never blocking —
+  Round 1 closed a live reproduction where a typo'd severity like `'p0'`
+  certified PASS on what was meant to be a real P0). Malformed `findings`
+  **or** `evidence` shape (present but not an array) forces HOLD rather than
+  silently discarding the payload (Round 1: `evidence` used to be coerced
+  to `[]`, inconsistent with `findings`' own already-correct handling).
+  Every evidence claim clears `claim-taxonomy.mjs`'s existing
   UNPROVEN+production-impact fail-closed rule. Every result — PASS **or**
   HOLD — is attested into a module-private `WeakSet` so C can trust it was
-  genuinely produced, not hand-typed.
+  genuinely produced **in the same live process**, not hand-typed — see
+  "Attestation vs. persistence" below for what happens once that process
+  exits.
 - `C` (validator) is read-only, lightweight, and does not redo A's or B's
   work. `certifyByValidator` is the only function able to certify a task
   ready for the human gate, and refuses unless: the auditor result is
@@ -73,6 +110,54 @@ NIGHT → A → B ─┬─→ C → HUMAN_GATE
   is unconditionally `true` for every recognized action type, with **no**
   second parameter of any kind a caller could use to bypass it — even a
   clean C `PASS` never implies authorization to mark Ready or merge.
+
+## Attestation vs. persistence (Round 1 P1 fix)
+
+`WeakSet` attestation is **live-process-only, by design, and this is never
+weakened**: a serialized/spread-copied/otherwise-reconstructed object is
+never automatically trusted, no matter how closely it matches a real
+result's shape. Round 1's audit reproduced, across two genuinely separate
+Node processes, the direct consequence this created: a *legitimate* B
+result — really produced, really persisted via `protocol-state.mjs`'s own
+atomic-write mechanism (itself modeled on `checkpoint.mjs`'s
+restart-recoverable pattern) — loses its live attestation the instant the
+producing process exits, and `certifyByValidator` reported the same
+`HOLD_AUDIT_RESULT_NOT_ATTESTED` for that case as for outright fabrication,
+with no path forward.
+
+The fix does not touch the security invariant — it adds a **named recovery
+path** on top of it:
+
+- `classifyAuditorResultTrust(candidate)` returns `'LIVE_ATTESTATION'`
+  (real, trusted), `'PERSISTED_AUDIT_SUMMARY_REQUIRES_REATTESTATION'`
+  (shape-plausible — has every field a real result always has — but not
+  live-attested; consistent with, never proof of, having crossed a process
+  boundary), or `'UNRECOGNIZED'` (not even shape-plausible). This
+  classification **never grants trust by itself** — it only gives `NIGHT`/`C`
+  an actionable routing signal instead of a dead end.
+- `certifyByValidator` reports the specific `HOLD_AUDIT_ATTESTATION_EXPIRED`
+  reason for the shape-plausible case (vs. the generic
+  `HOLD_AUDIT_RESULT_NOT_ATTESTED` for genuine garbage) — same refusal
+  either way, more actionable reason.
+- `STATE_TRANSITION_TABLE` now allows `NIGHT` to route a `HOLD` directly to
+  `READY_FOR_B` (skipping `A`, which has no remediation work to do for an
+  expired attestation) — the existing `A`-remediation path
+  (`HOLD → REMEDIATING`) remains valid too, for genuine remediation HOLDs.
+- **Re-attestation is not a new function** — it is `certifyAuditResult`
+  called again, for real, by B, observing the *current* actual head and
+  *current* actual findings/evidence. There is no `attest(serializedObject)`
+  function anywhere in this module, and there must never be one: that would
+  be exactly the "serialized JSON becomes automatically trusted" outcome
+  this whole design refuses to allow. No home-grown cryptography/HMAC was
+  introduced either — this project has no existing trust root such a
+  scheme could anchor to, and inventing one was explicitly out of scope for
+  this remediation.
+
+Both properties are tested end-to-end in `role-protocol.test.mjs`:
+**security** (a round-tripped or hand-fabricated result can never directly
+pass `C`, regardless of shape-plausibility) and **operability** (the
+explicit recovery path — expired → `NIGHT` routes to `READY_FOR_B` → B
+re-attests for real → `C` then certifies — genuinely works).
 
 ## Consumption controls (formal part of the protocol, not just a norm)
 
@@ -99,37 +184,52 @@ NIGHT → A → B ─┬─→ C → HUMAN_GATE
 
 ## Machine enforcement — what's covered, and what isn't (and why)
 
-| Rule | Enforced by |
-|---|---|
-| Executor ≠ Auditor | `certifyAuditResult`'s normalized-identity independence check |
-| Invalid role transitions (e.g. `A → C`) | `VALID_ROLE_TRANSITIONS` / `validateRoleTransition` — closed table, not a blocklist |
-| Invalid state transitions / wrong acting role | `STATE_TRANSITION_TABLE` / `validateStateTransition` |
-| B's result HEAD-bound | WeakSet attestation (`certifyAuditResult` → `TRUSTED_AUDITOR_RESULT_REGISTRY`) |
-| C's certification HEAD-bound | `certifyByValidator`'s `attestedAuditorResult.headSha === currentHeadSha` check |
-| Production + UNPROVEN ⇒ HOLD | reused verbatim from `claim-taxonomy.mjs`'s `classifyClaimSet` |
-| UNKNOWN risk ⇒ safe handling | reused verbatim from `command-safety.mjs`'s `evaluateCommandSafety` (`UNKNOWN` never `authorized`) |
-| Missing mandatory evidence ⇒ HOLD | `certifyAuditResult` requires a resolvable `headSha`; malformed `findings`/evidence shape ⇒ HOLD, never coerced to empty |
-| CI SHA mismatch ⇒ reject | `certifyByValidator`'s `ciHeadSha !== currentHeadSha` check |
-| Handoff malformed ⇒ reject | `validateHandoffEnvelope` — closed field set, typed, and itself re-validates the encoded role transition |
-| A cannot FINAL_PASS | `EXECUTOR_RESULT_STATES` structurally excludes every PASS-shaped value |
-| C cannot certify an unresolved blocker | `certifyByValidator`'s `attestedAuditorResult.finalState` check |
-| `WAITING_CI` state | `classifyCiWaitStatus` — `completed` is the only path to a terminal verdict |
-| Human gate for sensitive action | `requiresHumanGateForAction` — no bypass parameter exists in its signature |
+Three tiers, per B's Round 1 audit request to distinguish them explicitly
+rather than calling everything "enforced": **MACHINE_ENFORCED_PRIMITIVE**
+(a real function makes this decision correctly, if a caller invokes it),
+**RUNTIME_WIRED_ENFORCEMENT** (something in the repository's real execution
+path *always* invokes it — none of this task's rules reach this tier yet;
+see "Status" at the top of this document), and **PROCEDURAL_ENFORCED_BY_POLICY**
+(no function can enforce this; it is a documented discipline only).
 
-**"B cannot mutate while auditing" is NOT machine-enforced, by design, and
-documented as such** (see `role-protocol.mjs`'s own closing comment): there
-is no OS-level or tool-permission boundary between roles in this
-single-chat model, unlike `night-guard.mjs`'s real `PreToolUse` hook, which
-sits between an actually-separate, actually-sandboxed spawned child process
-and its tool calls. Building an equivalent hook scoped to "is the active
-role currently B" would mean hooking the operator's own interactive
-session — a materially more invasive mechanism, and out of this task's
-scope. The mitigation in place is procedural (role discipline, the same
-`TRUST_PREVIOUS_CONCLUSIONS = FALSE` reset this whole repository's history
-already practiced by hand) plus the structural fact that even a
-role-discipline violation cannot certify a real HOLD-worthy fact away —
-every finding/evidence claim still funnels through the same fail-closed
-gates regardless of who nominally "is" B at the time.
+| Rule | Tier | Enforced by |
+|---|---|---|
+| Executor ≠ Auditor | MACHINE_ENFORCED_PRIMITIVE | `certifyAuditResult`'s exact-canonical-role independence check (Round 1: closed the zero-width-Unicode bypass by requiring exact `ROLES` membership, not fuzzy normalization) |
+| Invalid role transitions (e.g. `A → C`) | MACHINE_ENFORCED_PRIMITIVE | `VALID_ROLE_TRANSITIONS` / `validateRoleTransition` — closed table, not a blocklist |
+| Invalid state transitions / wrong acting role | MACHINE_ENFORCED_PRIMITIVE | `STATE_TRANSITION_TABLE` / `validateStateTransition` |
+| B's result HEAD-bound (live) | MACHINE_ENFORCED_PRIMITIVE | WeakSet attestation (`certifyAuditResult` → `TRUSTED_AUDITOR_RESULT_REGISTRY`); see "Attestation vs. persistence" for the live-process boundary and its named recovery path |
+| C's certification HEAD-bound | MACHINE_ENFORCED_PRIMITIVE | `certifyByValidator`'s `attestedAuditorResult.headSha === currentHeadSha` check |
+| Production + UNPROVEN ⇒ HOLD | MACHINE_ENFORCED_PRIMITIVE | reused verbatim from `claim-taxonomy.mjs`'s `classifyClaimSet` |
+| UNKNOWN risk ⇒ safe handling | MACHINE_ENFORCED_PRIMITIVE | reused verbatim from `command-safety.mjs`'s `evaluateCommandSafety` (`UNKNOWN` never `authorized`) |
+| Missing mandatory evidence ⇒ HOLD | MACHINE_ENFORCED_PRIMITIVE | `certifyAuditResult` requires a resolvable `headSha`; malformed `findings`/`evidence` shape ⇒ HOLD (both, symmetrically, since Round 1); any severity outside `FINDING_SEVERITIES` ⇒ `HOLD_MALFORMED_FINDING_SEVERITY` |
+| CI SHA mismatch ⇒ reject | MACHINE_ENFORCED_PRIMITIVE | `certifyByValidator`'s `ciHeadSha !== currentHeadSha` check |
+| Handoff malformed ⇒ reject | MACHINE_ENFORCED_PRIMITIVE | `validateHandoffEnvelope` — closed field set, typed, and itself re-validates the encoded role transition |
+| A cannot FINAL_PASS | MACHINE_ENFORCED_PRIMITIVE | `EXECUTOR_RESULT_STATES` structurally excludes every PASS-shaped value |
+| C cannot certify an unresolved blocker | MACHINE_ENFORCED_PRIMITIVE | `certifyByValidator`'s `attestedAuditorResult.finalState` check |
+| `WAITING_CI` state | MACHINE_ENFORCED_PRIMITIVE | `classifyCiWaitStatus` — `completed` is the only path to a terminal verdict |
+| Human gate for sensitive action | MACHINE_ENFORCED_PRIMITIVE | `requiresHumanGateForAction` — no bypass parameter exists in its signature |
+| B/C cannot **authorize** a mutating command | MACHINE_ENFORCED_PRIMITIVE (protocol-decision layer only — see below) | `evaluateCommandRiskGate`'s `roleAuthorized` field, given `activeRole: 'B'\|'C'` |
+| B/C cannot **physically execute** a mutating command | PROCEDURAL_ENFORCED_BY_POLICY | no OS/tool-permission boundary exists between roles in this single-chat model |
+
+**Round 1 correction on B/C mutation**: the original design treated
+"B cannot mutate while auditing" as entirely procedural, which conflated two
+different claims. *Physically* blocking a Bash call would need an
+OS/tool-level hook (like `night-guard.mjs`'s real `PreToolUse` hook around
+an actually-separate spawned child) — genuinely out of scope; hooking the
+operator's own interactive session is a materially more invasive mechanism
+this task does not build. But a protocol-**decision**-layer check needed no
+such hook: `evaluateCommandRiskGate` already computed a command's safety
+class; adding one `activeRole` parameter and one branch (`activeRole ∈
+{B,C} && commandSafetyClass !== 'READ_ONLY' ⇒ roleAuthorized: false`) was
+exactly as practical as everything else in this module, reuses
+`command-safety.mjs` verbatim (no duplicated parser/classifier), and never
+touches `evaluation.authorized` (so `A`'s existing use of this function is
+completely unaffected). This closes the *authorization* half; the
+*physical-prevention* half remains — correctly — procedural, mitigated the
+same way every other role-discipline gap here is: even a violation cannot
+certify a real HOLD-worthy fact away, since every finding/evidence claim
+still funnels through the same fail-closed gates regardless of who
+nominally "is" B at the time.
 
 ## Not built, and why (staying inside what this task justifies)
 

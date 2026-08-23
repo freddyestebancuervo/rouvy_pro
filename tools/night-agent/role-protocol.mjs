@@ -95,7 +95,16 @@ const STATE_TRANSITION_TABLE = Object.freeze({
   WAITING_CI: Object.freeze({ READY_FOR_B: 'A', HOLD: 'A' }),
   READY_FOR_B: Object.freeze({ AUDITING: 'B' }),
   AUDITING: Object.freeze({ HOLD: 'B', READY_FOR_C: 'B' }),
-  HOLD: Object.freeze({ REMEDIATING: 'A' }),
+  // Remediation (Task 2, B audit Round 1, P1 WEAKSET_RESTART_RECOVERY):
+  // NIGHT may route a HOLD directly back to READY_FOR_B, skipping A --
+  // added specifically for the attestation-expired recovery path (a
+  // persisted audit result that lost its live WeakSet attestation across a
+  // process boundary needs B to RE-attest it, not A to "fix" anything; A
+  // did nothing wrong and has no remediation work to do). NIGHT decides
+  // whether a HOLD needs A (REMEDIATING) or just a fresh B pass
+  // (READY_FOR_B) based on the HOLD's own reason -- see
+  // classifyAuditorResultTrust/HOLD_AUDIT_ATTESTATION_EXPIRED below.
+  HOLD: Object.freeze({ REMEDIATING: 'A', READY_FOR_B: 'NIGHT' }),
   REMEDIATING: Object.freeze({ READY_FOR_B: 'A', WAITING_CI: 'A' }),
   READY_FOR_C: Object.freeze({ VALIDATING: 'C' }),
   VALIDATING: Object.freeze({ READY_FOR_HUMAN: 'C', HOLD: 'C' }),
@@ -126,24 +135,36 @@ export function validateStateTransition({ fromState, toState, actingRole }) {
 }
 
 // ---------------------------------------------------------------------------
-// Identity normalization -- deliberately the same narrow rule
-// executor-auditor-gate.mjs already established (trim + whitespace-collapse
-// + case-fold): closes trivial name-variation self-certification, not
-// redefined differently here, reimplemented locally (rather than imported)
-// so this module has zero coupling to that already-hardened Task 1 file and
-// changing one can never silently change the other's security behavior.
+// Identity — CLOSED CANONICAL VOCABULARY, not fuzzy normalization.
+//
+// Remediation (Task 2, B audit Round 1, P0): the original design here
+// mirrored executor-auditor-gate.mjs's trim+whitespace-collapse+case-fold
+// rule -- appropriate THERE because that module's identities are free-form
+// session/context strings (e.g. `night-agent-executor-child:${task.id}`)
+// with no closed vocabulary to check against. THIS module's identities have
+// no such excuse: `executorRole`/`auditorRole`/`validatorRole` are always
+// meant to be exactly one of ROLES ('NIGHT'/'A'/'B'/'C'), a genuinely closed
+// 4-value set. A fuzzy normalizer over an unbounded string space is
+// structurally unable to enumerate every invisible/lookalike Unicode
+// character it should strip -- reproduced live by the audit:
+// `identitiesAreIndependent('A', 'A​')` (a zero-width space appended)
+// returned true, letting the same actor certify itself. The fix is not to
+// extend the strip-list (an endless, always-incomplete blacklist -- the
+// exact lesson this project already learned the hard way in
+// command-safety.mjs's own R4->R5 blacklist->whitelist rewrite); it is to
+// require EXACT membership in the closed ROLES set. 'A​', 'A ', 'a',
+// or any other byte-for-byte deviation from a real role string is simply
+// not a valid identity at all -- not "normalized to A", not "independent
+// from A", just rejected outright.
 // ---------------------------------------------------------------------------
 
-function normalizeRoleIdentity(rawId) {
-  if (typeof rawId !== 'string') return null;
-  const normalized = rawId.trim().replace(/\s+/g, ' ').toLowerCase();
-  return normalized.length > 0 ? normalized : null;
+function isCanonicalRoleIdentity(rawId) {
+  return typeof rawId === 'string' && ROLES.includes(rawId);
 }
 
 function identitiesAreIndependent(idA, idB) {
-  const a = normalizeRoleIdentity(idA);
-  const b = normalizeRoleIdentity(idB);
-  return Boolean(a && b && a !== b);
+  if (!isCanonicalRoleIdentity(idA) || !isCanonicalRoleIdentity(idB)) return false;
+  return idA !== idB;
 }
 
 // ---------------------------------------------------------------------------
@@ -293,7 +314,25 @@ export const AUDIT_HOLD_REASONS = Object.freeze([
   'HOLD_INDEPENDENT_AUDIT_REQUIRED',
   'HOLD_BLOCKING_FINDING',
   'HOLD_MALFORMED_FINDINGS_SHAPE',
+  'HOLD_MALFORMED_FINDING_SEVERITY',
+  'HOLD_MALFORMED_EVIDENCE_SHAPE',
 ]);
+
+// Remediation (Task 2, B audit Round 1, P0): `isFindingBlocking` used to
+// fall through to `return false` (never blocking) for ANY severity value
+// outside 'P0'/'P1'/'P2' -- which meant a typo ('p0', 'P1 '), an
+// unrecognized value ('P4', 'UNKNOWN'), or a missing severity (null/
+// undefined) all silently became non-blocking. Reproduced live by the
+// audit across 7 malformed variants, every one certifying PASS. Fixed by
+// making severity validity a precondition checked BEFORE blocking status
+// is ever computed -- see the isValidFindingSeverity check in
+// certifyAuditResult below, which forces HOLD_MALFORMED_FINDING_SEVERITY
+// before isFindingBlocking is ever called on a malformed entry, exactly
+// mirroring how HOLD_MALFORMED_FINDINGS_SHAPE already gates array-shape
+// validity before iterating.
+function isValidFindingSeverity(severity) {
+  return FINDING_SEVERITIES.includes(severity);
+}
 
 function isFindingBlocking(finding) {
   const severity = finding?.severity;
@@ -305,7 +344,8 @@ function isFindingBlocking(finding) {
     return finding.blocking !== false;
   }
   if (severity === 'P2') return finding?.blocking === true;
-  return false; // P3, or an unrecognized severity, never blocks on its own
+  return false; // P3 never blocks on its own; any other value is rejected
+  // upstream by isValidFindingSeverity before this function is ever called.
 }
 
 /**
@@ -325,7 +365,16 @@ export function certifyAuditResult(input) {
   const rawFindings = input?.findings;
   const findingsShapeValid = rawFindings === undefined || Array.isArray(rawFindings);
   const findings = Array.isArray(rawFindings) ? rawFindings : [];
-  const evidenceClaims = Array.isArray(input?.evidence) ? input.evidence : [];
+  // Remediation (Task 2, B audit Round 1, P1): `evidence` used to be
+  // silently coerced to [] when present-but-malformed (a string, a number,
+  // a bare object instead of an array), discarding it instead of forcing
+  // HOLD -- inconsistent with `findings`' own already-correct handling just
+  // above, and with this whole module's stated "malformed shape is
+  // rejected outright, not silently coerced" philosophy. Now mirrors
+  // findingsShapeValid exactly.
+  const rawEvidence = input?.evidence;
+  const evidenceShapeValid = rawEvidence === undefined || Array.isArray(rawEvidence);
+  const evidenceClaims = Array.isArray(rawEvidence) ? rawEvidence : [];
   const evidenceResult = classifyClaimSet(evidenceClaims);
 
   const independent = identitiesAreIndependent(executorRole, auditorRole);
@@ -344,6 +393,12 @@ export function certifyAuditResult(input) {
   if (AUDITOR_PASS_SHAPED_STATES.includes(requestedState)) {
     if (!findingsShapeValid) {
       return buildAuditorResult({ ...base, finalState: 'HOLD', reason: 'HOLD_MALFORMED_FINDINGS_SHAPE' });
+    }
+    if (!evidenceShapeValid) {
+      return buildAuditorResult({ ...base, finalState: 'HOLD', reason: 'HOLD_MALFORMED_EVIDENCE_SHAPE' });
+    }
+    if (findings.some((f) => !isValidFindingSeverity(f?.severity))) {
+      return buildAuditorResult({ ...base, finalState: 'HOLD', reason: 'HOLD_MALFORMED_FINDING_SEVERITY' });
     }
     if (findings.some(isFindingBlocking)) {
       return buildAuditorResult({ ...base, finalState: 'HOLD', reason: 'HOLD_BLOCKING_FINDING' });
@@ -383,11 +438,72 @@ export const VALIDATOR_RESULT_STATES = Object.freeze(['PASS', 'HOLD']);
 export const VALIDATION_HOLD_REASONS = Object.freeze([
   'HOLD_INDEPENDENT_VALIDATION_REQUIRED',
   'HOLD_AUDIT_RESULT_NOT_ATTESTED',
+  'HOLD_AUDIT_ATTESTATION_EXPIRED',
   'HOLD_HEAD_DRIFT_SINCE_AUDIT',
   'HOLD_CI_SHA_MISMATCH',
   'HOLD_CI_NOT_SUCCESS',
   'HOLD_UNRESOLVED_BLOCKER',
 ]);
+
+// ---------------------------------------------------------------------------
+// Remediation (Task 2, B audit Round 1, P1 WEAKSET_RESTART_RECOVERY):
+//
+// SECURITY INVARIANT (unchanged, deliberately): serialized/persisted JSON
+// is NEVER automatically trusted. `isAttestedAuditorResult` still means,
+// unforgeably, "this exact object identity was really produced by a real
+// certifyAuditResult() call IN THIS LIVE PROCESS" -- a fabricated object,
+// a spread-copy, and a JSON round-trip of a genuine result are ALL
+// rejected identically by `certifyByValidator`, on purpose. This
+// remediation adds a RECOVERY PATH on top of that invariant; it does not
+// weaken it. There is no `attest(serializedObject)` function anywhere in
+// this module, and there must never be one -- see COMMON_AGENT_PROTOCOL.md.
+//
+// OPERABILITY GAP THIS CLOSES: the audit reproduced, across two real
+// separate Node processes, that a LEGITIMATE B result -- genuinely
+// produced, genuinely persisted via protocol-state.mjs's own atomic-write
+// mechanism -- loses its live WeakSet attestation the moment the process
+// that produced it exits. Before this fix, `certifyByValidator` reported
+// `HOLD_AUDIT_RESULT_NOT_ATTESTED` for this case, INDISTINGUISHABLE from
+// outright fabrication, with no path forward. `classifyAuditorResultTrust`
+// below distinguishes "this looks like it MIGHT be a legitimate result
+// that lost its live attestation" (shape-plausible: has the exact field
+// set/types buildAuditorResult always sets) from "this is not even
+// shape-plausible" (definitely not a real result, live or persisted) --
+// this classification NEVER grants trust by itself; it only gives NIGHT/C
+// an ACTIONABLE reason to route back to B for a fresh, REAL re-audit
+// (`READY_FOR_B`, now a valid transition NIGHT may make directly from
+// HOLD -- see STATE_TRANSITION_TABLE above), rather than a dead end. The
+// re-audit IS `certifyAuditResult` called again, for real, by B, observing
+// the CURRENT actual head and CURRENT actual findings/evidence -- exactly
+// what "re-attestation" means; no separate re-attestation function exists
+// because none is needed; the existing certifyAuditResult already does
+// this correctly whenever a caller (B) genuinely re-invokes it.
+// ---------------------------------------------------------------------------
+
+/**
+ * @param {unknown} candidate
+ * @returns {boolean} true only for a plain object carrying the exact field
+ *   shape buildAuditorResult always sets — NEVER a trust signal by itself,
+ *   only used to distinguish "plausibly a persisted, once-legitimate
+ *   result" from "not even shape-plausible" for routing purposes.
+ */
+function looksLikeAuditorResultShape(candidate) {
+  return candidate !== null && typeof candidate === 'object'
+    && candidate.role === 'auditor'
+    && typeof candidate.headSha === 'string' && candidate.headSha.length > 0
+    && AUDITOR_RESULT_STATES.includes(candidate.finalState)
+    && Array.isArray(candidate.findings);
+}
+
+/**
+ * @param {unknown} candidate
+ * @returns {'LIVE_ATTESTATION'|'PERSISTED_AUDIT_SUMMARY_REQUIRES_REATTESTATION'|'UNRECOGNIZED'}
+ */
+export function classifyAuditorResultTrust(candidate) {
+  if (isAttestedAuditorResult(candidate)) return 'LIVE_ATTESTATION';
+  if (looksLikeAuditorResultShape(candidate)) return 'PERSISTED_AUDIT_SUMMARY_REQUIRES_REATTESTATION';
+  return 'UNRECOGNIZED';
+}
 
 /**
  * @param {object} input
@@ -412,8 +528,19 @@ export function certifyByValidator(input) {
   if (!independent) {
     return { ...base, finalState: 'HOLD', reason: 'HOLD_INDEPENDENT_VALIDATION_REQUIRED' };
   }
-  if (!isAttestedAuditorResult(attestedAuditorResult)) {
-    return { ...base, finalState: 'HOLD', reason: 'HOLD_AUDIT_RESULT_NOT_ATTESTED' };
+  const trust = classifyAuditorResultTrust(attestedAuditorResult);
+  if (trust !== 'LIVE_ATTESTATION') {
+    // Same refusal either way -- PASS is never granted from anything short
+    // of a real, live attestation -- but the reason differs so NIGHT/C has
+    // an actionable signal: a shape-plausible-but-unattested result (most
+    // likely a legitimately-persisted summary that crossed a process
+    // boundary) should route back to B for a fresh re-audit
+    // (HOLD -> READY_FOR_B, see STATE_TRANSITION_TABLE); something not even
+    // shape-plausible is not a recovery case at all.
+    const reason = trust === 'PERSISTED_AUDIT_SUMMARY_REQUIRES_REATTESTATION'
+      ? 'HOLD_AUDIT_ATTESTATION_EXPIRED'
+      : 'HOLD_AUDIT_RESULT_NOT_ATTESTED';
+    return { ...base, finalState: 'HOLD', reason };
   }
   if (!currentHeadSha || attestedAuditorResult.headSha !== currentHeadSha) {
     return { ...base, finalState: 'HOLD', reason: 'HOLD_HEAD_DRIFT_SINCE_AUDIT' };
@@ -454,7 +581,22 @@ export function classifyCiWaitStatus({ status, conclusion }) {
 // verbatim, not reimplemented -- UNKNOWN/DESTRUCTIVE/PRODUCTION_MUTATION
 // already can never become `authorized: true` under any input in that
 // module; this function only adds the HUMAN_GATE_TYPE mapping on top.
+//
+// Remediation (Task 2, B audit Round 1, P2 B_C_MUTATION_ENFORCEMENT): the
+// audit correctly distinguished two different claims that the original
+// header comment conflated -- "cannot physically block a Bash call without
+// an OS/tool-level hook" (true, genuinely out of scope) from "cannot even
+// provide a protocol-DECISION-layer check" (false: a pure function
+// combining ACTIVE_ROLE with the already-computed command classification
+// is exactly as practical as everything else in this module). `roleAuthorized`
+// below is that decision-layer check -- NOT a sandbox, NOT enforced by
+// anything that could stop a caller from running a command anyway. It
+// deliberately never touches `evaluation.authorized` (command-safety.mjs's
+// own, unchanged meaning) so A's existing use of this function is
+// completely unaffected by activeRole being absent/'A'/'NIGHT'.
 // ---------------------------------------------------------------------------
+
+const AUDIT_VALIDATE_ROLES = Object.freeze(['B', 'C']);
 
 export function evaluateCommandRiskGate(input) {
   const evaluation = evaluateCommandSafety(input);
@@ -462,7 +604,18 @@ export function evaluateCommandRiskGate(input) {
   if (evaluation.commandSafetyClass === 'PRODUCTION_MUTATION') humanGateType = 'PRODUCTION_ACTION';
   else if (evaluation.commandSafetyClass === 'DESTRUCTIVE') humanGateType = 'DESTRUCTIVE_ACTION';
   else if (evaluation.commandSafetyClass === 'UNKNOWN') humanGateType = 'UNKNOWN_COMMAND_CLASS';
-  return { ...evaluation, humanGateRequired: humanGateType !== null, humanGateType };
+
+  const activeRole = input?.activeRole ?? null;
+  // While auditing/validating, B and C have no legitimate reason to mutate
+  // anything, local or remote -- only READ_ONLY is role-authorized. NIGHT,
+  // A, and an unspecified/absent activeRole are unaffected: this gate
+  // simply has no opinion for them (roleAuthorized: true unconditionally),
+  // deferring entirely to evaluation.authorized.
+  const roleAuthorized = AUDIT_VALIDATE_ROLES.includes(activeRole)
+    ? evaluation.commandSafetyClass === 'READ_ONLY'
+    : true;
+
+  return { ...evaluation, humanGateRequired: humanGateType !== null, humanGateType, activeRole, roleAuthorized };
 }
 
 // requiresHumanGateForAction: deliberately has NO parameter that could ever

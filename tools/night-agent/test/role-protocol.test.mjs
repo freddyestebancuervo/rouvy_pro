@@ -24,6 +24,7 @@ import {
   isAttestedAuditorResult,
   VALIDATOR_RESULT_STATES,
   certifyByValidator,
+  classifyAuditorResultTrust,
   classifyCiWaitStatus,
   evaluateCommandRiskGate,
   requiresHumanGateForAction,
@@ -172,6 +173,47 @@ test('B sharing (a trivial variant of) A\'s identity -> HOLD_INDEPENDENT_AUDIT_R
   }
 });
 
+// Regression for B audit Round 1, P0 EXECUTOR_AUDITOR_SEPARATION: invisible/
+// zero-width/bidi/formatting Unicode characters appended to a role string
+// used to defeat the old fuzzy `.trim().replace(/\s+/g,' ')` normalizer --
+// reproduced live with 'A​'. The fix requires EXACT canonical
+// membership (ROLES = ['NIGHT','A','B','C']), so every one of these must
+// now simply fail to be recognized as ANY valid identity at all (never
+// silently treated as "independent from A", never treated as "equal to
+// A" either -- just rejected).
+test('regression (P0): zero-width and other invisible/formatting Unicode characters appended to a role string never produce a valid, independent identity', () => {
+  const invisibleSuffixes = [
+    '​', // zero-width space
+    '‌', // zero-width non-joiner
+    '‍', // zero-width joiner
+    '⁠', // word joiner
+    '﻿', // BOM / zero-width no-break space
+  ];
+  for (const suffix of invisibleSuffixes) {
+    const auditorRole = `A${suffix}`;
+    const result = certifyAuditResult({ executorRole: 'A', auditorRole, headSha: SHA_B, requestedState: 'PASS', findings: [] });
+    assert.equal(result.finalState, 'HOLD', `auditorRole="A"+${JSON.stringify(suffix)} must not certify PASS`);
+    assert.equal(result.reason, 'HOLD_INDEPENDENT_AUDIT_REQUIRED', `auditorRole="A"+${JSON.stringify(suffix)} must be treated as not-a-valid-identity, not as independent`);
+    assert.equal(result.independent, false);
+  }
+});
+
+test('regression (P0): only EXACT canonical role strings are ever accepted as an identity -- unrecognized values are simply invalid, not fuzzily coerced', () => {
+  for (const bogus of ['NIGHT ', ' A', 'b', 'D', 'agent-a', '__proto__', 'constructor', '', 'A;B', 'null']) {
+    const result = certifyAuditResult({ executorRole: 'A', auditorRole: bogus, headSha: SHA_B, requestedState: 'PASS', findings: [] });
+    assert.equal(result.finalState, 'HOLD', `auditorRole=${JSON.stringify(bogus)} must never certify PASS`);
+    assert.equal(result.reason, 'HOLD_INDEPENDENT_AUDIT_REQUIRED');
+  }
+});
+
+test('a genuinely distinct pair of canonical roles is still, correctly, independent -- the fix does not break the legitimate case', () => {
+  const pairs = [['NIGHT', 'A'], ['A', 'B'], ['B', 'C'], ['A', 'C']];
+  for (const [executorRole, auditorRole] of pairs) {
+    const result = certifyAuditResult({ executorRole, auditorRole, headSha: SHA_B, requestedState: 'PASS', findings: [] });
+    assert.equal(result.independent, true, `${executorRole} vs ${auditorRole} must be independent`);
+  }
+});
+
 test('TEST STRATEGY: a blocking finding forces HOLD even when requestedState is PASS', () => {
   const result = certifyAuditResult({
     executorRole: 'A', auditorRole: 'B', headSha: SHA_B, requestedState: 'PASS',
@@ -201,6 +243,142 @@ test('malformed findings shape (present but not an array) -> HOLD, never silentl
   const result = certifyAuditResult({ executorRole: 'A', auditorRole: 'B', headSha: SHA_B, requestedState: 'PASS', findings: 'not-an-array' });
   assert.equal(result.finalState, 'HOLD');
   assert.equal(result.reason, 'HOLD_MALFORMED_FINDINGS_SHAPE');
+});
+
+// Regression for B audit Round 1, P0 FINDINGS_SEMANTICS: any severity value
+// outside the closed FINDING_SEVERITIES set used to silently fall through
+// isFindingBlocking to "never blocks" -- reproduced live for 7 malformed
+// variants, every one certifying PASS despite representing what was
+// intended to be a real P0/P1. Every one of these must now HOLD instead.
+test('regression (P0): any malformed/unrecognized finding severity forces HOLD, never silently becomes non-blocking', () => {
+  const malformedSeverities = ['p0', 'P0 ', ' P0', 'P1-space', 'P4', 'UNKNOWN', '', null, undefined, 42, {}, []];
+  for (const severity of malformedSeverities) {
+    const result = certifyAuditResult({ executorRole: 'A', auditorRole: 'B', headSha: SHA_B, requestedState: 'PASS', findings: [{ severity, summary: 'x' }] });
+    assert.equal(result.finalState, 'HOLD', `severity=${JSON.stringify(severity)} must force HOLD, not PASS`);
+    assert.equal(result.reason, 'HOLD_MALFORMED_FINDING_SEVERITY');
+  }
+});
+
+test('regression (P0): a finding entirely missing the severity key also forces HOLD (undefined is not silently treated as P3)', () => {
+  const result = certifyAuditResult({ executorRole: 'A', auditorRole: 'B', headSha: SHA_B, requestedState: 'PASS', findings: [{ summary: 'no severity key at all' }] });
+  assert.equal(result.finalState, 'HOLD');
+  assert.equal(result.reason, 'HOLD_MALFORMED_FINDING_SEVERITY');
+});
+
+test('the 4 real, exact FINDING_SEVERITIES values still behave correctly after the fix: P0/P1 block, P2 blocks only if explicit, P3 never blocks', () => {
+  const p0 = certifyAuditResult({ executorRole: 'A', auditorRole: 'B', headSha: SHA_B, requestedState: 'PASS', findings: [{ severity: 'P0', summary: 'x' }] });
+  const p3 = certifyAuditResult({ executorRole: 'A', auditorRole: 'B', headSha: SHA_B, requestedState: 'PASS_WITH_FINDINGS', findings: [{ severity: 'P3', summary: 'x' }] });
+  assert.equal(p0.reason, 'HOLD_BLOCKING_FINDING');
+  assert.equal(p3.finalState, 'PASS_WITH_FINDINGS');
+});
+
+// Regression for B audit Round 1, P1 EVIDENCE_FAIL_CLOSED: `evidence`
+// present-but-malformed used to be silently coerced to [] instead of
+// forcing HOLD, inconsistent with `findings`' own already-correct handling
+// in the very same function.
+test('regression (P1): malformed evidence shape (present but not an array) -> HOLD, never silently coerced to empty', () => {
+  for (const malformed of ['not-an-array', 42, { claimId: 'a', evidenceLevel: 'PROVEN_BY_CODE' } /* bare object, not wrapped in [] */]) {
+    const result = certifyAuditResult({ executorRole: 'A', auditorRole: 'B', headSha: SHA_B, requestedState: 'PASS', findings: [], evidence: malformed });
+    assert.equal(result.finalState, 'HOLD', `evidence=${JSON.stringify(malformed)} must force HOLD, not silently become []`);
+    assert.equal(result.reason, 'HOLD_MALFORMED_EVIDENCE_SHAPE');
+  }
+});
+
+test('evidence genuinely omitted (undefined) remains a normal, valid "no evidence offered" case, not malformed', () => {
+  const result = certifyAuditResult({ executorRole: 'A', auditorRole: 'B', headSha: SHA_B, requestedState: 'PASS', findings: [] });
+  assert.equal(result.finalState, 'PASS');
+});
+
+// =============================================================================
+// Regression for B audit Round 1, P1 WEAKSET_RESTART_RECOVERY.
+// =============================================================================
+
+test('classifyAuditorResultTrust distinguishes LIVE_ATTESTATION / PERSISTED_AUDIT_SUMMARY_REQUIRES_REATTESTATION / UNRECOGNIZED', () => {
+  const genuine = certifyAuditResult({ executorRole: 'A', auditorRole: 'B', headSha: SHA_B, requestedState: 'PASS', findings: [] });
+  // JSON round-trip simulates exactly what protocol-state.mjs's own
+  // persistence does across a real process boundary -- a brand-new object,
+  // never in the live WeakSet, regardless of which process created it.
+  const roundTripped = JSON.parse(JSON.stringify(genuine));
+  assert.equal(classifyAuditorResultTrust(genuine), 'LIVE_ATTESTATION');
+  assert.equal(classifyAuditorResultTrust(roundTripped), 'PERSISTED_AUDIT_SUMMARY_REQUIRES_REATTESTATION');
+  assert.equal(classifyAuditorResultTrust({ totally: 'unrelated' }), 'UNRECOGNIZED');
+  assert.equal(classifyAuditorResultTrust(null), 'UNRECOGNIZED');
+});
+
+test('SECURITY: a round-tripped (or hand-fabricated) result can NEVER directly pass C, regardless of shape-plausibility -- persistence is never automatically trusted', () => {
+  const genuine = certifyAuditResult({ executorRole: 'A', auditorRole: 'B', headSha: SHA_B, requestedState: 'PASS', findings: [] });
+  const roundTripped = JSON.parse(JSON.stringify(genuine));
+  const result = certifyByValidator({ executorRole: 'A', validatorRole: 'C', currentHeadSha: SHA_B, attestedAuditorResult: roundTripped, ciHeadSha: SHA_B, ciStatus: 'SUCCESS' });
+  assert.equal(result.finalState, 'HOLD');
+  assert.equal(result.reason, 'HOLD_AUDIT_ATTESTATION_EXPIRED');
+});
+
+test('OPERABILITY: HOLD(attestation-expired) -> NIGHT routes directly to READY_FOR_B (skipping A, which has no remediation to do) -> B re-attests for real -> C then certifies', () => {
+  const genuine = certifyAuditResult({ executorRole: 'A', auditorRole: 'B', headSha: SHA_B, requestedState: 'PASS', findings: [] });
+  const roundTripped = JSON.parse(JSON.stringify(genuine));
+  const expired = certifyByValidator({ executorRole: 'A', validatorRole: 'C', currentHeadSha: SHA_B, attestedAuditorResult: roundTripped, ciHeadSha: SHA_B, ciStatus: 'SUCCESS' });
+  assert.equal(expired.reason, 'HOLD_AUDIT_ATTESTATION_EXPIRED');
+
+  // NIGHT may route this specific HOLD directly to READY_FOR_B -- a real,
+  // valid state transition, distinct from the A-remediation path (which
+  // also remains valid, for genuine remediation HOLDs).
+  assert.doesNotThrow(() => validateStateTransition({ fromState: 'HOLD', toState: 'READY_FOR_B', actingRole: 'NIGHT' }));
+  assert.doesNotThrow(() => validateStateTransition({ fromState: 'HOLD', toState: 'REMEDIATING', actingRole: 'A' }));
+  assert.throws(() => validateStateTransition({ fromState: 'HOLD', toState: 'READY_FOR_B', actingRole: 'A' }), InvalidRoleTransitionError, 'only NIGHT may make this specific routing decision, not A');
+
+  // B re-attests FOR REAL: a fresh, live call, observing the current
+  // actual head -- never a resurrection of the stale object.
+  const reattested = certifyAuditResult({ executorRole: 'A', auditorRole: 'B', headSha: SHA_B, requestedState: 'PASS', findings: [] });
+  assert.equal(isAttestedAuditorResult(reattested), true);
+
+  const finalValidation = certifyByValidator({ executorRole: 'A', validatorRole: 'C', currentHeadSha: SHA_B, attestedAuditorResult: reattested, ciHeadSha: SHA_B, ciStatus: 'SUCCESS' });
+  assert.equal(finalValidation.finalState, 'PASS');
+});
+
+// =============================================================================
+// Regression for B audit Round 1, P2 B_C_MUTATION_ENFORCEMENT.
+// =============================================================================
+
+test('evaluateCommandRiskGate: B/C are role-authorized for READ_ONLY commands', () => {
+  for (const activeRole of ['B', 'C']) {
+    const result = evaluateCommandRiskGate({ command: 'git status', targetEnvironment: 'Local', activeRole });
+    assert.equal(result.commandSafetyClass, 'READ_ONLY');
+    assert.equal(result.roleAuthorized, true);
+  }
+});
+
+test('evaluateCommandRiskGate: B/C are role-DENIED for any mutation class, even one command-safety.mjs itself would otherwise authorize', () => {
+  const cases = [
+    { activeRole: 'B', command: 'git add x.mjs', targetEnvironment: 'Local' }, // LOCAL_MUTATION
+    { activeRole: 'C', command: 'git add x.mjs', targetEnvironment: 'Local' },
+    { activeRole: 'B', command: 'gh pr create --draft --title x', targetEnvironment: 'Development' }, // REMOTE_NONPROD_MUTATION-shaped
+    { activeRole: 'C', command: 'git reset --hard', targetEnvironment: 'Local' }, // DESTRUCTIVE
+    { activeRole: 'B', command: 'some-unrecognized-tool --flag', targetEnvironment: 'Local' }, // UNKNOWN
+    { activeRole: 'C', command: 'some-unrecognized-tool --flag', targetEnvironment: 'Local' },
+  ];
+  for (const c of cases) {
+    const result = evaluateCommandRiskGate(c);
+    assert.notEqual(result.commandSafetyClass, 'READ_ONLY', `test setup sanity: ${c.command} was expected to be a mutation/unknown class`);
+    assert.equal(result.roleAuthorized, false, `${c.activeRole} + ${c.command} must be role-denied`);
+  }
+});
+
+test('evaluateCommandRiskGate: A, NIGHT, and an unspecified activeRole are completely unaffected by the role gate -- roleAuthorized is always true, deferring to evaluation.authorized', () => {
+  for (const activeRole of ['A', 'NIGHT', undefined]) {
+    const readOnly = evaluateCommandRiskGate({ command: 'git status', targetEnvironment: 'Local', activeRole });
+    const mutation = evaluateCommandRiskGate({ command: 'git add x.mjs', targetEnvironment: 'Local', activeRole });
+    assert.equal(readOnly.roleAuthorized, true);
+    assert.equal(mutation.roleAuthorized, true, `activeRole=${activeRole} must not be role-denied for a mutation -- only B/C are`);
+  }
+});
+
+test('evaluateCommandRiskGate never touches evaluation.authorized (command-safety.mjs\'s own, pre-existing, already-audited field) -- A\'s existing use of this function is unaffected', () => {
+  const withRole = evaluateCommandRiskGate({ command: 'git status', targetEnvironment: 'Local', activeRole: 'B' });
+  const withoutRole = evaluateCommandRiskGate({ command: 'git status', targetEnvironment: 'Local' });
+  assert.equal(withRole.authorized, withoutRole.authorized);
+  const mutWithRole = evaluateCommandRiskGate({ command: 'git add x.mjs', targetEnvironment: 'Local', activeRole: 'C' });
+  const mutWithoutRole = evaluateCommandRiskGate({ command: 'git add x.mjs', targetEnvironment: 'Local' });
+  assert.equal(mutWithRole.authorized, mutWithoutRole.authorized, 'evaluation.authorized itself must be identical regardless of activeRole -- only the new roleAuthorized field differs');
 });
 
 test('TEST STRATEGY: Production claim = UNPROVEN -> HOLD via the reused claim-taxonomy evidence gate', () => {
@@ -244,12 +422,20 @@ test('a genuine PASS audit result, current HEAD matching, matching CI SUCCESS ->
   assert.equal(result.finalState, 'PASS');
 });
 
-test('TEST BRIEF: a hand-fabricated auditor result (never produced by certifyAuditResult) is rejected, even if shape-identical to a real one', () => {
+test('TEST BRIEF: a hand-fabricated auditor result (never produced by certifyAuditResult) is rejected, even if shape-identical to a real one -- classified as attestation-expired (shape-plausible), since a spread copy of a genuine result IS shape-plausible', () => {
   const audit = realPassAudit(SHA_B);
   const fabricated = { ...audit }; // spread copy -- same fields, different object identity
   const result = certifyByValidator({ executorRole: 'A', validatorRole: 'C', currentHeadSha: SHA_B, attestedAuditorResult: fabricated, ciHeadSha: SHA_B, ciStatus: 'SUCCESS' });
   assert.equal(result.finalState, 'HOLD');
-  assert.equal(result.reason, 'HOLD_AUDIT_RESULT_NOT_ATTESTED');
+  assert.equal(result.reason, 'HOLD_AUDIT_ATTESTATION_EXPIRED');
+});
+
+test('a genuinely unrecognizable candidate (not even shape-plausible) is rejected with HOLD_AUDIT_RESULT_NOT_ATTESTED, distinct from the shape-plausible case above', () => {
+  for (const bad of [null, undefined, {}, 'not an object', 42, { role: 'auditor' }, { role: 'auditor', headSha: SHA_B, finalState: 'PASS' /* missing findings array */ }]) {
+    const result = certifyByValidator({ executorRole: 'A', validatorRole: 'C', currentHeadSha: SHA_B, attestedAuditorResult: bad, ciHeadSha: SHA_B, ciStatus: 'SUCCESS' });
+    assert.equal(result.finalState, 'HOLD');
+    assert.equal(result.reason, 'HOLD_AUDIT_RESULT_NOT_ATTESTED', `expected NOT_ATTESTED (not ATTESTATION_EXPIRED) for ${JSON.stringify(bad)}`);
+  }
 });
 
 test('TEST STRATEGY: B audit bound to HEAD1, current HEAD becomes HEAD2 -> C HOLD (head drift)', () => {
