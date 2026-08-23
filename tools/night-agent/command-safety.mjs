@@ -89,22 +89,53 @@ const READ_ONLY_RESOURCE_VERB_PATTERN = /\b(describe|list|get-iam-policy|get|vie
 // service-accounts keys create k.json` all classified READ_ONLY or
 // standing-authorized REMOTE_NONPROD_MUTATION, with `authorized: true` and
 // zero explicit grant, because DESTRUCTIVE_PATTERNS/target-environment logic
-// was never reached once a prefix matched. Fixed by refusing EVERY prefix-
-// allowlist / standing-authorization shortcut outright whenever the command
-// contains any shell chaining/substitution metacharacter -- a chained
-// command can only ever resolve via DESTRUCTIVE_PATTERNS (still a
-// whole-string scan, unaffected) or the general mutation-verb + declared-
-// target-environment path, both of which require either a recognized
-// destructive pattern or an explicit target/authorization to reach anything
-// but UNKNOWN. This is a deliberately blunt, conservative rule (a real
-// argument value containing a literal `|` character would also trip it,
-// pushing a legitimate command to UNKNOWN rather than READ_ONLY) -- fail-
-// safe over-restriction is the accepted cost, consistent with this
-// module's own stated non-goal of being a complete shell parser.
-const SHELL_CHAINING_PATTERN = /(&&|\|\||;|\||`|\$\()/;
+// was never reached once a prefix matched.
+//
+// NIGHT_HARDENING_2-R5 SECURITY CORRECTION (this revision) closes
+// COMMAND-SAFETY-CHAIN-002 (CRITICAL), reproduced live by an independent
+// audit of the R4 fix above: the FIRST fix refused shortcuts on a fixed
+// BLACKLIST of chaining characters (`&&`, `||`, `;`, `|`, backtick, `$(`) --
+// but a blacklist of "known-dangerous" characters is inherently incomplete.
+// The audit reproduced the exact same class of bypass using separators the
+// blacklist never considered: a literal newline (`"git status\ngcloud run
+// deploy svc --project=prod"`), a literal tab, a single `&` (background
+// execution, not `&&`), and process substitution (`<(...)`) all still
+// classified READ_ONLY/standing-authorized with `authorized: true`, because
+// `matchesReadOnlyAllowlist`'s own prefix-boundary regex treats `\s`
+// (matching `\n`/`\t` too) as a valid terminator of a "safe" prefix, and
+// none of `\n`/`\t`/lone-`&`/`<(` were in the R4 blacklist.
+//
+// Fixed by INVERTING the check from a blacklist to a whitelist: a command is
+// only eligible for ANY prefix-based shortcut (READ_ONLY, LOCAL_MUTATION
+// prefix, own-branch/gh-pr standing authorization) if it consists ENTIRELY
+// of characters expected in an ordinary single CLI invocation (letters,
+// digits, a single literal space, and a small fixed set of punctuation used
+// by real flags/paths/quoted strings in this project's own commands:
+// `-_./:=,@'"~`). Any other character at all -- including every whitespace
+// character except a literal space, and every shell metacharacter whether
+// or not this module's authors happened to think of it -- makes the command
+// ineligible. This cannot be defeated by finding "one more" separator
+// character the way the R4 blacklist could, because nothing is enumerated;
+// anything not affirmatively on the safe list is refused. The accepted cost
+// (disclosed, not a defect): a handful of legitimate commands using
+// characters outside this set -- e.g. a `gcloud ... --format='value(status.
+// url)'` call using parentheses -- are also pushed out of the shortcut path
+// and fall through to the general mutation-verb/target-environment logic
+// (usually resolving to UNKNOWN, requiring explicit authorization, rather
+// than the READ_ONLY they arguably deserve). Since none of this module's
+// functions are wired into any real execution path yet, this conservative
+// default is the correct tradeoff for now; a future wiring task can widen
+// the whitelist deliberately, with evidence, for specific real commands
+// this project actually needs classified as a shortcut, rather than this
+// module guessing in advance which characters are "probably fine".
+const SAFE_COMMAND_CHARACTER_PATTERN = /^[A-Za-z0-9 _./:=,@'"~-]*$/;
 
+// Name kept from the R4 revision so every existing call site (which already
+// correctly gates on "is this command chained/ineligible") continues to
+// work unchanged -- only the detection logic underneath changed, from
+// blacklist to whitelist.
 function containsShellChaining(command) {
-  return SHELL_CHAINING_PATTERN.test(command);
+  return !SAFE_COMMAND_CHARACTER_PATTERN.test(command);
 }
 
 // Same audit finding, second half: the fixed `gh api` prefix accepted any

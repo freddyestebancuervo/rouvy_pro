@@ -270,3 +270,56 @@ test('a legitimate own-branch push and gh pr create --draft remain standing-auth
   assert.equal(evaluateCommandSafety({ command: 'git push origin feat/x', currentBranchName: 'feat/x' }).authorized, true);
   assert.equal(evaluateCommandSafety({ command: 'gh pr create --draft --title x' }).authorized, true);
 });
+
+// =============================================================================
+// NIGHT_HARDENING_2-R5 REGRESSION (COMMAND-SAFETY-CHAIN-002, CRITICAL): the
+// R4 blacklist (&&, ||, ;, |, `, $() missed sibling separators -- a
+// newline, a tab, a lone `&`, and process substitution `<(...)` all
+// reproduced the identical bypass with a different character. The R5 fix
+// replaces the blacklist with a whitelist (only a small fixed set of safe
+// characters is eligible for any shortcut at all), which cannot have a
+// "one more missing character" gap the way an enumerated blacklist can.
+// =============================================================================
+
+test('R5 REGRESSION: a newline-separated second command is never READ_ONLY/standing-authorized', () => {
+  const case1 = evaluateCommandSafety({ command: 'git status\ngcloud run deploy svc --project=prod' });
+  assert.notEqual(case1.commandSafetyClass, 'READ_ONLY');
+  assert.equal(case1.authorized, false);
+
+  const case2 = evaluateCommandSafety({ command: 'gh pr edit 73\ngcloud run deploy svc --project=prod', currentBranchName: 'feat/x' });
+  assert.equal(case2.standingAuthorized, false);
+  assert.equal(case2.authorized, false);
+});
+
+test('R5 REGRESSION: a tab-separated second command is never READ_ONLY', () => {
+  const result = evaluateCommandSafety({ command: 'git status\tgcloud run deploy svc --project=prod' });
+  assert.notEqual(result.commandSafetyClass, 'READ_ONLY');
+  assert.equal(result.authorized, false);
+});
+
+test('R5 REGRESSION: a lone "&" (background execution, not "&&") is never READ_ONLY', () => {
+  const result = evaluateCommandSafety({ command: 'git status & gcloud run deploy svc --project=prod' });
+  assert.notEqual(result.commandSafetyClass, 'READ_ONLY');
+  assert.equal(result.authorized, false);
+});
+
+test('R5 REGRESSION: process substitution "<(...)" is never READ_ONLY', () => {
+  const result = evaluateCommandSafety({ command: 'git status <(gcloud run deploy svc --project=prod)' });
+  assert.notEqual(result.commandSafetyClass, 'READ_ONLY');
+  assert.equal(result.authorized, false);
+});
+
+test('R5: the whitelist rejects an arbitrary unrecognized punctuation character too, not just the specific characters found by prior audits', () => {
+  for (const command of ['git status   rm -rf /', 'git status \\ rm -rf /', 'git status { rm -rf / }', 'git status [rm -rf /]']) {
+    const result = evaluateCommandSafety({ command });
+    assert.notEqual(result.commandSafetyClass, 'READ_ONLY', `expected NOT READ_ONLY for: ${JSON.stringify(command)}`);
+  }
+});
+
+test('R5: legitimate commands using only whitelisted characters remain classified correctly (no over-restriction on the common case)', () => {
+  assert.equal(evaluateCommandSafety({ command: 'git status' }).commandSafetyClass, 'READ_ONLY');
+  assert.equal(evaluateCommandSafety({ command: 'gh pr view 73' }).commandSafetyClass, 'READ_ONLY');
+  assert.equal(evaluateCommandSafety({ command: 'gcloud run services describe svc --project=my-project-1' }).commandSafetyClass, 'READ_ONLY');
+  assert.equal(evaluateCommandSafety({ command: 'git push origin feat/x', currentBranchName: 'feat/x' }).authorized, true);
+  assert.equal(evaluateCommandSafety({ command: "git commit -m 'fix: something, done'" }).commandSafetyClass, 'LOCAL_MUTATION');
+});
