@@ -29,6 +29,34 @@ test('normal job with steps + runs-on is accepted', () => {
   assert.deepEqual(result.errors, []);
 });
 
+test('quoted canonical job id is recognized and still subject to runs-on enforcement', () => {
+  const source = `name: quoted\non:\n  workflow_dispatch:\njobs:\n  "guard":\n    steps:\n      - run: echo broken\n`;
+  const result = inspectWorkflowStructure(source, { file: 'quoted.yml' });
+
+  assert.equal(result.errors.some((e) => e.code === 'JOB_WITH_STEPS_MISSING_RUNS_ON' && e.jobId === 'guard'), true);
+});
+
+test('ambiguous job declaration fails closed instead of being silently ignored', () => {
+  const source = `name: ambiguous\non:\n  workflow_dispatch:\njobs:\n  guard: &shared\n    steps:\n      - run: echo broken\n`;
+  const result = inspectWorkflowStructure(source, { file: 'ambiguous.yml' });
+
+  assert.equal(result.errors.some((e) => e.code === 'UNSUPPORTED_OR_MALFORMED_JOB_DECLARATION'), true);
+});
+
+test('duplicate job ids fail closed', () => {
+  const source = `name: duplicate\non:\n  workflow_dispatch:\njobs:\n  guard:\n    runs-on: ubuntu-latest\n    steps:\n      - run: echo one\n  guard:\n    runs-on: ubuntu-latest\n    steps:\n      - run: echo two\n`;
+  const result = inspectWorkflowStructure(source, { file: 'duplicate.yml' });
+
+  assert.equal(result.errors.some((e) => e.code === 'DUPLICATE_JOB_ID'), true);
+});
+
+test('job with neither steps nor reusable uses fails closed', () => {
+  const source = `name: empty-job\non:\n  workflow_dispatch:\njobs:\n  guard:\n    runs-on: ubuntu-latest\n    permissions: {}\n`;
+  const result = inspectWorkflowStructure(source, { file: 'empty-job.yml' });
+
+  assert.equal(result.errors.some((e) => e.code === 'JOB_MISSING_STEPS_OR_USES'), true);
+});
+
 test('reusable-workflow caller may use job-level uses without runs-on', () => {
   const source = `name: reusable\non:\n  workflow_dispatch:\njobs:\n  call-reusable:\n    permissions:\n      contents: read\n    uses: ./.github/workflows/_reusable.yml\n    with:\n      operation: test\n`;
   const result = inspectWorkflowStructure(source, { file: 'reusable.yml' });
