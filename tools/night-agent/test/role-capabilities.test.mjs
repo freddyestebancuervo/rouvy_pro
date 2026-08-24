@@ -90,6 +90,20 @@ test('NIGHT can READ, cannot WRITE_TASK_FILES/AUDIT/VALIDATE/CERTIFY anything', 
   assert.equal(isRoleAllowed('NIGHT', 'CERTIFY_TECHNICAL_PASS'), false);
 });
 
+test('Task 7 hotfix: BIND_PR_IDENTITY is granted ONLY to NIGHT -- A/B/C are all denied', () => {
+  assert.equal(isRoleAllowed('NIGHT', 'BIND_PR_IDENTITY'), true);
+  assert.equal(isRoleAllowed('A', 'BIND_PR_IDENTITY'), false);
+  assert.equal(isRoleAllowed('B', 'BIND_PR_IDENTITY'), false);
+  assert.equal(isRoleAllowed('C', 'BIND_PR_IDENTITY'), false);
+});
+
+test('Task 7 hotfix: BIND_PR_IDENTITY is NOT a human-gate capability -- it is routine NIGHT bookkeeping, distinct from MARK_READY/MERGE', () => {
+  assert.equal(HUMAN_GATE_ONLY_CAPABILITIES.includes('BIND_PR_IDENTITY'), false);
+  const decision = evaluateRoleCapability('NIGHT', 'BIND_PR_IDENTITY');
+  assert.equal(decision.allowed, true);
+  assert.equal(decision.humanGateRequired, false);
+});
+
 // ---------------------------------------------------------------------------
 // Unknown role / unknown capability / malformed input -> fail closed.
 // ---------------------------------------------------------------------------
@@ -216,18 +230,19 @@ test('no capability-typo bypass', () => {
 });
 
 // ---------------------------------------------------------------------------
-// Closed-vocabulary sanity: CAPABILITIES contains exactly the 17 names
-// named in the brief, no more, no fewer.
+// Closed-vocabulary sanity: CAPABILITIES contains exactly the 18 names
+// (17 from Task 3 + BIND_PR_IDENTITY from the Task 7 hotfix), no more, no
+// fewer.
 // ---------------------------------------------------------------------------
 
-test('CAPABILITIES is exactly the 17 named capabilities', () => {
-  assert.equal(CAPABILITIES.length, 17);
+test('CAPABILITIES is exactly the 18 named capabilities', () => {
+  assert.equal(CAPABILITIES.length, 18);
   for (const name of [
     'READ', 'WRITE_TASK_FILES', 'RUN_PRIMARY_TESTS', 'RUN_ADVERSARIAL_TESTS',
     'COMMIT_TASK_BRANCH', 'PUSH_TASK_BRANCH', 'AUDIT', 'CREATE_FINDING',
-    'CERTIFY_AUDIT', 'VALIDATE', 'CERTIFY_TECHNICAL_PASS', 'MARK_READY',
-    'MERGE_MAIN', 'PRODUCTION_MUTATION', 'IAM_MUTATION', 'SECRET_MUTATION',
-    'DESTRUCTIVE_OPERATION',
+    'CERTIFY_AUDIT', 'VALIDATE', 'CERTIFY_TECHNICAL_PASS', 'BIND_PR_IDENTITY',
+    'MARK_READY', 'MERGE_MAIN', 'PRODUCTION_MUTATION', 'IAM_MUTATION',
+    'SECRET_MUTATION', 'DESTRUCTIVE_OPERATION',
   ]) {
     assert.ok(CAPABILITIES.includes(name), `missing capability ${name}`);
   }

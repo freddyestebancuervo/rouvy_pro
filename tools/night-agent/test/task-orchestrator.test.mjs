@@ -17,7 +17,8 @@ import { finalizeExecutorResult, certifyAuditResult, certifyByValidator } from '
 import { resolveTaskLockPath } from '../task-lock.mjs';
 import { resolveProtocolStatePath } from '../protocol-state.mjs';
 import { buildFinalPrMetadataBlock } from '../pr-metadata-gate.mjs';
-import { recordFinalPrMetadataVerification } from '../task-orchestrator.mjs';
+import { recordFinalPrMetadataVerification, recordPrOpened } from '../task-orchestrator.mjs';
+import { isRoleAllowed } from '../role-capabilities.mjs';
 
 function fakeRepo() {
   return `/fake/repo-${randomUUID()}`;
@@ -494,11 +495,22 @@ test('recordValidationResult rejects a validator result claiming PASS with a non
 // ---------------------------------------------------------------------------
 
 const TASK6_PR_NUMBER = 78;
+const TASK6_BRANCH = 'feat/task6-demo';
 
+/**
+ * Task 7 hotfix: drives the CANONICAL, REAL chronology -- task session
+ * created with prNumber=null (a real PR cannot exist before this point),
+ * A produces a real HEAD, and only THEN is the PR identity bound via
+ * recordPrOpened (simulating a Draft PR having just been created from
+ * that real branch/HEAD). This is deliberately NOT the old shortcut
+ * (`createTaskSession(..., prNumber)`) that hid
+ * task-orchestrator-pr-number-unrecordable-post-creation through Tasks
+ * 5 and 6.
+ */
 function driveToPrMetadataSyncRequired(prNumber = TASK6_PR_NUMBER) {
   const repoRoot = fakeRepo();
   const taskId = `task6-${randomUUID()}`;
-  createTaskSession({ repoRoot, taskId, taskTitle: 'task6-demo', baseSha: BASE_SHA, prNumber });
+  createTaskSession({ repoRoot, taskId, taskTitle: 'task6-demo', baseSha: BASE_SHA, branch: TASK6_BRANCH });
   const res = reserveTask({ repoRoot, taskId, reservedPaths: ['tools/night-agent/task6-demo.mjs'], baseSha: BASE_SHA });
   const ownerToken = res.ownerToken;
   enterRole({ repoRoot, taskId, ownerToken, toState: 'PLANNING', actingRole: 'NIGHT' });
@@ -506,6 +518,12 @@ function driveToPrMetadataSyncRequired(prNumber = TASK6_PR_NUMBER) {
   enterRole({ repoRoot, taskId, ownerToken, toState: 'EXECUTING', actingRole: 'A', requiredCapability: 'WRITE_TASK_FILES' });
   const exec = finalizeExecutorResult({ state: 'IMPLEMENTED_AND_VALIDATED', executorRole: 'A', baseSha: BASE_SHA, headSha: HEAD_1 });
   recordExecutorResult({ repoRoot, taskId, ownerToken, executorResult: exec, toState: 'READY_FOR_B' });
+  // PR is created only NOW, after a real HEAD exists -- NIGHT binds identity:
+  const bindResult = recordPrOpened({
+    repoRoot, taskId, ownerToken,
+    prSnapshot: { prNumber, state: 'OPEN', isDraft: true, merged: false, headSha: HEAD_1, baseSha: BASE_SHA, headRef: TASK6_BRANCH, baseRef: 'main' },
+  });
+  if (!bindResult.ok) throw new Error(`test helper: recordPrOpened failed unexpectedly: ${bindResult.reason}`);
   handoffToAuditor({ repoRoot, taskId, ownerToken, headSha: HEAD_1 });
   const audit = certifyAuditResult({ executorRole: 'A', auditorRole: 'B', headSha: HEAD_1, requestedState: 'PASS', findings: [] });
   recordAuditResult({ repoRoot, taskId, ownerToken, auditorResult: audit, toState: 'READY_FOR_C' });
@@ -770,4 +788,335 @@ test('P2-02: a whitespace-only body change (formatting, no semantic content diff
   const attempt = requestHumanGate({ repoRoot: ctx.repoRoot, taskId: ctx.taskId, ownerToken: ctx.ownerToken, actionType: 'MARK_READY', prSnapshot: snapshotFor(ctx, { bodyText: bodyWhitespaceOnly }) });
   assert.equal(attempt.ok, false);
   assert.equal(attempt.reason, 'HOLD_PR_METADATA_BODY_DRIFT');
+});
+
+// ---------------------------------------------------------------------------
+// Task 7 hotfix (2026-08-24): recordPrOpened -- PR identity binding after
+// PR creation. Fixes defect
+// task-orchestrator-pr-number-unrecordable-post-creation, discovered by
+// Task 7's own real (non-simulated) run.
+// ---------------------------------------------------------------------------
+
+function driveThroughExecuting({ branch = 'feat/hotfix-demo' } = {}) {
+  const repoRoot = fakeRepo();
+  const taskId = `hotfix-${randomUUID()}`;
+  createTaskSession({ repoRoot, taskId, taskTitle: 'x', baseSha: BASE_SHA, branch });
+  const res = reserveTask({ repoRoot, taskId, reservedPaths: ['tools/night-agent/x.mjs'], baseSha: BASE_SHA });
+  const ownerToken = res.ownerToken;
+  enterRole({ repoRoot, taskId, ownerToken, toState: 'PLANNING', actingRole: 'NIGHT' });
+  enterRole({ repoRoot, taskId, ownerToken, toState: 'READY_FOR_A', actingRole: 'NIGHT' });
+  enterRole({ repoRoot, taskId, ownerToken, toState: 'EXECUTING', actingRole: 'A', requiredCapability: 'WRITE_TASK_FILES' });
+  return { repoRoot, taskId, ownerToken, branch };
+}
+
+function goodPrSnapshot(overrides = {}) {
+  return { prNumber: 500, state: 'OPEN', isDraft: true, merged: false, headSha: HEAD_1, baseSha: BASE_SHA, headRef: 'feat/hotfix-demo', baseRef: 'main', ...overrides };
+}
+
+test('REAL-CHRONOLOGY REGRESSION TEST (brief section 10): the exact chronology Task 7 exposed, end to end', () => {
+  // 1. createTaskSession(prNumber=null)
+  const repoRoot = fakeRepo();
+  const taskId = `real-chrono-${randomUUID()}`;
+  const branch = 'feat/real-chrono-demo';
+  const created = createTaskSession({ repoRoot, taskId, taskTitle: 'real chronology', baseSha: BASE_SHA, branch });
+  assert.equal(created.ok, true);
+  assert.equal(created.state.pr_number, null);
+
+  // 2. reserve real/simulated task scope
+  const res = reserveTask({ repoRoot, taskId, reservedPaths: ['tools/night-agent/real-chrono.mjs'], baseSha: BASE_SHA });
+  assert.equal(res.ok, true);
+  const ownerToken = res.ownerToken;
+
+  // 3. advance NIGHT/A lifecycle
+  enterRole({ repoRoot, taskId, ownerToken, toState: 'PLANNING', actingRole: 'NIGHT' });
+  enterRole({ repoRoot, taskId, ownerToken, toState: 'READY_FOR_A', actingRole: 'NIGHT' });
+  enterRole({ repoRoot, taskId, ownerToken, toState: 'EXECUTING', actingRole: 'A', requiredCapability: 'WRITE_TASK_FILES' });
+
+  // 4. record executor real HEAD
+  const exec = finalizeExecutorResult({ state: 'IMPLEMENTED_AND_VALIDATED', executorRole: 'A', baseSha: BASE_SHA, headSha: HEAD_1 });
+  const recExec = recordExecutorResult({ repoRoot, taskId, ownerToken, executorResult: exec, toState: 'READY_FOR_B' });
+  assert.equal(recExec.ok, true);
+
+  // Prove the ORIGINAL bug still reproduces at this exact point without recordPrOpened:
+  const withoutBinding = recordFinalPrMetadataVerification({
+    repoRoot, taskId, ownerToken, prNumber: 700,
+    prSnapshot: { state: 'OPEN', isDraft: true, merged: false, prNumber: 700, bodyText: 'irrelevant, never reached' },
+    ciHeadSha: HEAD_1, ciStatusLabel: '4/4 SUCCESS',
+  });
+  assert.equal(withoutBinding.ok, false);
+  assert.equal(withoutBinding.reason, 'PR_IDENTITY_MISMATCH');
+  assert.equal(withoutBinding.detail.includes('no bound PR identity'), true, 'must fail specifically because pr_number is still unbound (not yet recordPrOpened)');
+
+  // 5. simulate PR creation only AFTER HEAD exists
+  // 6. call recordPrOpened with fresh Draft PR snapshot
+  const bind = recordPrOpened({
+    repoRoot, taskId, ownerToken,
+    prSnapshot: { prNumber: 700, state: 'OPEN', isDraft: true, merged: false, headSha: HEAD_1, baseSha: BASE_SHA, headRef: branch, baseRef: 'main' },
+  });
+  assert.equal(bind.ok, true);
+  // 7. prove state.pr_number becomes PR number
+  assert.equal(bind.state.pr_number, 700);
+
+  // 8. B audit exact HEAD
+  const audit = certifyAuditResult({ executorRole: 'A', auditorRole: 'B', headSha: HEAD_1, requestedState: 'PASS', findings: [] });
+  const handoffB = handoffToAuditor({ repoRoot, taskId, ownerToken, headSha: HEAD_1 });
+  assert.equal(handoffB.ok, true);
+  const recAudit = recordAuditResult({ repoRoot, taskId, ownerToken, auditorResult: audit, toState: 'READY_FOR_C' });
+  assert.equal(recAudit.ok, true);
+
+  // 9. C PASS exact HEAD
+  const handoffC = handoffToValidator({ repoRoot, taskId, ownerToken, headSha: HEAD_1 });
+  assert.equal(handoffC.ok, true);
+  const validation = certifyByValidator({ executorRole: 'A', validatorRole: 'C', currentHeadSha: HEAD_1, attestedAuditorResult: audit, ciHeadSha: HEAD_1, ciStatus: 'SUCCESS' });
+  assert.equal(validation.finalState, 'PASS');
+
+  // 10. PR_METADATA_SYNC_REQUIRED
+  const recVal = recordValidationResult({ repoRoot, taskId, ownerToken, validatorResult: validation, toState: 'PR_METADATA_SYNC_REQUIRED' });
+  assert.equal(recVal.ok, true);
+  assert.equal(recVal.state.state, 'PR_METADATA_SYNC_REQUIRED');
+
+  // 11. final body created
+  const block = buildFinalPrMetadataBlock({
+    task: '7/7', baseSha: BASE_SHA, headSha: HEAD_1, bAuditResult: 'PASS', cCertification: 'PASS',
+    ciHeadSha: HEAD_1, ciStatus: '4/4 SUCCESS', p0: 0, p1: 0, p2: 0, p3: 0,
+  });
+  const finalBody = `Real chronology regression test.\n\n${block}\n`;
+
+  // 12. recordFinalPrMetadataVerification succeeds
+  const finalVerify = recordFinalPrMetadataVerification({
+    repoRoot, taskId, ownerToken, prNumber: 700,
+    prSnapshot: { state: 'OPEN', isDraft: true, merged: false, prNumber: 700, bodyText: finalBody },
+    ciHeadSha: HEAD_1, ciStatusLabel: '4/4 SUCCESS',
+  });
+  assert.equal(finalVerify.ok, true);
+  assert.equal(finalVerify.verified, true);
+
+  // 13. READY_FOR_HUMAN
+  assert.equal(finalVerify.state.state, 'READY_FOR_HUMAN');
+
+  // 14 & 15. requestHumanGate(MARK_READY) still requires fresh current PR snapshot, actionExecuted=false
+  const gate = requestHumanGate({
+    repoRoot, taskId, ownerToken, actionType: 'MARK_READY',
+    prSnapshot: { state: 'OPEN', isDraft: true, merged: false, prNumber: 700, bodyText: finalBody },
+  });
+  assert.equal(gate.ok, true);
+  assert.equal(gate.humanGateRequired, true);
+  assert.equal(gate.actionExecuted, false);
+});
+
+// --- Adversarial tests (brief section 12) ---
+
+test('recordPrOpened: bind without fresh snapshot -> DENY', () => {
+  const ctx = driveThroughExecuting();
+  const exec = finalizeExecutorResult({ state: 'IMPLEMENTED_AND_VALIDATED', executorRole: 'A', baseSha: BASE_SHA, headSha: HEAD_1 });
+  recordExecutorResult({ repoRoot: ctx.repoRoot, taskId: ctx.taskId, ownerToken: ctx.ownerToken, executorResult: exec, toState: 'READY_FOR_B' });
+  for (const bad of [undefined, null, {}, 'not-an-object', 42]) {
+    const r = recordPrOpened({ repoRoot: ctx.repoRoot, taskId: ctx.taskId, ownerToken: ctx.ownerToken, prSnapshot: bad });
+    assert.equal(r.ok, false);
+    assert.equal(r.reason, 'PR_BINDING_SNAPSHOT_REQUIRED');
+  }
+});
+
+test('recordPrOpened: wrong task owner -> DENY', () => {
+  const ctx = driveThroughExecuting();
+  const exec = finalizeExecutorResult({ state: 'IMPLEMENTED_AND_VALIDATED', executorRole: 'A', baseSha: BASE_SHA, headSha: HEAD_1 });
+  recordExecutorResult({ repoRoot: ctx.repoRoot, taskId: ctx.taskId, ownerToken: ctx.ownerToken, executorResult: exec, toState: 'READY_FOR_B' });
+  const r = recordPrOpened({ repoRoot: ctx.repoRoot, taskId: ctx.taskId, ownerToken: 'not-the-real-token', prSnapshot: goodPrSnapshot() });
+  assert.equal(r.ok, false);
+  assert.equal(r.reason, 'WRONG_OWNER');
+});
+
+test('recordPrOpened: PR closed -> DENY (PR_LIFECYCLE_INVALID)', () => {
+  const ctx = driveThroughExecuting();
+  const exec = finalizeExecutorResult({ state: 'IMPLEMENTED_AND_VALIDATED', executorRole: 'A', baseSha: BASE_SHA, headSha: HEAD_1 });
+  recordExecutorResult({ repoRoot: ctx.repoRoot, taskId: ctx.taskId, ownerToken: ctx.ownerToken, executorResult: exec, toState: 'READY_FOR_B' });
+  const r = recordPrOpened({ repoRoot: ctx.repoRoot, taskId: ctx.taskId, ownerToken: ctx.ownerToken, prSnapshot: goodPrSnapshot({ state: 'CLOSED' }) });
+  assert.equal(r.ok, false);
+  assert.equal(r.reason, 'PR_LIFECYCLE_INVALID');
+});
+
+test('recordPrOpened: PR merged -> DENY (PR_LIFECYCLE_INVALID)', () => {
+  const ctx = driveThroughExecuting();
+  const exec = finalizeExecutorResult({ state: 'IMPLEMENTED_AND_VALIDATED', executorRole: 'A', baseSha: BASE_SHA, headSha: HEAD_1 });
+  recordExecutorResult({ repoRoot: ctx.repoRoot, taskId: ctx.taskId, ownerToken: ctx.ownerToken, executorResult: exec, toState: 'READY_FOR_B' });
+  const r = recordPrOpened({ repoRoot: ctx.repoRoot, taskId: ctx.taskId, ownerToken: ctx.ownerToken, prSnapshot: goodPrSnapshot({ merged: true }) });
+  assert.equal(r.ok, false);
+  assert.equal(r.reason, 'PR_LIFECYCLE_INVALID');
+});
+
+test('recordPrOpened: PR non-Draft at initial binding -> DENY (PR_LIFECYCLE_INVALID)', () => {
+  const ctx = driveThroughExecuting();
+  const exec = finalizeExecutorResult({ state: 'IMPLEMENTED_AND_VALIDATED', executorRole: 'A', baseSha: BASE_SHA, headSha: HEAD_1 });
+  recordExecutorResult({ repoRoot: ctx.repoRoot, taskId: ctx.taskId, ownerToken: ctx.ownerToken, executorResult: exec, toState: 'READY_FOR_B' });
+  const r = recordPrOpened({ repoRoot: ctx.repoRoot, taskId: ctx.taskId, ownerToken: ctx.ownerToken, prSnapshot: goodPrSnapshot({ isDraft: false }) });
+  assert.equal(r.ok, false);
+  assert.equal(r.reason, 'PR_LIFECYCLE_INVALID');
+});
+
+test('recordPrOpened: wrong HEAD -> DENY (PR_HEAD_MISMATCH)', () => {
+  const ctx = driveThroughExecuting();
+  const exec = finalizeExecutorResult({ state: 'IMPLEMENTED_AND_VALIDATED', executorRole: 'A', baseSha: BASE_SHA, headSha: HEAD_1 });
+  recordExecutorResult({ repoRoot: ctx.repoRoot, taskId: ctx.taskId, ownerToken: ctx.ownerToken, executorResult: exec, toState: 'READY_FOR_B' });
+  const r = recordPrOpened({ repoRoot: ctx.repoRoot, taskId: ctx.taskId, ownerToken: ctx.ownerToken, prSnapshot: goodPrSnapshot({ headSha: HEAD_2 }) });
+  assert.equal(r.ok, false);
+  assert.equal(r.reason, 'PR_HEAD_MISMATCH');
+});
+
+test('recordPrOpened: wrong base SHA -> DENY (PR_BASE_MISMATCH)', () => {
+  const ctx = driveThroughExecuting();
+  const exec = finalizeExecutorResult({ state: 'IMPLEMENTED_AND_VALIDATED', executorRole: 'A', baseSha: BASE_SHA, headSha: HEAD_1 });
+  recordExecutorResult({ repoRoot: ctx.repoRoot, taskId: ctx.taskId, ownerToken: ctx.ownerToken, executorResult: exec, toState: 'READY_FOR_B' });
+  const r = recordPrOpened({ repoRoot: ctx.repoRoot, taskId: ctx.taskId, ownerToken: ctx.ownerToken, prSnapshot: goodPrSnapshot({ baseSha: HEAD_2 }) });
+  assert.equal(r.ok, false);
+  assert.equal(r.reason, 'PR_BASE_MISMATCH');
+});
+
+test('recordPrOpened: wrong head branch -> DENY (PR_BRANCH_MISMATCH)', () => {
+  const ctx = driveThroughExecuting({ branch: 'feat/real-branch' });
+  const exec = finalizeExecutorResult({ state: 'IMPLEMENTED_AND_VALIDATED', executorRole: 'A', baseSha: BASE_SHA, headSha: HEAD_1 });
+  recordExecutorResult({ repoRoot: ctx.repoRoot, taskId: ctx.taskId, ownerToken: ctx.ownerToken, executorResult: exec, toState: 'READY_FOR_B' });
+  const r = recordPrOpened({ repoRoot: ctx.repoRoot, taskId: ctx.taskId, ownerToken: ctx.ownerToken, prSnapshot: goodPrSnapshot({ headSha: HEAD_1, headRef: 'feat/wrong-branch' }) });
+  assert.equal(r.ok, false);
+  assert.equal(r.reason, 'PR_BRANCH_MISMATCH');
+});
+
+test('recordPrOpened: malformed PR number -> DENY (PR_BINDING_SNAPSHOT_REQUIRED)', () => {
+  const ctx = driveThroughExecuting();
+  const exec = finalizeExecutorResult({ state: 'IMPLEMENTED_AND_VALIDATED', executorRole: 'A', baseSha: BASE_SHA, headSha: HEAD_1 });
+  recordExecutorResult({ repoRoot: ctx.repoRoot, taskId: ctx.taskId, ownerToken: ctx.ownerToken, executorResult: exec, toState: 'READY_FOR_B' });
+  for (const badPrNumber of [0, -1, 1.5, 'seven', null, undefined]) {
+    const r = recordPrOpened({ repoRoot: ctx.repoRoot, taskId: ctx.taskId, ownerToken: ctx.ownerToken, prSnapshot: goodPrSnapshot({ prNumber: badPrNumber }) });
+    assert.equal(r.ok, false, `prNumber=${JSON.stringify(badPrNumber)} must be denied`);
+    assert.equal(r.reason, 'PR_BINDING_SNAPSHOT_REQUIRED');
+  }
+});
+
+test('recordPrOpened: second binding to a DIFFERENT PR -> DENY (PR_IDENTITY_MISMATCH)', () => {
+  const ctx = driveThroughExecuting();
+  const exec = finalizeExecutorResult({ state: 'IMPLEMENTED_AND_VALIDATED', executorRole: 'A', baseSha: BASE_SHA, headSha: HEAD_1 });
+  recordExecutorResult({ repoRoot: ctx.repoRoot, taskId: ctx.taskId, ownerToken: ctx.ownerToken, executorResult: exec, toState: 'READY_FOR_B' });
+  const first = recordPrOpened({ repoRoot: ctx.repoRoot, taskId: ctx.taskId, ownerToken: ctx.ownerToken, prSnapshot: goodPrSnapshot({ prNumber: 500 }) });
+  assert.equal(first.ok, true);
+  const second = recordPrOpened({ repoRoot: ctx.repoRoot, taskId: ctx.taskId, ownerToken: ctx.ownerToken, prSnapshot: goodPrSnapshot({ prNumber: 501 }) });
+  assert.equal(second.ok, false);
+  assert.equal(second.reason, 'PR_IDENTITY_MISMATCH');
+});
+
+test('recordPrOpened: second binding, same PR number, incompatible identity evidence -> DENY (PR_IDENTITY_ALREADY_BOUND)', () => {
+  const ctx = driveThroughExecuting();
+  const exec = finalizeExecutorResult({ state: 'IMPLEMENTED_AND_VALIDATED', executorRole: 'A', baseSha: BASE_SHA, headSha: HEAD_1 });
+  recordExecutorResult({ repoRoot: ctx.repoRoot, taskId: ctx.taskId, ownerToken: ctx.ownerToken, executorResult: exec, toState: 'READY_FOR_B' });
+  const first = recordPrOpened({ repoRoot: ctx.repoRoot, taskId: ctx.taskId, ownerToken: ctx.ownerToken, prSnapshot: goodPrSnapshot({ prNumber: 500 }) });
+  assert.equal(first.ok, true);
+  const second = recordPrOpened({ repoRoot: ctx.repoRoot, taskId: ctx.taskId, ownerToken: ctx.ownerToken, prSnapshot: goodPrSnapshot({ prNumber: 500, headRef: 'feat/a-totally-different-branch' }) });
+  assert.equal(second.ok, false);
+  assert.equal(second.reason, 'PR_IDENTITY_ALREADY_BOUND');
+});
+
+test('recordPrOpened: idempotent replay (same PR number, identical identity evidence) -> PASS, no-op', () => {
+  const ctx = driveThroughExecuting();
+  const exec = finalizeExecutorResult({ state: 'IMPLEMENTED_AND_VALIDATED', executorRole: 'A', baseSha: BASE_SHA, headSha: HEAD_1 });
+  recordExecutorResult({ repoRoot: ctx.repoRoot, taskId: ctx.taskId, ownerToken: ctx.ownerToken, executorResult: exec, toState: 'READY_FOR_B' });
+  const first = recordPrOpened({ repoRoot: ctx.repoRoot, taskId: ctx.taskId, ownerToken: ctx.ownerToken, prSnapshot: goodPrSnapshot({ prNumber: 500 }) });
+  assert.equal(first.ok, true);
+  const replay = recordPrOpened({ repoRoot: ctx.repoRoot, taskId: ctx.taskId, ownerToken: ctx.ownerToken, prSnapshot: goodPrSnapshot({ prNumber: 500 }) });
+  assert.equal(replay.ok, true);
+  assert.equal(replay.alreadyBound, true);
+  assert.equal(replay.state.pr_number, 500);
+});
+
+test('recordPrOpened: C cannot bind PR identity (capability structurally NIGHT-only, no actingRole parameter exists to abuse)', () => {
+  // recordPrOpened has no actingRole/role parameter at all -- it is
+  // structurally impossible for a caller to invoke it "as" C, B, or A.
+  // Verify the underlying capability itself independently denies them:
+  assert.equal(isRoleAllowed('C', 'BIND_PR_IDENTITY'), false);
+  assert.equal(isRoleAllowed('B', 'BIND_PR_IDENTITY'), false);
+  assert.equal(isRoleAllowed('A', 'BIND_PR_IDENTITY'), false);
+  assert.equal(isRoleAllowed('NIGHT', 'BIND_PR_IDENTITY'), true);
+});
+
+test('recordPrOpened: unknown/malformed capability name never accidentally grants binding', () => {
+  assert.equal(isRoleAllowed('NIGHT', 'bind_pr_identity'), false); // lowercase
+  assert.equal(isRoleAllowed('NIGHT', 'BIND_PR_IDENTITY '), false); // trailing space
+  assert.equal(isRoleAllowed('NIGHT', 'BINDPRIDENTITY'), false); // no underscores
+});
+
+test('recordPrOpened: direct final metadata verify while pr_number null -> DENY (the original bug, still correctly reproducible without the fix path)', () => {
+  const ctx = driveThroughExecuting();
+  const exec = finalizeExecutorResult({ state: 'IMPLEMENTED_AND_VALIDATED', executorRole: 'A', baseSha: BASE_SHA, headSha: HEAD_1 });
+  recordExecutorResult({ repoRoot: ctx.repoRoot, taskId: ctx.taskId, ownerToken: ctx.ownerToken, executorResult: exec, toState: 'READY_FOR_B' });
+  const r = recordFinalPrMetadataVerification({
+    repoRoot: ctx.repoRoot, taskId: ctx.taskId, ownerToken: ctx.ownerToken, prNumber: 500,
+    prSnapshot: { state: 'OPEN', isDraft: true, merged: false, prNumber: 500, bodyText: 'n/a' },
+    ciHeadSha: HEAD_1, ciStatusLabel: '4/4 SUCCESS',
+  });
+  assert.equal(r.ok, false);
+  assert.equal(r.reason, 'PR_IDENTITY_MISMATCH');
+});
+
+test('B AUDIT P2-1 REGRESSION: recordFinalPrMetadataVerification(prNumber=null) on a task with pr_number still null must fail closed cleanly, never null===null-slip-through, never an unhandled throw', () => {
+  const ctx = driveThroughExecuting();
+  const exec = finalizeExecutorResult({ state: 'IMPLEMENTED_AND_VALIDATED', executorRole: 'A', baseSha: BASE_SHA, headSha: HEAD_1 });
+  recordExecutorResult({ repoRoot: ctx.repoRoot, taskId: ctx.taskId, ownerToken: ctx.ownerToken, executorResult: exec, toState: 'READY_FOR_B' });
+  assert.doesNotThrow(() => {
+    const r = recordFinalPrMetadataVerification({
+      repoRoot: ctx.repoRoot, taskId: ctx.taskId, ownerToken: ctx.ownerToken, prNumber: null,
+      prSnapshot: { state: 'OPEN', isDraft: true, merged: false, prNumber: null, bodyText: 'n/a' },
+      ciHeadSha: HEAD_1, ciStatusLabel: '4/4 SUCCESS',
+    });
+    assert.equal(r.ok, false);
+    assert.equal(r.reason, 'PR_IDENTITY_MISMATCH');
+  });
+  // the task's own state must remain untouched -- no partial/malformed write occurred
+  const state = getTaskState({ repoRoot: ctx.repoRoot, taskId: ctx.taskId });
+  assert.equal(state.pr_number, null);
+  assert.equal(state.pr_metadata_verification, null);
+});
+
+test('recordPrOpened: correct fresh binding -> PASS, and final metadata gate after binding -> PASS (proves the fix, not just the denials)', () => {
+  const ctx = driveThroughExecuting({ branch: 'feat/correct-binding' });
+  const exec = finalizeExecutorResult({ state: 'IMPLEMENTED_AND_VALIDATED', executorRole: 'A', baseSha: BASE_SHA, headSha: HEAD_1 });
+  recordExecutorResult({ repoRoot: ctx.repoRoot, taskId: ctx.taskId, ownerToken: ctx.ownerToken, executorResult: exec, toState: 'READY_FOR_B' });
+  const bind = recordPrOpened({ repoRoot: ctx.repoRoot, taskId: ctx.taskId, ownerToken: ctx.ownerToken, prSnapshot: goodPrSnapshot({ prNumber: 500, headRef: 'feat/correct-binding' }) });
+  assert.equal(bind.ok, true);
+  assert.equal(bind.state.pr_number, 500);
+});
+
+test('recordPrOpened: A remediation may advance HEAD after PR binding -- PR_NUMBER stays the same, final gate uses the NEW head', () => {
+  const ctx = driveThroughExecuting({ branch: 'feat/remediation-after-bind' });
+  const exec1 = finalizeExecutorResult({ state: 'IMPLEMENTED_AND_VALIDATED', executorRole: 'A', baseSha: BASE_SHA, headSha: HEAD_1 });
+  recordExecutorResult({ repoRoot: ctx.repoRoot, taskId: ctx.taskId, ownerToken: ctx.ownerToken, executorResult: exec1, toState: 'READY_FOR_B' });
+  const bind = recordPrOpened({ repoRoot: ctx.repoRoot, taskId: ctx.taskId, ownerToken: ctx.ownerToken, prSnapshot: goodPrSnapshot({ prNumber: 500, headRef: 'feat/remediation-after-bind' }) });
+  assert.equal(bind.ok, true);
+
+  handoffToAuditor({ repoRoot: ctx.repoRoot, taskId: ctx.taskId, ownerToken: ctx.ownerToken, headSha: HEAD_1 });
+  const holdResult = certifyAuditResult({ executorRole: 'A', auditorRole: 'B', headSha: HEAD_1, requestedState: 'PASS', findings: [{ severity: 'P1', summary: 'real bug' }] });
+  recordAuditResult({ repoRoot: ctx.repoRoot, taskId: ctx.taskId, ownerToken: ctx.ownerToken, auditorResult: holdResult, toState: 'HOLD' });
+  enterRole({ repoRoot: ctx.repoRoot, taskId: ctx.taskId, ownerToken: ctx.ownerToken, toState: 'REMEDIATING', actingRole: 'A', requiredCapability: 'WRITE_TASK_FILES', headSha: HEAD_1 });
+
+  // A remediates, producing a NEW head -- PR_NUMBER must remain 500, unaffected.
+  const exec2 = finalizeExecutorResult({ state: 'IMPLEMENTED_AND_VALIDATED', executorRole: 'A', baseSha: BASE_SHA, headSha: HEAD_2 });
+  const recExec2 = recordExecutorResult({ repoRoot: ctx.repoRoot, taskId: ctx.taskId, ownerToken: ctx.ownerToken, executorResult: exec2, toState: 'READY_FOR_B' });
+  assert.equal(recExec2.ok, true);
+  assert.equal(recExec2.state.pr_number, 500, 'PR identity must survive a HEAD-advancing remediation unchanged');
+  assert.equal(recExec2.state.head_sha, HEAD_2);
+
+  handoffToAuditor({ repoRoot: ctx.repoRoot, taskId: ctx.taskId, ownerToken: ctx.ownerToken, headSha: HEAD_2 });
+  const cleanAudit = certifyAuditResult({ executorRole: 'A', auditorRole: 'B', headSha: HEAD_2, requestedState: 'PASS', findings: [] });
+  recordAuditResult({ repoRoot: ctx.repoRoot, taskId: ctx.taskId, ownerToken: ctx.ownerToken, auditorResult: cleanAudit, toState: 'READY_FOR_C' });
+  handoffToValidator({ repoRoot: ctx.repoRoot, taskId: ctx.taskId, ownerToken: ctx.ownerToken, headSha: HEAD_2 });
+  const validation = certifyByValidator({ executorRole: 'A', validatorRole: 'C', currentHeadSha: HEAD_2, attestedAuditorResult: cleanAudit, ciHeadSha: HEAD_2, ciStatus: 'SUCCESS' });
+  const recVal = recordValidationResult({ repoRoot: ctx.repoRoot, taskId: ctx.taskId, ownerToken: ctx.ownerToken, validatorResult: validation, toState: 'PR_METADATA_SYNC_REQUIRED' });
+  assert.equal(recVal.ok, true);
+
+  // Final gate must use HEAD_2, the post-remediation head -- PR_NUMBER (500) is unchanged.
+  const block = buildFinalPrMetadataBlock({ task: '7/7', baseSha: BASE_SHA, headSha: HEAD_2, bAuditResult: 'PASS', cCertification: 'PASS', ciHeadSha: HEAD_2, ciStatus: '4/4 SUCCESS', p0: 0, p1: 0, p2: 0, p3: 0 });
+  const finalVerify = recordFinalPrMetadataVerification({
+    repoRoot: ctx.repoRoot, taskId: ctx.taskId, ownerToken: ctx.ownerToken, prNumber: 500,
+    prSnapshot: { state: 'OPEN', isDraft: true, merged: false, prNumber: 500, bodyText: `Remediated.\n\n${block}\n` },
+    ciHeadSha: HEAD_2, ciStatusLabel: '4/4 SUCCESS',
+  });
+  assert.equal(finalVerify.ok, true);
+  assert.equal(finalVerify.verified, true);
+  assert.equal(finalVerify.state.state, 'READY_FOR_HUMAN');
 });

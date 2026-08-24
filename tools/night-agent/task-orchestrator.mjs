@@ -123,6 +123,128 @@ export function getTaskState({ repoRoot, taskId }) {
 }
 
 // ---------------------------------------------------------------------------
+// Task 7 hotfix (2026-08-24, defect
+// task-orchestrator-pr-number-unrecordable-post-creation): PR IDENTITY
+// BINDING.
+//
+// ROOT CAUSE THIS FIXES: a real PR cannot exist before its own branch has
+// at least one commit, and a task session is created BEFORE any commit
+// exists (NIGHT creates the session, then A does the work that produces
+// the branch a PR gets opened from). `createTaskSession`'s `prNumber`
+// parameter was, before this fix, the ONLY place `pr_number` could ever be
+// set -- meaning `recordFinalPrMetadataVerification`'s mandatory
+// `state.pr_number === prNumber` check could never pass for any task
+// following the system's own real chronology, only for synthetic tests
+// that supplied `prNumber` at creation time as a shortcut (exactly what
+// hid this defect through Tasks 5 and 6).
+//
+// DESIGN: PR identity (which PR number a task's work became) is a
+// DIFFERENT thing from certification identity (which exact HEAD is being
+// certified right now) -- see brief section 13. `recordPrOpened` binds the
+// former, once, as routine lifecycle bookkeeping; it deliberately does NOT
+// touch `state.state` (no PROTOCOL_STATES transition, no
+// STATE_TRANSITION_TABLE entry needed) -- it may be called at whatever
+// point in the lifecycle the real PR actually gets created (typically
+// after A's first `recordExecutorResult`, before B's `handoffToAuditor`).
+// HEAD is still free to advance afterward via ordinary A remediation;
+// `recordFinalPrMetadataVerification` (unchanged by this fix) continues to
+// bind CURRENT HEAD independently, every time it is called.
+//
+// AUTHORITY: NIGHT only (`BIND_PR_IDENTITY`, role-capabilities.mjs) --
+// NIGHT coordinates lifecycle/handoffs and never certifies code, so it has
+// no incentive-adjacent reason to misrepresent which PR a task belongs to.
+// There is no actingRole parameter here (unlike `enterRole`): this
+// function always acts as NIGHT, structurally, the same way
+// `finalizeExecutorResult` always acts as A.
+//
+// ONE-TIME, NOT GENERAL-PURPOSE: this is deliberately NOT a
+// `setTaskField`/`updateAnyState` API. It binds exactly one field
+// (`pr_number`) under a closed set of checks, and refuses ANY subsequent
+// call that would change an already-bound PR number to a DIFFERENT one
+// (`PR_IDENTITY_MISMATCH`) or that supplies incompatible identity evidence
+// for the SAME PR number (`PR_IDENTITY_ALREADY_BOUND`) -- a genuinely
+// identical replay (same PR number, same head/base/branch) is a safe,
+// idempotent no-op.
+// ---------------------------------------------------------------------------
+
+/**
+ * @param {object} params
+ * @param {string} params.repoRoot
+ * @param {string} params.taskId
+ * @param {string} params.ownerToken
+ * @param {object} params.prSnapshot a FRESH, externally-obtained PR
+ *   snapshot -- `{prNumber, state, isDraft, merged, headSha, baseSha,
+ *   headRef, baseRef}`. This module never fetches it itself (no GitHub
+ *   network calls anywhere in this codebase's pure layer).
+ * @param {string} [params.now]
+ * @returns {{ok:boolean, reason?:string, detail?:string, state?:object, alreadyBound?:boolean}}
+ */
+export function recordPrOpened({ repoRoot, taskId, ownerToken, prSnapshot, now }) {
+  const capDecision = evaluateRoleCapability('NIGHT', 'BIND_PR_IDENTITY');
+  if (!capDecision.allowed) return { ok: false, reason: `CAPABILITY_DENIED:${capDecision.reason}` };
+
+  const lockCheck = verifyTaskLockOwnership({ repoRoot, taskId, ownerToken });
+  if (!lockCheck.valid) return { ok: false, reason: lockCheck.reason ?? 'LOCK_OWNERSHIP_INVALID' };
+
+  const state = loadState(repoRoot, taskId);
+  if (state === null) return { ok: false, reason: 'NO_TASK_SESSION' };
+
+  if (
+    prSnapshot === null || typeof prSnapshot !== 'object'
+    || typeof prSnapshot.prNumber !== 'number' || !Number.isInteger(prSnapshot.prNumber) || prSnapshot.prNumber <= 0
+    || typeof prSnapshot.state !== 'string'
+    || typeof prSnapshot.isDraft !== 'boolean'
+    || typeof prSnapshot.merged !== 'boolean'
+    || !isNonEmptyString(prSnapshot.headSha)
+    || !isNonEmptyString(prSnapshot.baseSha)
+    || !isNonEmptyString(prSnapshot.headRef)
+    || !isNonEmptyString(prSnapshot.baseRef)
+  ) {
+    return { ok: false, reason: 'PR_BINDING_SNAPSHOT_REQUIRED' };
+  }
+
+  if (state.pr_number !== null) {
+    if (state.pr_number !== prSnapshot.prNumber) {
+      return { ok: false, reason: 'PR_IDENTITY_MISMATCH', detail: `task already bound to PR #${state.pr_number}, cannot rebind to PR #${prSnapshot.prNumber}` };
+    }
+    const identicalReplay = state.head_sha === prSnapshot.headSha
+      && state.base_sha === prSnapshot.baseSha
+      && (state.branch === null || state.branch === prSnapshot.headRef);
+    if (!identicalReplay) {
+      return { ok: false, reason: 'PR_IDENTITY_ALREADY_BOUND', detail: `PR #${state.pr_number} already bound with different identity evidence` };
+    }
+    return { ok: true, state, alreadyBound: true };
+  }
+
+  if (state.pr_metadata_verification !== null) {
+    return { ok: false, reason: 'PR_IDENTITY_ALREADY_BOUND', detail: 'a final metadata verification already exists -- identity binding must precede it, never follow it' };
+  }
+  if (prSnapshot.state !== 'OPEN' || prSnapshot.merged === true) {
+    return { ok: false, reason: 'PR_LIFECYCLE_INVALID', detail: 'PR must be OPEN and unmerged at initial binding time' };
+  }
+  if (prSnapshot.isDraft !== true) {
+    return { ok: false, reason: 'PR_LIFECYCLE_INVALID', detail: 'PR must still be Draft at initial binding time' };
+  }
+  if (prSnapshot.headSha !== state.head_sha) {
+    return { ok: false, reason: 'PR_HEAD_MISMATCH', detail: `snapshot headSha ${prSnapshot.headSha} does not match task head_sha ${state.head_sha}` };
+  }
+  if (prSnapshot.baseSha !== state.base_sha) {
+    return { ok: false, reason: 'PR_BASE_MISMATCH', detail: `snapshot baseSha ${prSnapshot.baseSha} does not match task base_sha ${state.base_sha}` };
+  }
+  if (state.branch !== null && prSnapshot.headRef !== state.branch) {
+    return { ok: false, reason: 'PR_BRANCH_MISMATCH', detail: `snapshot headRef ${prSnapshot.headRef} does not match task branch ${state.branch}` };
+  }
+
+  const nextState = advanceProtocolState(state, {
+    pr_number: prSnapshot.prNumber,
+    active_role: 'NIGHT',
+    previous_role: state.active_role,
+  }, now);
+  persistState(repoRoot, taskId, nextState);
+  return { ok: true, state: nextState };
+}
+
+// ---------------------------------------------------------------------------
 // reserveTask -- STATIC conflict check (against caller-supplied queue-level
 // declarations, reusing queue.mjs's pathsOverlap verbatim) THEN RUNTIME
 // conflict check + double-acquire + corruption-fails-closed (via
@@ -418,6 +540,18 @@ export function recordFinalPrMetadataVerification({
 
   const state = loadState(repoRoot, taskId);
   if (state === null) return { ok: false, reason: 'NO_TASK_SESSION' };
+  // Remediation (Task 7 hotfix, B audit, P2-1): `state.pr_number !== prNumber`
+  // alone is not sufficient -- in JS, `null !== null` is `false`, so a task
+  // that never had `recordPrOpened` called (pr_number legitimately still
+  // null) combined with a caller passing `prNumber: null` (e.g. forwarding
+  // an unchecked field) would incorrectly read as "not mismatched" and fall
+  // through to content verification instead of being denied here, the
+  // correct, early point. This explicit `typeof` check closes that hole:
+  // a task with no bound PR identity is ALWAYS denied here, regardless of
+  // what the caller passes as `prNumber`.
+  if (typeof state.pr_number !== 'number') {
+    return { ok: false, reason: 'PR_IDENTITY_MISMATCH', detail: 'task has no bound PR identity -- call recordPrOpened first' };
+  }
   if (state.pr_number !== prNumber) return { ok: false, reason: 'PR_IDENTITY_MISMATCH', detail: `task's recorded pr_number is ${state.pr_number}, verification requested for ${prNumber}` };
   if (!isNonEmptyString(ciHeadSha) || ciHeadSha !== state.head_sha) {
     return { ok: false, reason: 'HOLD_HEAD_DRIFT', detail: `CI head ${JSON.stringify(ciHeadSha)} does not match task head_sha ${state.head_sha}` };

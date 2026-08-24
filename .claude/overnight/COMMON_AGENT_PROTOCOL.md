@@ -1,4 +1,4 @@
-# Common Agent Protocol (Task 2, 2026-08-23; Task 3, 2026-08-23; Task 4, 2026-08-23; Task 6, 2026-08-23)
+# Common Agent Protocol (Task 2, 2026-08-23; Task 3, 2026-08-23; Task 4, 2026-08-23; Task 6, 2026-08-23; Task 7 hotfix, 2026-08-24)
 
 A single-chat, four-role coordination protocol for `NIGHT` (orchestrator),
 `A` (executor), `B` (independent adversarial auditor), and `C` (validator/
@@ -44,7 +44,7 @@ locks, handoff, resume" below), and `tools/night-agent/pr-metadata-gate.mjs`
 `tools/night-agent/test/task-lock.test.mjs`,
 `tools/night-agent/test/task-orchestrator.test.mjs`,
 `tools/night-agent/test/full-role-simulation.test.mjs`,
-`tools/night-agent/test/pr-metadata-gate.test.mjs` (1493 tests total,
+`tools/night-agent/test/pr-metadata-gate.test.mjs` (1533 tests total,
 full Night Agent suite).
 
 ## Final PR metadata gate (Task 6)
@@ -103,6 +103,50 @@ PASS records a HEAD-bound `pr_metadata_verification` marker
 (`{pr_number, head_sha, body_sha256, verified_at}` — a new closed
 sub-schema field on `protocol-state.mjs`, never a full body copy, no
 secrets).
+
+**Task 7 hotfix (2026-08-24) — PR identity binding after PR creation.**
+Task 7's own first REAL (non-simulated) run discovered
+`task-orchestrator-pr-number-unrecordable-post-creation`: `createTaskSession`
+was the ONLY place `pr_number` could ever be set, but a real PR cannot
+exist before its own branch has a commit — and a task session is created
+BEFORE any commit exists. `recordFinalPrMetadataVerification`'s mandatory
+`state.pr_number === prNumber` check therefore could never pass for any
+task following the system's own real chronology; only synthetic tests
+supplying `prNumber` at creation time (a shortcut used throughout Tasks 5
+and 6's own suites) ever exercised the gate successfully, which is why the
+defect went undetected until a genuinely real run.
+
+Fixed with a new, narrowly-scoped operation, `recordPrOpened`, NIGHT-only
+(`BIND_PR_IDENTITY`, role-capabilities.mjs — denied to A/B/C, and not a
+human-gate capability: binding is routine lifecycle bookkeeping, not an
+authorization decision). It binds `pr_number` exactly once, requiring:
+task ownership; a fresh snapshot (`{prNumber, state, isDraft, merged,
+headSha, baseSha, headRef, baseRef}`); PR still OPEN, unmerged, and Draft
+at bind time; `headSha`/`baseSha`/`headRef` matching the task's own
+current `head_sha`/`base_sha`/`branch`. A second bind to a DIFFERENT PR
+number is `PR_IDENTITY_MISMATCH`; a second bind to the SAME PR number with
+incompatible identity evidence is `PR_IDENTITY_ALREADY_BOUND`; an
+identical replay (same PR, same identity) is a safe, idempotent no-op.
+Deliberately NOT a general `setTaskField`/`updateAnyState` API — it binds
+exactly one field, under a closed set of checks, and touches no
+`PROTOCOL_STATES` transition (no `STATE_TRANSITION_TABLE` entry needed:
+identity binding and lifecycle-state advancement are orthogonal).
+
+PR identity (`pr_number`, branch/base identity) is deliberately distinct
+from certification identity (the CURRENT `head_sha`
+`recordFinalPrMetadataVerification` binds independently, every call): A's
+ordinary remediation is still free to advance `head_sha` after PR binding
+without touching `pr_number` — the final gate always certifies whatever
+HEAD is current at that later point, using the PR number bound once,
+earlier.
+
+The corrected real chronology:
+```
+createTaskSession(prNumber=null) → reserve → A work → A commit/push
+  → Draft PR created → NIGHT recordPrOpened(fresh snapshot) → B → C
+  → FINAL_PR_METADATA_SYNC → recordFinalPrMetadataVerification
+  → READY_FOR_HUMAN → HUMAN_GATE
+```
 
 **Remediation Round 1 (2026-08-24, 2 independent P2 findings, both fixed):**
 

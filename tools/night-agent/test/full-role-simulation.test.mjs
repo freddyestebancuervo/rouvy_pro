@@ -60,9 +60,12 @@ test('S6: happy path NIGHT -> A -> B -> C -> READY_FOR_HUMAN, via real orchestra
   const repoRoot = fakeRepo();
   const taskId = `s6-${randomUUID()}`;
 
-  // NIGHT
-  const created = orch.createTaskSession({ repoRoot, taskId, taskTitle: 'Simulated happy path', baseSha: BASE_SHA, riskClass: 'GREEN', prNumber: SIM_PR_NUMBER });
+  // NIGHT -- Task 7 hotfix: prNumber=null at creation (a real PR cannot
+  // exist before this point); bound later via recordPrOpened, once a real
+  // HEAD exists, matching the system's own real chronology.
+  const created = orch.createTaskSession({ repoRoot, taskId, taskTitle: 'Simulated happy path', baseSha: BASE_SHA, riskClass: 'GREEN', branch: 'feat/sim-happy-path' });
   assert.equal(created.ok, true);
+  assert.equal(created.state.pr_number, null);
   const reserved = orch.reserveTask({ repoRoot, taskId, reservedPaths: ['tools/night-agent/sim-fixture.mjs'], baseSha: BASE_SHA });
   assert.equal(reserved.ok, true);
   const ownerToken = reserved.ownerToken;
@@ -87,6 +90,14 @@ test('S6: happy path NIGHT -> A -> B -> C -> READY_FOR_HUMAN, via real orchestra
   assert.equal(recExec.ok, true);
   assert.equal(recExec.state.state, 'READY_FOR_B');
   assert.equal(recExec.state.head_sha, HEAD_1);
+
+  // The Draft PR is created only NOW, after a real HEAD exists -- NIGHT binds identity:
+  const bind = orch.recordPrOpened({
+    repoRoot, taskId, ownerToken,
+    prSnapshot: { prNumber: SIM_PR_NUMBER, state: 'OPEN', isDraft: true, merged: false, headSha: HEAD_1, baseSha: BASE_SHA, headRef: 'feat/sim-happy-path', baseRef: 'main' },
+  });
+  assert.equal(bind.ok, true);
+  assert.equal(bind.state.pr_number, SIM_PR_NUMBER);
 
   // A -> B handoff
   const handoffB = orch.handoffToAuditor({ repoRoot, taskId, ownerToken, headSha: HEAD_1 });
@@ -153,7 +164,7 @@ test('S6: happy path NIGHT -> A -> B -> C -> READY_FOR_HUMAN, via real orchestra
 test('S7: B HOLD -> A remediation (OLD_HEAD..NEW_HEAD) -> B re-audit -> C PASS', () => {
   const repoRoot = fakeRepo();
   const taskId = `s7-${randomUUID()}`;
-  orch.createTaskSession({ repoRoot, taskId, taskTitle: 'Simulated remediation loop', baseSha: BASE_SHA, prNumber: SIM_PR_NUMBER });
+  orch.createTaskSession({ repoRoot, taskId, taskTitle: 'Simulated remediation loop', baseSha: BASE_SHA, branch: 'feat/sim-remediation' });
   const reserved = orch.reserveTask({ repoRoot, taskId, reservedPaths: ['tools/night-agent/sim-remediation.mjs'], baseSha: BASE_SHA });
   const ownerToken = reserved.ownerToken;
   orch.enterRole({ repoRoot, taskId, ownerToken, toState: 'PLANNING', actingRole: 'NIGHT' });
@@ -162,6 +173,12 @@ test('S7: B HOLD -> A remediation (OLD_HEAD..NEW_HEAD) -> B re-audit -> C PASS',
 
   const exec1 = roleProto.finalizeExecutorResult({ state: 'IMPLEMENTED_AND_VALIDATED', executorRole: 'A', baseSha: BASE_SHA, headSha: HEAD_1 });
   orch.recordExecutorResult({ repoRoot, taskId, ownerToken, executorResult: exec1, toState: 'READY_FOR_B' });
+  // Draft PR created only now, after a real HEAD exists:
+  const bind = orch.recordPrOpened({
+    repoRoot, taskId, ownerToken,
+    prSnapshot: { prNumber: SIM_PR_NUMBER, state: 'OPEN', isDraft: true, merged: false, headSha: HEAD_1, baseSha: BASE_SHA, headRef: 'feat/sim-remediation', baseRef: 'main' },
+  });
+  assert.equal(bind.ok, true);
   orch.handoffToAuditor({ repoRoot, taskId, ownerToken, headSha: HEAD_1 });
 
   // B discovers a synthetic blocking finding.
@@ -545,7 +562,7 @@ test('S14: evidence bound to HEAD_1 is not reusable as proof for HEAD_2; same-SH
 test('S15: attestation-expired recovery -- persisted-lookalike B result is refused by C, NIGHT routes HOLD->READY_FOR_B, genuine re-attestation then succeeds', () => {
   const repoRoot = fakeRepo();
   const taskId = `s15-${randomUUID()}`;
-  orch.createTaskSession({ repoRoot, taskId, taskTitle: 'x', baseSha: BASE_SHA, prNumber: SIM_PR_NUMBER });
+  orch.createTaskSession({ repoRoot, taskId, taskTitle: 'x', baseSha: BASE_SHA, branch: 'feat/sim-s15' });
   const reserved = orch.reserveTask({ repoRoot, taskId, reservedPaths: ['tools/night-agent/s15.mjs'], baseSha: BASE_SHA });
   const ownerToken = reserved.ownerToken;
   orch.enterRole({ repoRoot, taskId, ownerToken, toState: 'PLANNING', actingRole: 'NIGHT' });
@@ -553,6 +570,11 @@ test('S15: attestation-expired recovery -- persisted-lookalike B result is refus
   orch.enterRole({ repoRoot, taskId, ownerToken, toState: 'EXECUTING', actingRole: 'A', requiredCapability: 'WRITE_TASK_FILES' });
   const exec1 = roleProto.finalizeExecutorResult({ state: 'IMPLEMENTED_AND_VALIDATED', executorRole: 'A', baseSha: BASE_SHA, headSha: HEAD_1 });
   orch.recordExecutorResult({ repoRoot, taskId, ownerToken, executorResult: exec1, toState: 'READY_FOR_B' });
+  const bind = orch.recordPrOpened({
+    repoRoot, taskId, ownerToken,
+    prSnapshot: { prNumber: SIM_PR_NUMBER, state: 'OPEN', isDraft: true, merged: false, headSha: HEAD_1, baseSha: BASE_SHA, headRef: 'feat/sim-s15', baseRef: 'main' },
+  });
+  assert.equal(bind.ok, true);
   orch.handoffToAuditor({ repoRoot, taskId, ownerToken, headSha: HEAD_1 });
 
   // A legitimate B result is produced (live, attested) and RECORDED FOR REAL
