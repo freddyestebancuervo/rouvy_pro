@@ -29,6 +29,18 @@ import { ROLES, HUMAN_GATE_TYPES, resolveProtocolStatePath } from '../protocol-s
 import { validateSchema, findPathConflicts, findCycle } from '../queue.mjs';
 import { buildFinalPrMetadataBlock } from '../pr-metadata-gate.mjs';
 
+// T-F1.2 P1-2 remediation note: this whole file exercises the ORCHESTRATION
+// state machine against synthetic repoRoot paths and synthetic SHAs -- by
+// design, none of these scenarios touch .github/workflows/** or any real
+// filesystem/Git state. The real deriveChangedFilesFromGit now REQUIRES a
+// real, resolvable Git repository for every workflow-change decision; this
+// explicit, visible test-only override tells the orchestrator that none of
+// this file's synthetic tasks touch any file at all, which is true for all
+// of them. See task-orchestrator.mjs's own header comment on
+// __installTestGitChangesetProvider for why this seam exists and why it can
+// never leak into real production use.
+orch.__installTestGitChangesetProvider(() => ({ ok: true, files: [] }));
+
 function fakeRepo() {
   return `/fake/repo-${randomUUID()}`;
 }

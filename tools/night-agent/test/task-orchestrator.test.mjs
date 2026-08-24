@@ -12,6 +12,7 @@ import {
   recordExecutorResult, handoffToAuditor, recordAuditResult,
   handoffToValidator, recordValidationResult, enterWaitingCi,
   resumeFromWaitingCi, requestHumanGate, releaseTask, isEvidenceReusable,
+  __installTestGitChangesetProvider,
 } from '../task-orchestrator.mjs';
 import { finalizeExecutorResult, certifyAuditResult, certifyByValidator } from '../role-protocol.mjs';
 import { resolveTaskLockPath } from '../task-lock.mjs';
@@ -19,6 +20,14 @@ import { resolveProtocolStatePath } from '../protocol-state.mjs';
 import { buildFinalPrMetadataBlock } from '../pr-metadata-gate.mjs';
 import { recordFinalPrMetadataVerification, recordPrOpened } from '../task-orchestrator.mjs';
 import { isRoleAllowed } from '../role-capabilities.mjs';
+
+// T-F1.2 P1-2 remediation note: this whole file exercises the ORCHESTRATION
+// state machine against synthetic repoRoot paths and synthetic SHAs -- by
+// design, none of these scenarios touch .github/workflows/** or any real
+// filesystem/Git state. See task-orchestrator.mjs's own header comment on
+// __installTestGitChangesetProvider for why this explicit, visible seam
+// exists and why it can never leak into real production use.
+__installTestGitChangesetProvider(() => ({ ok: true, files: [] }));
 
 function fakeRepo() {
   return `/fake/repo-${randomUUID()}`;
