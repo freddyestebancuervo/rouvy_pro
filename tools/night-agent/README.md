@@ -112,8 +112,68 @@ SAFETY.md`'s "NIGHT-V1-D" section for the full rationale.
     (`resolveExitCode`), not a hardcoded constant.
   - `--self-test` — runs against a hardcoded in-memory fixture, touching no
     files on disk at all.
+- **`protocol-state.mjs`** (Task 2) — the shared-state schema and atomic
+  persistence layer for the single-chat `NIGHT`/`A`/`B`/`C` coordination
+  protocol: the closed 14-state finite state machine (`PROTOCOL_STATES`,
+  including Task 6's `PR_METADATA_SYNC_REQUIRED`), the closed field set a
+  task's compact state record may ever contain, and
+  `resolveProtocolStatePath`/`writeProtocolStateAtomic`/`readProtocolState`
+  (the same temp-file-then-rename, deterministic-SHA-256-path-outside-the-
+  repo pattern `checkpoint.mjs` already established, reused rather than
+  reimplemented).
+- **`role-protocol.mjs`** (Task 2) — the role/state transition tables
+  (`VALID_ROLE_TRANSITIONS`, `STATE_TRANSITION_TABLE`), exact-canonical-
+  identity independence checks, A's structurally-PASS-free output domain
+  (`finalizeExecutorResult`), B's WeakSet-attested audit certification
+  (`certifyAuditResult`/`isAttestedAuditorResult`), C's HEAD/CI/attestation-
+  bound validation (`certifyByValidator`), and the human-gate mapping
+  (`requiresHumanGateForAction`, no bypass parameter of any kind).
+- **`role-capabilities.mjs`** (Task 3) — the CAPABILITY MODEL: a closed,
+  fail-closed `evaluateRoleCapability(role, capability)` answering "may
+  this role attempt this action" (17-name closed vocabulary, closed
+  per-role allowlist), separate from `role-protocol.mjs`'s "is this state
+  transition legal". Unknown role/capability, or any malformed input,
+  always denies — never a fuzzy default.
+- **`task-lock.mjs`** (Task 4) — the LOCK MODEL: a per-task scope lock
+  (opaque `owner_token` via `crypto.randomBytes`, reserved paths, HEAD
+  binding) preventing double activation and overlapping reservations
+  between tasks, plus a single repo-wide active-task-execution slot making
+  `MAX_ACTIVE_TASK_EXECUTIONS_IN_CHAT = 1` a real, code-checked property.
+  A present-but-corrupt lock file — for the task being acquired, or any
+  sibling — fails closed (`HOLD_LOCK_RECOVERY_REQUIRED`) rather than being
+  silently skipped or overwritten; there is no expiry logic and no
+  force-release/steal path.
+- **`task-orchestrator.mjs`** (Task 4) — the RUNTIME ORCHESTRATOR: the real
+  caller Task 2/3's decision primitives never had. Composes
+  `protocol-state.mjs` + `role-protocol.mjs` + `role-capabilities.mjs` +
+  `task-lock.mjs` + `queue.mjs`'s static path-overlap check (none of them
+  modified) into one sequenced API (`createTaskSession`, `reserveTask`,
+  `enterRole`, `recordExecutorResult`, `handoffToAuditor`,
+  `recordAuditResult`, `handoffToValidator`, `recordValidationResult`,
+  `enterWaitingCi`, `resumeFromWaitingCi`, `requestHumanGate`,
+  `releaseTask`). Every state-mutating operation enforces task ownership,
+  role capability, SHA binding, and state-transition legality before
+  persisting anything.
+- **`pr-metadata-gate.mjs`** (Task 6) — the FINAL PR METADATA GATE: a pure,
+  no-network module parsing one canonical, versioned, strictly-validated
+  `KORIXA_FINAL_PR_STATE_V1` block out of a PR body (duplicate blocks,
+  duplicate/missing/unknown keys, and malformed critical values are all
+  rejected, never coerced — including trailing/leading whitespace on any
+  protocol value, fixed in Task 6's own Round 1 remediation), narrow
+  stale-marker detection, and `evaluateFinalPrMetadata`/`computeBodySha256`
+  — consumed by `task-orchestrator.mjs`'s `recordFinalPrMetadataVerification`
+  and `requestHumanGate`'s body-hash enforcement so a C technical PASS can
+  never, by itself, imply the PR body a human is about to read is still
+  accurate.
 - **`test/`** — `node:test` suites for the guard, the queue library,
-  path-safety, checkpoint, executor, and the runner's CLI surface.
+  path-safety, checkpoint, executor, the runner's CLI surface, and the full
+  common-agent-protocol stack above (`protocol-state`, `role-protocol`,
+  `role-capabilities`, `task-lock`, `task-orchestrator`, `pr-metadata-gate`,
+  plus `full-role-simulation.test.mjs`'s end-to-end scenario suite).
+
+See `.claude/overnight/COMMON_AGENT_PROTOCOL.md` for the full design
+rationale, machine-enforcement classification, and flow diagrams for the
+`NIGHT`/`A`/`B`/`C` protocol these six files implement.
 
 ## Usage
 
