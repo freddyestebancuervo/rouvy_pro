@@ -1,0 +1,243 @@
+name: Backend — Production DB read-only inspection (manual dispatch only)
+
+# T-F1.2 Point 5E — wires the already-implemented, already-independently-audited
+# `_backend-db-readonly-inspection-production.yml` reusable (and its inspector,
+# backend/src/ops/db-readonly-inspector.ts) so it becomes reachable ONLY through
+# a deliberate, manual workflow_dispatch. Neither the reusable nor the inspector
+# is modified by this file.
+#
+# ACTIVATION INTERLOCK (same pattern as production-deploy.yml, Point 4):
+# `on: workflow_dispatch` ONLY. No `workflow_run`, `push`, `pull_request`, or
+# `schedule`. Nothing in this repository can invoke this workflow except a
+# human explicitly choosing "Run workflow" and typing every value below by
+# hand. Merging this file changes nothing about whether Production is
+# reachable automatically: it still is not.
+#
+# TWO Production-side mutations happen on a real future dispatch, both
+# explicit, neither hidden behind the phrase "read-only DB inspection":
+#   A. Artifact Registry — a real Production artifact is built and published
+#      for the exact dispatched commit (via _backend-build-publish-production.yml).
+#   B. Cloud Run — the read-only inspection Job is created/updated and
+#      executed once (via _backend-db-readonly-inspection-production.yml).
+# Neither happens merely by this file existing on main — both require an
+# explicit human dispatch with every input supplied.
+#
+# CHAIN: guard (permission-less) -> prepare-inspection-inputs (checkout only,
+# computes the migration-set hash from the exact checked-out source, using the
+# same algorithm the reusable itself already uses to independently re-verify
+# it) -> build-production-artifact (calls the build/publish reusable) ->
+# verify-build-output (permission-less re-proof of build's own source_sha/
+# immutable_ref) -> inspect-production-db (calls the inspection reusable,
+# consuming only verify-build-output's re-proven outputs plus the
+# independently-computed migration hash). source_sha is never a free-form
+# input — it comes exclusively from github.sha.
+
+on:
+  workflow_dispatch:
+    inputs:
+      database_secret_version:
+        description: "Exact positive integer version of korixa-production-database-url to mount — never 'latest', to avoid racing a concurrent secret rotation. No default — owner must supply the current version explicitly."
+        required: true
+        type: string
+      confirm_production_db_readonly_inspection:
+        description: "Defense-in-depth only — does NOT replace the external human gate required before a real Production DB inspection dispatch. Must be exactly: INSPECT_PRODUCTION_DB_READONLY"
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  # ===========================================================================
+  # Job 1 — permission-less guard. No checkout, no OIDC, no gcloud, no
+  # Docker, no reusable call. Caller-level guarantees neither reusable can
+  # provide on its own: manual-dispatch origin, exact repo, exact main ref,
+  # exact 40-hex commit, the explicit human confirmation string, and the
+  # secret-version format. inspection_authorized is derived here — never
+  # accepted as a raw human-toggleable input — and only ever set to true
+  # after every other check has already passed.
+  # ===========================================================================
+  guard:
+    name: Guard — manual-dispatch-only, sin acceso cloud
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions: {}
+    outputs:
+      caller_guard_pass: ${{ steps.checks.outputs.caller_guard_pass }}
+      inspection_authorized: ${{ steps.checks.outputs.inspection_authorized }}
+    steps:
+      - name: Validar origen, ref, SHA, confirmación humana y formato de versión de secreto (sin efectos, sin cloud)
+        id: checks
+        shell: bash
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          REPOSITORY: ${{ github.repository }}
+          REF: ${{ github.ref }}
+          SHA: ${{ github.sha }}
+          CONFIRM_INSPECTION: ${{ inputs.confirm_production_db_readonly_inspection }}
+          DATABASE_SECRET_VERSION: ${{ inputs.database_secret_version }}
+        run: |
+          set -euo pipefail
+          fail() { echo "::error::$1"; exit 1; }
+
+          [ "$EVENT_NAME" = "workflow_dispatch" ] || fail "EVENT_NAME esperado 'workflow_dispatch', obtenido '$EVENT_NAME'."
+          echo "EVENT_NAME_VALID=YES"
+
+          [ "$REPOSITORY" = "freddyestebancuervo/rouvy_pro" ] || fail "REPOSITORY inesperado: '$REPOSITORY'"
+          echo "REPOSITORY_VALID=YES"
+
+          [ "$REF" = "refs/heads/main" ] || fail "REF esperado 'refs/heads/main', obtenido '$REF' — un dispatch manual puede elegir cualquier rama/tag; este guard exige exactamente main."
+          echo "REF_VALID=YES"
+
+          [[ "$SHA" =~ ^[0-9a-f]{40}$ ]] || fail "github.sha no es un SHA-1 completo (40 hex minúsculas): '$SHA'"
+          echo "SHA_VALID=YES"
+
+          [ "$CONFIRM_INSPECTION" = "INSPECT_PRODUCTION_DB_READONLY" ] || fail "confirm_production_db_readonly_inspection debe ser exactamente 'INSPECT_PRODUCTION_DB_READONLY' — valor recibido no coincide (defensa en profundidad; esto NO reemplaza el HUMAN_GATE externo requerido por el protocolo operativo antes de un dispatch real de inspección de Production)."
+          echo "MANUAL_CONFIRMATION_VALID=YES"
+
+          [[ "$DATABASE_SECRET_VERSION" =~ ^[1-9][0-9]*$ ]] || fail "database_secret_version debe ser un entero positivo, nunca 'latest' ni cero: '$DATABASE_SECRET_VERSION'"
+          echo "SECRET_VERSION_FORMAT_VALID=YES"
+
+          echo "caller_guard_pass=YES" >> "$GITHUB_OUTPUT"
+          echo "inspection_authorized=true" >> "$GITHUB_OUTPUT"
+
+  # ===========================================================================
+  # Job 2 — checkout exactamente github.sha (nunca un input libre) y calcular
+  # expected_migration_set_hash con EXACTAMENTE el mismo algoritmo que
+  # _backend-db-readonly-inspection-production.yml ya usa para reverificarlo
+  # de forma independiente ("Calcular y verificar el hash del conjunto de
+  # migraciones") — copiado verbatim, nunca reimplementado de forma
+  # divergente. El humano nunca suministra este valor.
+  # ===========================================================================
+  prepare-inspection-inputs:
+    name: Prepare inspection inputs (checkout + migration-set hash only)
+    needs: guard
+    if: needs.guard.outputs.caller_guard_pass == 'YES'
+    permissions:
+      contents: read
+    outputs:
+      source_sha: ${{ steps.hash.outputs.source_sha }}
+      expected_migration_set_hash: ${{ steps.hash.outputs.expected_migration_set_hash }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+
+      - name: Verificar SHA fuente exacto antes de calcular nada
+        run: |
+          set -euo pipefail
+          CHECKED_OUT_SHA="$(git rev-parse HEAD)"
+          if [ "$CHECKED_OUT_SHA" != "${{ github.sha }}" ]; then
+            echo "::error::El working tree del runner ($CHECKED_OUT_SHA) no coincide con github.sha ('${{ github.sha }}')."
+            exit 1
+          fi
+          echo "SOURCE_SHA_VERIFIED=YES"
+
+      - name: Calcular expected_migration_set_hash (mismo algoritmo que el reusable de inspección)
+        id: hash
+        run: |
+          set -euo pipefail
+          cd backend/migrations
+          COMBINED=""
+          for f in $(printf '%s\n' ./*.sql | sed 's|^\./||' | sort); do
+            FILE_HASH="$( (printf '%s\n' "$f"; cat "$f") | sha256sum | awk '{print $1}')"
+            COMBINED="${COMBINED}${FILE_HASH}"
+          done
+          COMPUTED_HASH="$(printf '%s' "$COMBINED" | sha256sum | awk '{print $1}')"
+          [[ "$COMPUTED_HASH" =~ ^[0-9a-f]{64}$ ]] || { echo "::error::hash calculado con formato inesperado: '$COMPUTED_HASH'"; exit 1; }
+          echo "source_sha=${{ github.sha }}" >> "$GITHUB_OUTPUT"
+          echo "expected_migration_set_hash=$COMPUTED_HASH" >> "$GITHUB_OUTPUT"
+
+  # ===========================================================================
+  # Job 3 — build & publish el artefacto real de Production para el mismo
+  # source_sha ya validado por el guard. Mismo patrón exacto que
+  # production-deploy.yml (Point 4).
+  # ===========================================================================
+  build-production-artifact:
+    name: Build & publish Production artifact
+    needs: [guard, prepare-inspection-inputs]
+    if: needs.guard.outputs.caller_guard_pass == 'YES'
+    permissions:
+      contents: read
+      id-token: write
+    uses: ./.github/workflows/_backend-build-publish-production.yml
+    with:
+      operation: build-publish
+      source_sha: ${{ github.sha }}
+
+  # ===========================================================================
+  # Job 4 — puente permission-less entre build y la inspección. Vuelve a
+  # probar, sin tocar cloud, que el source_sha que build realmente publicó
+  # sigue siendo el commit validado por el guard, y que immutable_ref tiene
+  # la forma exacta esperada del repositorio de Production — antes de que
+  # inspect-production-db reciba ninguno de los dos valores. Mismo patrón
+  # exacto que production-deploy.yml (Point 4).
+  # ===========================================================================
+  verify-build-output:
+    name: Verify build output identity (sin cloud)
+    needs: [guard, build-production-artifact]
+    permissions: {}
+    outputs:
+      verify_pass: ${{ steps.verify.outputs.verify_pass }}
+      source_sha: ${{ steps.verify.outputs.source_sha }}
+      immutable_ref: ${{ steps.verify.outputs.immutable_ref }}
+    steps:
+      - name: Reverificar source_sha e immutable_ref del build (sin efectos, sin cloud)
+        id: verify
+        shell: bash
+        env:
+          EXPECTED_SHA: ${{ github.sha }}
+          BUILD_SOURCE_SHA: ${{ needs.build-production-artifact.outputs.source_sha }}
+          IMMUTABLE_REF: ${{ needs.build-production-artifact.outputs.immutable_ref }}
+        run: |
+          set -euo pipefail
+          fail() { echo "::error::$1"; exit 1; }
+
+          [[ "$BUILD_SOURCE_SHA" =~ ^[0-9a-f]{40}$ ]] || fail "build_source_sha no es un SHA-1 completo (40 hex): '$BUILD_SOURCE_SHA'"
+          [ "$BUILD_SOURCE_SHA" = "$EXPECTED_SHA" ] || fail "build_source_sha ('$BUILD_SOURCE_SHA') no coincide con el github.sha validado por el guard ('$EXPECTED_SHA')."
+          echo "BUILD_SOURCE_SHA_MATCH=YES"
+
+          [ -n "$IMMUTABLE_REF" ] || fail "immutable_ref vacío — el job de build no produjo una referencia inmutable."
+
+          EXPECTED_PREFIX="southamerica-east1-docker.pkg.dev/ridepro-dbafe/korixa-backend/api@sha256:"
+          case "$IMMUTABLE_REF" in
+            "${EXPECTED_PREFIX}"*)
+              DIGEST="${IMMUTABLE_REF#"$EXPECTED_PREFIX"}"
+              [[ "$DIGEST" =~ ^[0-9a-f]{64}$ ]] || fail "immutable_ref no tiene un digest sha256 válido (64 hex): '$IMMUTABLE_REF'"
+              ;;
+            *)
+              fail "immutable_ref no tiene la forma exacta esperada del repositorio de Production: '$IMMUTABLE_REF'"
+              ;;
+          esac
+          echo "IMMUTABLE_REF_VALID=YES"
+
+          echo "source_sha=$BUILD_SOURCE_SHA" >> "$GITHUB_OUTPUT"
+          echo "immutable_ref=$IMMUTABLE_REF" >> "$GITHUB_OUTPUT"
+          echo "verify_pass=YES" >> "$GITHUB_OUTPUT"
+
+  # ===========================================================================
+  # Job 5 — inspección real de solo lectura de Production. Solo alcanzable
+  # si guard, prepare-inspection-inputs, build-production-artifact y
+  # verify-build-output pasaron los cuatro. source_sha/immutable_ref vienen
+  # exclusivamente de verify-build-output; expected_migration_set_hash viene
+  # exclusivamente de prepare-inspection-inputs (nunca del humano);
+  # inspection_authorized viene exclusivamente del guard (nunca un input
+  # crudo). El reusable de inspección no se modifica y sigue siendo el único
+  # validador/ejecutor autoritativo de su propio contrato — este caller no
+  # duplica su lógica interna de base de datos.
+  # ===========================================================================
+  inspect-production-db:
+    name: Inspect Production DB (read-only)
+    needs: [guard, prepare-inspection-inputs, verify-build-output]
+    if: needs.verify-build-output.outputs.verify_pass == 'YES'
+    permissions:
+      contents: read
+      id-token: write
+    uses: ./.github/workflows/_backend-db-readonly-inspection-production.yml
+    with:
+      source_sha: ${{ needs.verify-build-output.outputs.source_sha }}
+      immutable_ref: ${{ needs.verify-build-output.outputs.immutable_ref }}
+      expected_migration_set_hash: ${{ needs.prepare-inspection-inputs.outputs.expected_migration_set_hash }}
+      database_secret_version: ${{ inputs.database_secret_version }}
+      inspection_authorized: ${{ needs.guard.outputs.inspection_authorized }}
