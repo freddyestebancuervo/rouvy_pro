@@ -1,45 +1,239 @@
-name: Backend — Production deploy bootstrap
+name: Backend — Production deploy (manual dispatch only)
 
-# T-F1.2 Block A (docs/audits/AUDITORIA_FINAL/BACKLOG_MAESTRO.md) — este
-# es el archivo MÁS crítico de todo el diseño T-F1.2: su ruta
-# (workflow_ref) es la que un futuro WIF provider de Production
-# restringirá exactamente. Se congela aquí, deliberadamente vacío de
-# cualquier capacidad real, para que ese provider pueda crearse contra
-# una ruta ya definitiva sin que este archivo tenga, todavía, forma de
-# ejercer ningún efecto sobre Production.
+# T-F1.2 Point 4 (docs/audits/AUDITORIA_FINAL/BACKLOG_MAESTRO.md,
+# TF12_PRODUCTION_CALLER_READINESS_AUDIT) — wires this caller to the
+# already-audited build/publish and Cloud Run deploy reusables.
 #
-# El trigger automático real (workflow_run sobre el workflow "CI",
-# main, conclusion=success) y los jobs que invocan a
-# _backend-build-publish-production.yml /
-# _backend-deploy-cloud-run-production.yml se agregan en un bloque
-# POSTERIOR, separado y explícitamente autorizado — nunca en Block A.
-# Cambiar únicamente el `on:` de este archivo no invalida ninguna
-# condición WIF ya creada contra su ruta (workflow_ref se basa en
-# path@ref, no en contenido — ver T-F1.2-B0.3, Fase 10).
+# ACTIVATION INTERLOCK (deliberate, per the readiness audit's own
+# recommendation): `on: workflow_dispatch` ONLY. No `workflow_run`, no
+# `push`, no `schedule`. Nothing in this repository can invoke this
+# workflow except a human explicitly choosing "Run workflow" and typing
+# every value below by hand. Adding an automatic trigger (workflow_run
+# on the "CI" workflow, main, conclusion=success) is a SEPARATE, later,
+# explicitly-authorized security change — never bundled with this one.
+# Merging this file changes nothing about whether Production can be
+# reached automatically: it still cannot.
 #
-# SECURITY:
-# Automatic Production deployment is intentionally disabled.
-# workflow_run activation requires a separately authorized security change.
+# WHAT THIS FILE DOES NOT DO: it does not choose service_name, cpu,
+# memory, concurrency, min/max instances, ingress, CORS origins, or
+# vpc_egress_mode — every one of those remains a required
+# workflow_dispatch input with no default, so a real future dispatch
+# fails immediately if the owner hasn't supplied it. It does not prove
+# Production's database schema is migrated — migration_precondition_
+# confirmed defaults to `false` (fail-closed) and the guard requires it
+# to be exactly `true`, but this workflow never runs a migration itself
+# and this file cannot manufacture evidence that doesn't exist yet.
+#
+# CHAIN: guard (permission-less) -> build-production-artifact (calls
+# _backend-build-publish-production.yml, operation=build-publish) ->
+# verify-build-output (permission-less, re-proves build's own
+# source_sha/immutable_ref before deploy ever sees them) ->
+# deploy-production-candidate (calls
+# _backend-deploy-cloud-run-production.yml). Neither reusable is
+# modified by this file — both remain the authoritative validator of
+# their own contract; this caller does not re-implement their checks,
+# only the caller-level guarantees (manual-only origin, exact commit,
+# explicit human confirmation, and build/deploy identity continuity)
+# that only a caller can provide.
 
 on:
-  workflow_dispatch: {}
+  workflow_dispatch:
+    inputs:
+      service_name:
+        description: "Cloud Run Production service name. No default — owner decision, never invented here."
+        required: true
+        type: string
+      cpu:
+        description: "CPU limit (e.g. '1', '2', '0.5', '1000m'). No default — owner decision."
+        required: true
+        type: string
+      memory:
+        description: "Memory limit, Mi/Gi (e.g. '512Mi'). No default — owner decision."
+        required: true
+        type: string
+      concurrency:
+        description: "Max concurrent requests per instance (>=1). No default — owner decision."
+        required: true
+        type: string
+      min_instances:
+        description: "Minimum instances (may be 0). No default — owner decision."
+        required: true
+        type: string
+      max_instances:
+        description: "Maximum instances (>=1). No default — owner decision."
+        required: true
+        type: string
+      ingress:
+        description: "One of: all | internal | internal-and-cloud-load-balancing. No default — owner decision."
+        required: true
+        type: string
+      cors_allowed_origins:
+        description: "Comma-separated CORS origins, no bare '*'. No default — owner decision. Empty/wrong value fails CORS closed in the backend, never open."
+        required: true
+        type: string
+      vpc_egress_mode:
+        description: "One of: private-ranges-only | all-traffic. No default — owner decision."
+        required: true
+        type: string
+      migration_precondition_confirmed:
+        description: "Must be set to true by the human dispatching this run, confirming (outside this workflow) that korixa-production-postgres is already migrated to the state this artifact expects. This workflow NEVER runs migrations and cannot verify this claim technically — it only requires it to be explicit."
+        required: true
+        type: boolean
+        default: false
+      confirm_production_candidate_deploy:
+        description: "Defense-in-depth only — does NOT replace the external human gate required before a real Production dispatch. Must be exactly: DEPLOY_PRODUCTION_CANDIDATE"
+        required: true
+        type: string
 
 permissions:
   contents: read
 
 jobs:
+  # ===========================================================================
+  # Job 1 — permission-less guard. No checkout, no OIDC, no gcloud, no
+  # Docker, no reusable call. Everything here is a caller-level guarantee
+  # neither reusable can provide on its own: manual-dispatch origin, exact
+  # main ref, exact 40-hex commit, and the explicit human confirmation
+  # string. Format checks only for values the deploy reusable already
+  # validates in full — this job does not duplicate that contract.
+  # ===========================================================================
   guard:
-    name: Guard — bootstrap, sin acceso cloud
+    name: Guard — manual-dispatch-only, sin acceso cloud
     runs-on: ubuntu-latest
     timeout-minutes: 5
-    # Sin id-token, sin checkout, sin gcloud, sin docker, sin llamada a
-    # ningún reusable — este job no tiene capacidad de tocar ningún
-    # recurso de Production.
     permissions: {}
+    outputs:
+      caller_guard_pass: ${{ steps.checks.outputs.caller_guard_pass }}
     steps:
-      - name: Confirmar estado deshabilitado
+      - name: Validar origen, ref, SHA y confirmaciones humanas (sin efectos, sin cloud)
+        id: checks
         shell: bash
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          REPOSITORY: ${{ github.repository }}
+          REF: ${{ github.ref }}
+          SHA: ${{ github.sha }}
+          CONFIRM_DEPLOY: ${{ inputs.confirm_production_candidate_deploy }}
+          MIGRATION_CONFIRMED: ${{ inputs.migration_precondition_confirmed }}
         run: |
-          echo "AUTOMATIC_PRODUCTION_CD=DISABLED"
-          echo "CLOUD_ACCESS=DISABLED"
-          echo "Este workflow todavía no despliega nada. El camino automático (workflow_run) y la invocación real de los reusables de build/publish y deploy se habilitan en un bloque posterior, autorizado por separado."
+          set -euo pipefail
+          fail() { echo "::error::$1"; exit 1; }
+
+          [ "$EVENT_NAME" = "workflow_dispatch" ] || fail "EVENT_NAME esperado 'workflow_dispatch', obtenido '$EVENT_NAME' — este workflow solo puede activarse por dispatch manual explícito."
+          echo "EVENT_NAME_VALID=YES"
+
+          [ "$REPOSITORY" = "freddyestebancuervo/rouvy_pro" ] || fail "REPOSITORY inesperado: '$REPOSITORY'"
+          echo "REPOSITORY_VALID=YES"
+
+          [ "$REF" = "refs/heads/main" ] || fail "REF esperado 'refs/heads/main', obtenido '$REF' — un dispatch manual puede elegir cualquier rama/tag; este guard exige exactamente main."
+          echo "REF_VALID=YES"
+
+          [[ "$SHA" =~ ^[0-9a-f]{40}$ ]] || fail "github.sha no es un SHA-1 completo (40 hex minúsculas): '$SHA'"
+          echo "SHA_VALID=YES"
+
+          [ "$CONFIRM_DEPLOY" = "DEPLOY_PRODUCTION_CANDIDATE" ] || fail "confirm_production_candidate_deploy debe ser exactamente 'DEPLOY_PRODUCTION_CANDIDATE' — valor recibido no coincide (defensa en profundidad; esto NO reemplaza el HUMAN_GATE externo requerido por el protocolo operativo antes de un dispatch real de Production)."
+          echo "MANUAL_CONFIRMATION_VALID=YES"
+
+          [ "$MIGRATION_CONFIRMED" = "true" ] || fail "migration_precondition_confirmed no es exactamente 'true' — este workflow nunca ejecuta migraciones; sin esta confirmación externa explícita, el despliegue no continúa. El gate de migración del reusable de deploy revalida esto de forma independiente más adelante."
+          echo "MIGRATION_PRECONDITION_INPUT_VALID=YES"
+
+          echo "caller_guard_pass=YES" >> "$GITHUB_OUTPUT"
+
+  # ===========================================================================
+  # Job 2 — build & publish el artefacto real de Production. source_sha
+  # viene ÚNICAMENTE de github.sha (nunca de un input libre) — el guard ya
+  # probó que ese SHA pertenece a refs/heads/main. Permisos limitados
+  # exactamente a lo que el job build-publish del reusable requiere.
+  # ===========================================================================
+  build-production-artifact:
+    name: Build & publish Production artifact
+    needs: guard
+    if: needs.guard.outputs.caller_guard_pass == 'YES'
+    permissions:
+      contents: read
+      id-token: write
+    uses: ./.github/workflows/_backend-build-publish-production.yml
+    with:
+      operation: build-publish
+      source_sha: ${{ github.sha }}
+
+  # ===========================================================================
+  # Job 3 — puente permission-less entre build y deploy. Vuelve a probar,
+  # sin tocar cloud, que el source_sha que build realmente publicó sigue
+  # siendo el commit validado por el guard, y que immutable_ref tiene la
+  # forma exacta esperada del repositorio de Production — antes de que
+  # deploy-production-candidate reciba ninguno de los dos valores.
+  # ===========================================================================
+  verify-build-output:
+    name: Verify build output identity (sin cloud)
+    needs: [guard, build-production-artifact]
+    permissions: {}
+    outputs:
+      verify_pass: ${{ steps.verify.outputs.verify_pass }}
+      source_sha: ${{ steps.verify.outputs.source_sha }}
+      immutable_ref: ${{ steps.verify.outputs.immutable_ref }}
+    steps:
+      - name: Reverificar source_sha e immutable_ref del build (sin efectos, sin cloud)
+        id: verify
+        shell: bash
+        env:
+          EXPECTED_SHA: ${{ github.sha }}
+          BUILD_SOURCE_SHA: ${{ needs.build-production-artifact.outputs.source_sha }}
+          IMMUTABLE_REF: ${{ needs.build-production-artifact.outputs.immutable_ref }}
+        run: |
+          set -euo pipefail
+          fail() { echo "::error::$1"; exit 1; }
+
+          [[ "$BUILD_SOURCE_SHA" =~ ^[0-9a-f]{40}$ ]] || fail "build_source_sha no es un SHA-1 completo (40 hex): '$BUILD_SOURCE_SHA'"
+          [ "$BUILD_SOURCE_SHA" = "$EXPECTED_SHA" ] || fail "build_source_sha ('$BUILD_SOURCE_SHA') no coincide con el github.sha validado por el guard ('$EXPECTED_SHA')."
+          echo "BUILD_SOURCE_SHA_MATCH=YES"
+
+          [ -n "$IMMUTABLE_REF" ] || fail "immutable_ref vacío — el job de build no produjo una referencia inmutable."
+
+          EXPECTED_PREFIX="southamerica-east1-docker.pkg.dev/ridepro-dbafe/korixa-backend/api@sha256:"
+          case "$IMMUTABLE_REF" in
+            "${EXPECTED_PREFIX}"*)
+              DIGEST="${IMMUTABLE_REF#"$EXPECTED_PREFIX"}"
+              [[ "$DIGEST" =~ ^[0-9a-f]{64}$ ]] || fail "immutable_ref no tiene un digest sha256 válido (64 hex): '$IMMUTABLE_REF'"
+              ;;
+            *)
+              fail "immutable_ref no tiene la forma exacta esperada del repositorio de Production: '$IMMUTABLE_REF'"
+              ;;
+          esac
+          echo "IMMUTABLE_REF_VALID=YES"
+
+          echo "source_sha=$BUILD_SOURCE_SHA" >> "$GITHUB_OUTPUT"
+          echo "immutable_ref=$IMMUTABLE_REF" >> "$GITHUB_OUTPUT"
+          echo "verify_pass=YES" >> "$GITHUB_OUTPUT"
+
+  # ===========================================================================
+  # Job 4 — despliegue real a Cloud Run Production. Solo alcanzable si
+  # guard, build-production-artifact y verify-build-output pasaron los
+  # tres. source_sha/immutable_ref vienen exclusivamente de
+  # verify-build-output (nunca reconstruidos aquí); el resto de los
+  # valores son inputs de workflow_dispatch sin default, suministrados
+  # explícitamente por el humano que despache este workflow. El reusable
+  # de deploy no se modifica y sigue siendo el único validador autoritativo
+  # de su propio contrato.
+  # ===========================================================================
+  deploy-production-candidate:
+    name: Deploy Production candidate
+    needs: [guard, verify-build-output]
+    if: needs.verify-build-output.outputs.verify_pass == 'YES'
+    permissions:
+      contents: read
+      id-token: write
+    uses: ./.github/workflows/_backend-deploy-cloud-run-production.yml
+    with:
+      source_sha: ${{ needs.verify-build-output.outputs.source_sha }}
+      immutable_ref: ${{ needs.verify-build-output.outputs.immutable_ref }}
+      service_name: ${{ inputs.service_name }}
+      cpu: ${{ inputs.cpu }}
+      memory: ${{ inputs.memory }}
+      concurrency: ${{ inputs.concurrency }}
+      min_instances: ${{ inputs.min_instances }}
+      max_instances: ${{ inputs.max_instances }}
+      ingress: ${{ inputs.ingress }}
+      cors_allowed_origins: ${{ inputs.cors_allowed_origins }}
+      vpc_egress_mode: ${{ inputs.vpc_egress_mode }}
+      migration_precondition_confirmed: ${{ inputs.migration_precondition_confirmed }}
