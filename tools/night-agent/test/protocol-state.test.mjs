@@ -57,7 +57,8 @@ test('RISK_CLASSES/ROLES/PROTOCOL_STATES are exactly the closed vocabularies the
   assert.deepEqual([...ROLES], ['NIGHT', 'A', 'B', 'C']);
   assert.deepEqual([...PROTOCOL_STATES], [
     'IDLE', 'PLANNING', 'READY_FOR_A', 'EXECUTING', 'WAITING_CI', 'READY_FOR_B',
-    'AUDITING', 'HOLD', 'REMEDIATING', 'READY_FOR_C', 'VALIDATING', 'READY_FOR_HUMAN', 'DONE',
+    'AUDITING', 'HOLD', 'REMEDIATING', 'READY_FOR_C', 'VALIDATING',
+    'PR_METADATA_SYNC_REQUIRED', 'READY_FOR_HUMAN', 'DONE',
   ]);
 });
 

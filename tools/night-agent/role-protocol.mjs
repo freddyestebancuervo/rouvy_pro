@@ -107,7 +107,19 @@ const STATE_TRANSITION_TABLE = Object.freeze({
   HOLD: Object.freeze({ REMEDIATING: 'A', READY_FOR_B: 'NIGHT' }),
   REMEDIATING: Object.freeze({ READY_FOR_B: 'A', WAITING_CI: 'A' }),
   READY_FOR_C: Object.freeze({ VALIDATING: 'C' }),
-  VALIDATING: Object.freeze({ READY_FOR_HUMAN: 'C', HOLD: 'C' }),
+  // Task 6 (2026-08-23): a C-technical PASS no longer moves directly to
+  // READY_FOR_HUMAN. Real recurring evidence (PR #78/#79) showed a Draft
+  // PR's OWN BODY TEXT can lag behind the real, already-certified task
+  // state -- the code was correct, the metadata was stale. C's PASS now
+  // lands on PR_METADATA_SYNC_REQUIRED; only a genuine, machine-checked
+  // pass of pr-metadata-gate.mjs's evaluateFinalPrMetadata (invoked via
+  // task-orchestrator.mjs's recordFinalPrMetadataVerification) may then
+  // move the task to READY_FOR_HUMAN. A HOLD-worthy metadata problem
+  // (stale prose, SHA mismatch, wrong PR identity, malformed/duplicate
+  // block, ...) routes back to the ordinary HOLD state, same recovery
+  // path as any other HOLD.
+  VALIDATING: Object.freeze({ PR_METADATA_SYNC_REQUIRED: 'C', HOLD: 'C' }),
+  PR_METADATA_SYNC_REQUIRED: Object.freeze({ READY_FOR_HUMAN: 'C', HOLD: 'C' }),
   READY_FOR_HUMAN: Object.freeze({ DONE: 'NIGHT' }), // NIGHT records the outcome; the human action itself (Ready/merge) is never performed by any role in this table -- see requiresHumanGateForAction below, which has no bypass parameter at all.
 });
 

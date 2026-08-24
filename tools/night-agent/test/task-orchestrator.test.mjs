@@ -4,7 +4,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { randomUUID } from 'node:crypto';
-import { writeFileSync, mkdirSync } from 'node:fs';
+import { writeFileSync, mkdirSync, readFileSync } from 'node:fs';
 import path from 'node:path';
 
 import {
@@ -16,6 +16,8 @@ import {
 import { finalizeExecutorResult, certifyAuditResult, certifyByValidator } from '../role-protocol.mjs';
 import { resolveTaskLockPath } from '../task-lock.mjs';
 import { resolveProtocolStatePath } from '../protocol-state.mjs';
+import { buildFinalPrMetadataBlock } from '../pr-metadata-gate.mjs';
+import { recordFinalPrMetadataVerification } from '../task-orchestrator.mjs';
 
 function fakeRepo() {
   return `/fake/repo-${randomUUID()}`;
@@ -99,14 +101,17 @@ test('5. B PASS -> C', () => {
   assert.equal(handoff.state.state, 'VALIDATING');
 });
 
-test('6. C PASS -> READY_FOR_HUMAN', () => {
+test('6. C PASS -> PR_METADATA_SYNC_REQUIRED (Task 6: no longer directly to READY_FOR_HUMAN)', () => {
   const ctx = setupThroughExecuting();
   const { auditResult } = bPass(ctx);
   handoffToValidator({ repoRoot: ctx.repoRoot, taskId: ctx.taskId, ownerToken: ctx.ownerToken, headSha: HEAD_1 });
   const validatorResult = certifyByValidator({ executorRole: 'A', validatorRole: 'C', currentHeadSha: HEAD_1, attestedAuditorResult: auditResult, ciHeadSha: HEAD_1, ciStatus: 'SUCCESS' });
-  const r = recordValidationResult({ repoRoot: ctx.repoRoot, taskId: ctx.taskId, ownerToken: ctx.ownerToken, validatorResult, toState: 'READY_FOR_HUMAN' });
+  const r = recordValidationResult({ repoRoot: ctx.repoRoot, taskId: ctx.taskId, ownerToken: ctx.ownerToken, validatorResult, toState: 'PR_METADATA_SYNC_REQUIRED' });
   assert.equal(r.ok, true);
-  assert.equal(r.state.state, 'READY_FOR_HUMAN');
+  assert.equal(r.state.state, 'PR_METADATA_SYNC_REQUIRED');
+  // the old direct toState is now rejected outright:
+  const oldWay = recordValidationResult({ repoRoot: ctx.repoRoot, taskId: ctx.taskId, ownerToken: ctx.ownerToken, validatorResult, toState: 'READY_FOR_HUMAN' });
+  assert.equal(oldWay.ok, false);
 });
 
 test('7 & 8. B HOLD -> A remediation -> B using NEW_HEAD', () => {
@@ -368,11 +373,21 @@ test('33. unresolved B blocker prevents C PASS', () => {
 
 test('34. HUMAN_GATE-only action denied to NIGHT/A/B/C (requestHumanGate never authorizes; capability model separately denies all 6)', () => {
   const ctx = setupThroughExecuting();
+  // Task 6: MARK_READY can no longer be requested before the task has genuinely
+  // reached READY_FOR_HUMAN with a valid PR metadata verification -- from EXECUTING,
+  // this is correctly denied (closing exactly the PR #78/#79 gap).
   const r = requestHumanGate({ repoRoot: ctx.repoRoot, taskId: ctx.taskId, ownerToken: ctx.ownerToken, actionType: 'MARK_READY' });
-  assert.equal(r.ok, true); // recording that a gate is required succeeds...
-  assert.equal(r.humanGateRequired, true); // ...but it is never an authorization
+  assert.equal(r.ok, false);
+  assert.equal(r.reason, 'PR_METADATA_VERIFICATION_MISSING');
   const state = getTaskState({ repoRoot: ctx.repoRoot, taskId: ctx.taskId });
   assert.notEqual(state.state, 'DONE'); // never silently completes the task
+
+  // An action type unrelated to PR readiness (e.g. PRODUCTION_ACTION) is
+  // unaffected by this new rule -- it still records the gate requirement.
+  const prodGate = requestHumanGate({ repoRoot: ctx.repoRoot, taskId: ctx.taskId, ownerToken: ctx.ownerToken, actionType: 'PRODUCTION_ACTION' });
+  assert.equal(prodGate.ok, true);
+  assert.equal(prodGate.humanGateRequired, true);
+  assert.equal(prodGate.actionExecuted, false);
 });
 
 test('35. WAITING_CI does not become PASS (non-success conclusion stays HOLD, never PASS)', () => {
@@ -469,4 +484,129 @@ test('recordValidationResult rejects a validator result claiming PASS with a non
   const r = recordValidationResult({ repoRoot: ctx.repoRoot, taskId: ctx.taskId, ownerToken: ctx.ownerToken, validatorResult: fakePass, toState: 'READY_FOR_HUMAN' });
   assert.equal(r.ok, false);
   assert.equal(r.reason, 'MALFORMED_VALIDATOR_RESULT_PASS_REASON');
+});
+
+// ---------------------------------------------------------------------------
+// Task 6: recordFinalPrMetadataVerification -- orchestrator-level wiring.
+// Content-level (block parsing, stale markers, field mismatches) is
+// covered exhaustively in pr-metadata-gate.test.mjs; these tests cover the
+// ownership/identity/SHA-binding wiring specific to the orchestrator.
+// ---------------------------------------------------------------------------
+
+const TASK6_PR_NUMBER = 78;
+
+function driveToPrMetadataSyncRequired(prNumber = TASK6_PR_NUMBER) {
+  const repoRoot = fakeRepo();
+  const taskId = `task6-${randomUUID()}`;
+  createTaskSession({ repoRoot, taskId, taskTitle: 'task6-demo', baseSha: BASE_SHA, prNumber });
+  const res = reserveTask({ repoRoot, taskId, reservedPaths: ['tools/night-agent/task6-demo.mjs'], baseSha: BASE_SHA });
+  const ownerToken = res.ownerToken;
+  enterRole({ repoRoot, taskId, ownerToken, toState: 'PLANNING', actingRole: 'NIGHT' });
+  enterRole({ repoRoot, taskId, ownerToken, toState: 'READY_FOR_A', actingRole: 'NIGHT' });
+  enterRole({ repoRoot, taskId, ownerToken, toState: 'EXECUTING', actingRole: 'A', requiredCapability: 'WRITE_TASK_FILES' });
+  const exec = finalizeExecutorResult({ state: 'IMPLEMENTED_AND_VALIDATED', executorRole: 'A', baseSha: BASE_SHA, headSha: HEAD_1 });
+  recordExecutorResult({ repoRoot, taskId, ownerToken, executorResult: exec, toState: 'READY_FOR_B' });
+  handoffToAuditor({ repoRoot, taskId, ownerToken, headSha: HEAD_1 });
+  const audit = certifyAuditResult({ executorRole: 'A', auditorRole: 'B', headSha: HEAD_1, requestedState: 'PASS', findings: [] });
+  recordAuditResult({ repoRoot, taskId, ownerToken, auditorResult: audit, toState: 'READY_FOR_C' });
+  handoffToValidator({ repoRoot, taskId, ownerToken, headSha: HEAD_1 });
+  const validation = certifyByValidator({ executorRole: 'A', validatorRole: 'C', currentHeadSha: HEAD_1, attestedAuditorResult: audit, ciHeadSha: HEAD_1, ciStatus: 'SUCCESS' });
+  recordValidationResult({ repoRoot, taskId, ownerToken, validatorResult: validation, toState: 'PR_METADATA_SYNC_REQUIRED' });
+  return { repoRoot, taskId, ownerToken, prNumber };
+}
+
+function goodSnapshotForCtx({ prNumber }) {
+  const block = buildFinalPrMetadataBlock({
+    task: '6/7', baseSha: BASE_SHA, headSha: HEAD_1, bAuditResult: 'PASS', cCertification: 'PASS',
+    ciHeadSha: HEAD_1, ciStatus: '4/4 SUCCESS', p0: 0, p1: 0, p2: 0, p3: 0,
+  });
+  return { state: 'OPEN', isDraft: true, merged: false, prNumber, bodyText: `Description.\n\n${block}\n` };
+}
+
+test('Task 6 happy path: PR_METADATA_SYNC_REQUIRED -> READY_FOR_HUMAN on a genuine, matching snapshot; MARK_READY then succeeds as record-only', () => {
+  const ctx = driveToPrMetadataSyncRequired();
+  const r = recordFinalPrMetadataVerification({
+    repoRoot: ctx.repoRoot, taskId: ctx.taskId, ownerToken: ctx.ownerToken, prNumber: ctx.prNumber,
+    prSnapshot: goodSnapshotForCtx(ctx), ciHeadSha: HEAD_1, ciStatusLabel: '4/4 SUCCESS',
+  });
+  assert.equal(r.ok, true);
+  assert.equal(r.verified, true);
+  assert.equal(r.state.state, 'READY_FOR_HUMAN');
+  assert.equal(r.state.pr_metadata_verification.pr_number, ctx.prNumber);
+  assert.equal(r.state.pr_metadata_verification.head_sha, HEAD_1);
+
+  const gate = requestHumanGate({ repoRoot: ctx.repoRoot, taskId: ctx.taskId, ownerToken: ctx.ownerToken, actionType: 'MARK_READY' });
+  assert.equal(gate.ok, true);
+  assert.equal(gate.humanGateRequired, true);
+  assert.equal(gate.actionExecuted, false);
+});
+
+test('Task 6: wrong owner token denied (lock ownership gate)', () => {
+  const ctx = driveToPrMetadataSyncRequired();
+  const r = recordFinalPrMetadataVerification({
+    repoRoot: ctx.repoRoot, taskId: ctx.taskId, ownerToken: 'not-the-real-token', prNumber: ctx.prNumber,
+    prSnapshot: goodSnapshotForCtx(ctx), ciHeadSha: HEAD_1, ciStatusLabel: '4/4 SUCCESS',
+  });
+  assert.equal(r.ok, false);
+  assert.equal(r.reason, 'WRONG_OWNER');
+});
+
+test('Task 6: wrong PR number denied (PR_IDENTITY_MISMATCH) before ever consulting the snapshot content', () => {
+  const ctx = driveToPrMetadataSyncRequired();
+  const r = recordFinalPrMetadataVerification({
+    repoRoot: ctx.repoRoot, taskId: ctx.taskId, ownerToken: ctx.ownerToken, prNumber: ctx.prNumber + 1,
+    prSnapshot: goodSnapshotForCtx(ctx), ciHeadSha: HEAD_1, ciStatusLabel: '4/4 SUCCESS',
+  });
+  assert.equal(r.ok, false);
+  assert.equal(r.reason, 'PR_IDENTITY_MISMATCH');
+});
+
+test('Task 6: CI head not matching current task head -> HOLD_HEAD_DRIFT, no state mutation', () => {
+  const ctx = driveToPrMetadataSyncRequired();
+  const before = getTaskState({ repoRoot: ctx.repoRoot, taskId: ctx.taskId });
+  const r = recordFinalPrMetadataVerification({
+    repoRoot: ctx.repoRoot, taskId: ctx.taskId, ownerToken: ctx.ownerToken, prNumber: ctx.prNumber,
+    prSnapshot: goodSnapshotForCtx(ctx), ciHeadSha: HEAD_2, ciStatusLabel: '4/4 SUCCESS',
+  });
+  assert.equal(r.ok, false);
+  assert.equal(r.reason, 'HOLD_HEAD_DRIFT');
+  const after = getTaskState({ repoRoot: ctx.repoRoot, taskId: ctx.taskId });
+  assert.equal(after.state, before.state, 'a rejected verification attempt must not mutate state');
+});
+
+test('Task 6: a stale/mismatched snapshot is recorded as a real HOLD (not silently ignored), and MARK_READY remains denied afterward', () => {
+  const ctx = driveToPrMetadataSyncRequired();
+  const staleSnapshot = { ...goodSnapshotForCtx(ctx), bodyText: 'Independent audit in progress.\n\n' + goodSnapshotForCtx(ctx).bodyText };
+  const r = recordFinalPrMetadataVerification({
+    repoRoot: ctx.repoRoot, taskId: ctx.taskId, ownerToken: ctx.ownerToken, prNumber: ctx.prNumber,
+    prSnapshot: staleSnapshot, ciHeadSha: HEAD_1, ciStatusLabel: '4/4 SUCCESS',
+  });
+  assert.equal(r.ok, true); // the CALL is well-formed; the CONTENT verification is what fails
+  assert.equal(r.verified, false);
+  assert.equal(r.verificationReason, 'STALE_MARKERS_PRESENT');
+  assert.equal(r.state.state, 'HOLD');
+
+  const gate = requestHumanGate({ repoRoot: ctx.repoRoot, taskId: ctx.taskId, ownerToken: ctx.ownerToken, actionType: 'MARK_READY' });
+  assert.equal(gate.ok, false);
+  assert.equal(gate.reason, 'PR_METADATA_VERIFICATION_MISSING');
+});
+
+test('Task 6: requestHumanGate defensively denies MARK_READY if a stored verification\'s head_sha no longer matches the CURRENT head_sha (invalidation-on-drift, even if state somehow reads READY_FOR_HUMAN)', () => {
+  const ctx = driveToPrMetadataSyncRequired();
+  const verified = recordFinalPrMetadataVerification({
+    repoRoot: ctx.repoRoot, taskId: ctx.taskId, ownerToken: ctx.ownerToken, prNumber: ctx.prNumber,
+    prSnapshot: goodSnapshotForCtx(ctx), ciHeadSha: HEAD_1, ciStatusLabel: '4/4 SUCCESS',
+  });
+  assert.equal(verified.verified, true);
+  // simulate a hypothetical future where head_sha diverged from the stored verification
+  // by hand-editing the persisted state directly (bypassing the orchestrator, exactly
+  // like the corruption/tamper scenarios elsewhere in this suite):
+  const filePath = resolveProtocolStatePath({ repoRoot: ctx.repoRoot, taskId: ctx.taskId });
+  const raw = JSON.parse(readFileSync(filePath, 'utf8'));
+  raw.head_sha = HEAD_2;
+  writeFileSync(filePath, JSON.stringify(raw, null, 2), 'utf8');
+
+  const gate = requestHumanGate({ repoRoot: ctx.repoRoot, taskId: ctx.taskId, ownerToken: ctx.ownerToken, actionType: 'MARK_READY' });
+  assert.equal(gate.ok, false);
+  assert.equal(gate.reason, 'HOLD_PR_METADATA_STALE');
 });
