@@ -1,0 +1,71 @@
+name: Post-merge CI locator
+
+# Publica en el commit de main una referencia estable al run de CI que
+# terminó después de un push. ChatGPT puede leer ese status por SHA,
+# extraer el run ID de target_url y después inspeccionar los 4 jobs sin
+# que el operador tenga que abrir Actions ni copiar enlaces manualmente.
+on:
+  workflow_run:
+    workflows: ["CI"]
+    types: [completed]
+    branches: [main]
+
+# Este workflow no toca código, paquetes, deployments, secretos ni
+# Production. Solo escribe metadata de commit status en GitHub.
+permissions:
+  statuses: write
+
+jobs:
+  publish-post-merge-ci-locator:
+    name: Post-merge CI locator
+    if: github.event.workflow_run.event == 'push'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+
+    steps:
+      - name: Publicar locator del CI post-merge
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
+          RUN_ID: ${{ github.event.workflow_run.id }}
+          RUN_URL: ${{ github.event.workflow_run.html_url }}
+          RUN_CONCLUSION: ${{ github.event.workflow_run.conclusion }}
+        run: |
+          set -euo pipefail
+
+          case "$RUN_CONCLUSION" in
+            success)
+              STATE="success"
+              ;;
+            failure|cancelled|timed_out|action_required|startup_failure|stale)
+              STATE="failure"
+              ;;
+            *)
+              STATE="error"
+              ;;
+          esac
+
+          DESCRIPTION="CI push-to-main run ${RUN_ID}: ${RUN_CONCLUSION}"
+
+          jq -n \
+            --arg state "$STATE" \
+            --arg target_url "$RUN_URL" \
+            --arg description "$DESCRIPTION" \
+            --arg context "Korixa — post-merge CI locator" \
+            '{
+              state: $state,
+              target_url: $target_url,
+              description: $description,
+              context: $context
+            }' > status.json
+
+          curl --fail-with-body --silent --show-error \
+            --request POST \
+            --header "Authorization: Bearer ${GH_TOKEN}" \
+            --header "Accept: application/vnd.github+json" \
+            --header "X-GitHub-Api-Version: 2022-11-28" \
+            "https://api.github.com/repos/${GITHUB_REPOSITORY}/statuses/${HEAD_SHA}" \
+            --data-binary @status.json
+
+          rm -f status.json
