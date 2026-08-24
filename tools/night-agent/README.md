@@ -115,6 +115,106 @@ SAFETY.md`'s "NIGHT-V1-D" section for the full rationale.
 - **`test/`** — `node:test` suites for the guard, the queue library,
   path-safety, checkpoint, executor, and the runner's CLI surface.
 
+### Task coordination modules (NIGHT/A/B/C protocol)
+
+The files above implement the controlled-execution *engine*; the files below
+implement the separate NIGHT→A→B→C role/state coordination layer used when a
+task's work is carried out as an explicit, auditable multi-role protocol
+(orchestrator, executor, auditor, validator) rather than through
+`--execute-green`. They have no dependency on `queue.mjs`/`runner.mjs` and no
+`child_process` usage of their own.
+
+- **`protocol-state.mjs`** — the closed, versioned schema for one task's
+  protocol state: `PROTOCOL_STATES` (the full state lifecycle, e.g.
+  `IDLE → PLANNING → READY_FOR_A → EXECUTING → READY_FOR_B → ... →
+  VALIDATING → PR_METADATA_SYNC_REQUIRED → READY_FOR_HUMAN → DONE`, plus
+  `HOLD`), `ROLES` (`NIGHT`/`A`/`B`/`C`), `RISK_CLASSES`
+  (`GREEN`/`YELLOW`/`RED`), and `HUMAN_GATE_TYPES`. `createProtocolState`,
+  `validateProtocolState` (rejects any unknown/extra field — a closed
+  schema, not a partial shape check), and `advanceProtocolState` (the only
+  way any field changes, always producing a new object) are the sole write
+  path; `writeProtocolStateAtomic`/`readProtocolState` persist it as
+  write-temp-then-rename JSON at a SHA-256-keyed path outside the repo
+  (`resolveProtocolStatePath`), stable per `repoRoot`+`taskId`.
+- **`role-protocol.mjs`** — the role-transition and certification rules on
+  top of that schema: `validateRoleTransition`/`validateStateTransition`
+  (a private state-transition table mapping each `fromState` to its allowed
+  `toState`s and the one role permitted to make that move),
+  `finalizeExecutorResult` (A's own conclusion — deliberately capped at
+  `IMPLEMENTED_AND_VALIDATED`/`HOLD`/`FAIL`; no field through which A could
+  claim a final PASS), `certifyAuditResult`/`certifyByValidator` (B's and
+  C's own certifications), and `isAttestedAuditorResult` — a module-private
+  `WeakSet` keyed by object identity (never shape) so a hand-built or
+  JSON-round-tripped auditor result can never be mistaken for one that
+  actually came from `certifyAuditResult`. `SelfCertificationForbiddenError`
+  /`InvalidRoleTransitionError` are thrown, never silently swallowed.
+- **`role-capabilities.mjs`** — the closed capability vocabulary
+  (`CAPABILITIES`, 18 entries) and the fixed per-role allowlist
+  (`evaluateRoleCapability`/`isRoleAllowed`), stored as a `Map` rather than a
+  plain object so no role string can ever reach the JS prototype chain.
+  `HUMAN_GATE_ONLY_CAPABILITIES` (`MARK_READY`, `MERGE_MAIN`,
+  `PRODUCTION_MUTATION`, `IAM_MUTATION`, `SECRET_MUTATION`,
+  `DESTRUCTIVE_OPERATION`) never appear in any role's row and are refused
+  unconditionally before a row is even consulted — no role, including
+  NIGHT, can ever be granted one. `BIND_PR_IDENTITY` (Task 7 hotfix) is
+  granted to NIGHT alone: binding a task's own `pr_number` to the PR NIGHT
+  just opened is routine lifecycle bookkeeping, not an authorization
+  decision, so it is deliberately excluded from the human-gate list.
+- **`task-lock.mjs`** — real, filesystem-backed concurrency control for the
+  coordination layer, kept in a SHA-256-keyed directory under the OS temp
+  dir (`resolveTaskLockDir`, content-addressed by `repoRoot`, case- and
+  trailing-slash-normalized). `acquireTaskLock`/`releaseTaskLock`/
+  `verifyTaskLockOwnership`/`updateTaskLockHeadSha` implement one scope lock
+  per task (exact-owner-token release only, corrupt-file reads fail closed
+  to `HOLD_LOCK_RECOVERY_REQUIRED`, no expiry/auto-steal).
+  `acquireActiveTaskSlot`/`releaseActiveTaskSlot`/
+  `verifyActiveTaskSlotOwnership` implement one additional, repo-wide
+  single-slot lock (`MAX_ACTIVE_TASK_EXECUTIONS_IN_CHAT = 1`): at most one
+  task may be actively executing per repo at a time, independent of whether
+  its reserved paths overlap anything else, with the same fail-closed and
+  owner-token-only-release properties.
+- **`task-orchestrator.mjs`** — the real, dogfooded entry points that drive
+  a task through the full lifecycle against the two modules above:
+  `createTaskSession` (creation only — `prNumber` is optional and normally
+  `null`, since a real PR cannot exist before the task's own branch has a
+  commit), `reserveTask` (static queue-level conflict check, then the real
+  scope lock, then the single active-task slot — all-or-nothing),
+  `enterRole`/`handoffToAuditor`/`handoffToValidator`, `recordExecutorResult`
+  /`recordAuditResult`/`recordValidationResult`, `enterWaitingCi`/
+  `resumeFromWaitingCi`, `recordFinalPrMetadataVerification`,
+  `requestHumanGate` (gates `MARK_READY`/`MERGE` behind a fresh PR snapshot,
+  matching PR identity/lifecycle, and a byte-exact PR-body SHA-256 match
+  against the stored, previously-verified hash), and `releaseTask`. Every
+  transition goes through one internal gate function enforcing, in order,
+  lock ownership, capability, optional HEAD-SHA binding, then the
+  state-transition table — persisting only if all four clear.
+  - **`recordPrOpened`** (Task 7 hotfix) — the NIGHT-only, capability-gated
+    function that binds a task's `pr_number` to a real PR *after* that PR
+    has actually been created (fixing the original defect, where a task
+    session had to be created before its branch had a commit, so no real
+    PR number could ever be known at creation time). It validates a full
+    PR snapshot (number, state, draft/merged flags, head/base SHA, head/base
+    ref) against the task's own recorded `head_sha`/`base_sha`/`branch`,
+    is idempotent on an exact repeat of the same identity, and returns a
+    named denial (`PR_IDENTITY_MISMATCH`, `PR_HEAD_MISMATCH`,
+    `PR_BASE_MISMATCH`, `PR_BRANCH_MISMATCH`, `PR_LIFECYCLE_INVALID`,
+    `PR_IDENTITY_ALREADY_BOUND`, `PR_BINDING_SNAPSHOT_REQUIRED`) for every
+    other case. Binding `pr_number` is orthogonal to a task's
+    `PROTOCOL_STATES` lifecycle — it never itself advances `state.state` —
+    so ordinary A remediation is free to advance `head_sha` afterward
+    without ever touching the bound PR identity.
+- **`pr-metadata-gate.mjs`** — the canonical, versioned PR-body metadata
+  block (`KORIXA_FINAL_PR_STATE_V1`) that is the one trusted source of
+  machine-truth inside a PR body: `buildFinalPrMetadataBlock`/
+  `parseFinalPrMetadataBlock` (strict parsing — only whitespace-only lines
+  are discarded; real content is never silently trimmed, so malformed
+  whitespace in a value fails its own closed-domain check instead of being
+  normalized away), `findStalePrBodyMarkers` (narrow stale-phrase
+  detection, not bare keyword matching), `computeBodySha256` (the one
+  reusable byte-exact body-hash helper, shared with
+  `task-orchestrator.mjs`'s `requestHumanGate`), and
+  `evaluateFinalPrMetadata`, the top-level gate combining all of the above.
+
 ## Usage
 
 ```
