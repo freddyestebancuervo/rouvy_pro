@@ -5,6 +5,12 @@
 // module adds an independent parser/semantic validator (actionlint) in GitHub
 // CI so the repository is not relying on its own parser alone.
 //
+// Scope boundary: actionlint's optional ShellCheck/Pyflakes integrations are
+// disabled here on purpose. They lint scripts embedded in `run:` blocks, not
+// the GitHub Actions workflow schema/expressions this incident exposed. Their
+// findings belong in separate, independently-scoped gates so informational
+// script-lint debt cannot silently redefine this gate's acceptance contract.
+//
 // Supply-chain controls:
 // - exact actionlint version pinned below;
 // - exact Linux amd64 release artifact URL;
@@ -23,6 +29,13 @@ import { spawnSync } from 'node:child_process';
 export const ACTIONLINT_VERSION = '1.7.12';
 export const ACTIONLINT_LINUX_AMD64_SHA256 = '8aca8db96f1b94770f1b0d72b6dddcb1ebb8123cb3712530b08cc387b349a3d8';
 export const ACTIONLINT_LINUX_AMD64_URL = `https://github.com/rhysd/actionlint/releases/download/v${ACTIONLINT_VERSION}/actionlint_${ACTIONLINT_VERSION}_linux_amd64.tar.gz`;
+
+// Pure, testable CLI contract. Keeping this outside runActionlintGate means a
+// future accidental flag regression (such as `-color never`) is caught by a
+// deterministic unit test before relying on a live CI invocation.
+export function buildActionlintArgs() {
+  return Object.freeze(['-no-color', '-shellcheck=', '-pyflakes=']);
+}
 
 function fail(reason, detail = '') {
   return Object.freeze({
@@ -119,7 +132,7 @@ export async function runActionlintGate({
       return fail('VERSION_MISMATCH', versionText);
     }
 
-    const lint = spawnSyncFn(binaryPath, ['-no-color'], {
+    const lint = spawnSyncFn(binaryPath, buildActionlintArgs(), {
       cwd: repoRoot,
       encoding: 'utf8',
       shell: false,
