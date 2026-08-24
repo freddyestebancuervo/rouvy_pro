@@ -54,6 +54,7 @@ export const CAPABILITIES = Object.freeze([
   'CERTIFY_AUDIT',
   'VALIDATE',
   'CERTIFY_TECHNICAL_PASS',
+  'BIND_PR_IDENTITY',
   'MARK_READY',
   'MERGE_MAIN',
   'PRODUCTION_MUTATION',
@@ -80,6 +81,16 @@ export const HUMAN_GATE_ONLY_CAPABILITIES = Object.freeze([
   'DESTRUCTIVE_OPERATION',
 ]);
 
+// BIND_PR_IDENTITY (Task 7 hotfix, 2026-08-24) is deliberately NOT a
+// human-gate capability -- binding a task's own pr_number to the PR NIGHT
+// itself just opened is routine orchestration bookkeeping, the same class
+// of action as recording a handoff or advancing protocol state, not an
+// authorization decision. It is granted to NIGHT alone (see ROLE_CAPABILITIES
+// below): NIGHT coordinates lifecycle/handoffs and never certifies code, so
+// it is the one role with no motive to misrepresent which PR a task's work
+// belongs to. A/B/C each have real incentive-adjacent reasons this
+// capability must stay out of their reach -- see role-capabilities.test.mjs.
+
 // ---------------------------------------------------------------------------
 // The closed allowlist itself -- a Map, not a plain object, so that an
 // attacker- or bug-supplied role string can never reach the JS prototype
@@ -89,7 +100,9 @@ export const HUMAN_GATE_ONLY_CAPABILITIES = Object.freeze([
 //
 // Design (per the invariants Task 3 requires be IMPOSSIBLE at this layer):
 //  - NIGHT is the orchestrator only: it plans and hands off, it never
-//    executes, audits, or validates task content itself. READ only.
+//    executes, audits, or validates task content itself. READ, plus (Task 7
+//    hotfix) BIND_PR_IDENTITY -- the one piece of lifecycle bookkeeping only
+//    NIGHT performs (recording which real PR a task's branch became).
 //  - A (Executor) may read, write task files, run ITS OWN primary tests,
 //    and commit/push the task branch -- but has no path to AUDIT,
 //    CERTIFY_AUDIT, VALIDATE, or CERTIFY_TECHNICAL_PASS: those verbs simply
@@ -109,7 +122,7 @@ export const HUMAN_GATE_ONLY_CAPABILITIES = Object.freeze([
 // ---------------------------------------------------------------------------
 
 const ROLE_CAPABILITIES = new Map([
-  ['NIGHT', Object.freeze(['READ'])],
+  ['NIGHT', Object.freeze(['READ', 'BIND_PR_IDENTITY'])],
   ['A', Object.freeze(['READ', 'WRITE_TASK_FILES', 'RUN_PRIMARY_TESTS', 'COMMIT_TASK_BRANCH', 'PUSH_TASK_BRANCH'])],
   ['B', Object.freeze(['READ', 'RUN_ADVERSARIAL_TESTS', 'AUDIT', 'CREATE_FINDING', 'CERTIFY_AUDIT'])],
   ['C', Object.freeze(['READ', 'VALIDATE', 'CERTIFY_TECHNICAL_PASS'])],
