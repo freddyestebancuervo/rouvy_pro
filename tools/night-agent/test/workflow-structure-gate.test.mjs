@@ -11,7 +11,10 @@ import {
   inspectWorkflowStructure,
   validateWorkflowDirectory,
 } from '../workflow-structure-gate.mjs';
-import { runActionlintGate } from '../actionlint-gate.mjs';
+import {
+  buildActionlintArgs,
+  runActionlintGate,
+} from '../actionlint-gate.mjs';
 
 const REPO_ROOT = fileURLToPath(new URL('../../../', import.meta.url));
 
@@ -91,6 +94,12 @@ test('required regression gate: every real repository workflow satisfies the enf
   console.log(`WORKFLOW_SCHEMA_VALIDATION=PASS files_checked=${result.filesChecked}`);
   assert.equal(result.valid, true);
   assert.ok(result.filesChecked > 0);
+});
+
+test('actionlint CLI contract is pinned and disables unrelated script-linter integrations', () => {
+  const args = buildActionlintArgs();
+  assert.deepEqual([...args], ['-no-color', '-shellcheck=', '-pyflakes=']);
+  assert.equal(Object.isFrozen(args), true);
 });
 
 test('required CI second layer: pinned actionlint independently validates all GitHub Actions workflows', { timeout: 120_000 }, async () => {
