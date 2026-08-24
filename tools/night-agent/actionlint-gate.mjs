@@ -119,7 +119,7 @@ export async function runActionlintGate({
       return fail('VERSION_MISMATCH', versionText);
     }
 
-    const lint = spawnSyncFn(binaryPath, ['-color', 'never'], {
+    const lint = spawnSyncFn(binaryPath, ['-no-color'], {
       cwd: repoRoot,
       encoding: 'utf8',
       shell: false,
