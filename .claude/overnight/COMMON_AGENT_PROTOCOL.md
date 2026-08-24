@@ -1,4 +1,4 @@
-# Common Agent Protocol (Task 2, 2026-08-23; Task 3, 2026-08-23)
+# Common Agent Protocol (Task 2, 2026-08-23; Task 3, 2026-08-23; Task 4, 2026-08-23)
 
 A single-chat, four-role coordination protocol for `NIGHT` (orchestrator),
 `A` (executor), `B` (independent adversarial auditor), and `C` (validator/
@@ -9,8 +9,9 @@ switches in one conversation — so future tasks don't have to re-derive it
 from a long prose instruction each time.
 
 ```
-SINGLE_CHAT         = TRUE   -- one conversation, sequential role switches
-SUBAGENTS_REQUIRED  = FALSE  -- no `Agent`/subagent ever simulates A/B/C
+SINGLE_CHAT                        = TRUE   -- one conversation, sequential role switches
+SUBAGENTS_REQUIRED                 = FALSE  -- no `Agent`/subagent ever simulates A/B/C
+MAX_ACTIVE_TASK_EXECUTIONS_IN_CHAT = 1      -- code-enforced (Task 4), see "Task coordination" below
 A = EXECUTOR   -- implements; can never self-certify (SelfCertificationForbiddenError)
 B = AUDITOR    -- independently audits A's delta; the only role that can CERTIFY_AUDIT
 C = VALIDATOR  -- independently validates B's attested result; the only role that can CERTIFY_TECHNICAL_PASS
@@ -25,24 +26,119 @@ outside this protocol, outside this chat.
 
 **Code**: `tools/night-agent/protocol-state.mjs` (shared-state schema +
 atomic persistence), `tools/night-agent/role-protocol.mjs` (role/state
-machine, handoff contract, evidence binding, human gates), and
+machine, handoff contract, evidence binding, human gates),
 `tools/night-agent/role-capabilities.mjs` (Task 3 — the CAPABILITY MODEL: a
 closed, fail-closed `evaluateRoleCapability(role, capability)` answering
 "may this role attempt this action", separate from role-protocol.mjs's
-"is this state transition legal"). **Tests**:
+"is this state transition legal"), `tools/night-agent/task-lock.mjs` and
+`tools/night-agent/task-orchestrator.mjs` (Task 4 — see "Task coordination,
+locks, handoff, resume" below). **Tests**:
 `tools/night-agent/test/protocol-state.test.mjs`,
 `tools/night-agent/test/role-protocol.test.mjs`,
-`tools/night-agent/test/role-capabilities.test.mjs` (104 tests total).
+`tools/night-agent/test/role-capabilities.test.mjs`,
+`tools/night-agent/test/task-lock.test.mjs`,
+`tools/night-agent/test/task-orchestrator.test.mjs` (168 tests total).
 
-**Status: MACHINE_ENFORCED_PRIMITIVE, not RUNTIME_WIRED_ENFORCEMENT.** These
-are tested, correct functions a caller can invoke to get a real, fail-closed
-decision — but nothing in this repository currently *requires* an agent to
-invoke them while actually role-switching (there is no orchestrator file
-this is wired into, unlike e.g. `command-safety.mjs`'s real wiring into
-`runner.mjs`). An independent audit of this exact question (B, Round 1)
-confirmed no repository evidence proves otherwise. This is Task 2's own
-stated scope — wiring into a real runner is explicitly future work, not
-overclaimed here as already done.
+## Task coordination, locks, handoff, resume (Task 4)
+
+Task 2/3 gave the repository correct, tested DECISION functions
+(`validateStateTransition`, `evaluateRoleCapability`, `certifyAuditResult`,
+`certifyByValidator`) that nothing in the repository's real execution path
+called. Task 4 adds the missing CALLER: `task-orchestrator.mjs` composes
+those primitives (none of them modified) into one sequenced API
+(`createTaskSession`, `reserveTask`, `enterRole`, `recordExecutorResult`,
+`handoffToAuditor`, `recordAuditResult`, `handoffToValidator`,
+`recordValidationResult`, `enterWaitingCi`, `resumeFromWaitingCi`,
+`requestHumanGate`, `releaseTask`) — every state-mutating call runs, in
+order, the four gates brief section 17 requires: **TASK_OWNERSHIP_VALID**
+(exact lock `owner_token` match), **CAPABILITY_ALLOWED**
+(`evaluateRoleCapability`), **SHA_BINDING_VALID** (caller-supplied
+`headSha` must equal the task's current `head_sha`, else
+`HOLD_HEAD_DRIFT`), and **STATE_TRANSITION_ALLOWED**
+(`validateStateTransition`) — and persists nothing unless all four clear.
+
+**Result-content consistency (added during A's own pre-handoff testing,
+not a later B finding)**: `recordAuditResult`/`recordValidationResult` also
+verify that `toState` matches what the result itself says — a HOLD-shaped
+auditor/validator result can never be recorded under a PASS-shaped
+`toState` merely because a caller asked for the wrong one
+(`INVALID_TOSTATE_FOR_AUDITOR_RESULT` / `..._VALIDATOR_RESULT`).
+`recordAuditResult` additionally requires `auditorResult` to pass
+role-protocol.mjs's `isAttestedAuditorResult` (the Task 2 WeakSet
+attestation) — a hand-fabricated, merely shape-plausible object is
+rejected even though it "looks right." `recordValidationResult` has no
+equivalent WeakSet export from role-protocol.mjs to check against (Task 2
+never built one for C); it instead verifies the exact shape
+`certifyByValidator` produces (`reason==='CERTIFIED'` only on a real PASS)
+— weaker than B's attestation, and documented as such, not overclaimed.
+
+**Locks** (`task-lock.mjs`): a per-task scope lock (`TASK_ID`, opaque
+`owner_token` via `crypto.randomBytes`, `RESERVED_PATHS`, `BASE_SHA`,
+`HEAD_SHA`, `ACQUIRED_AT`, `LOCK_STATE`) prevents double activation and
+overlapping-scope reservations between tasks, plus one repo-wide
+"active-task-execution slot" making `MAX_ACTIVE_TASK_EXECUTIONS_IN_CHAT=1`
+a real, code-checked property rather than only a norm this session
+follows. Persistence reuses `checkpoint.mjs`'s exact pattern
+(temp-file-then-rename, closed field set, deterministic SHA-256-hashed
+path outside the repo). A present-but-corrupt lock file — for the task
+being acquired, OR for any sibling lock in the same directory — returns
+`HOLD_LOCK_RECOVERY_REQUIRED` rather than being silently skipped or
+overwritten: a corrupt sibling could be hiding a real active reservation,
+so its absence from a listing must never be read as proof no conflict
+exists. There is no expiry logic and no force-release/steal path anywhere
+in this file — an old `acquired_at` timestamp never grants a bypass; only
+an exact `owner_token` match releases a lock.
+
+**Static vs. runtime conflicts** (`reserveTask`): a caller-supplied
+`staticTasks` list (queue-level `allowed_paths` declarations, pre-execution)
+is checked via `queue.mjs`'s `pathsOverlap`, reused verbatim, BEFORE the
+runtime lock-overlap check against other tasks' currently-ACTIVE
+reservations — both fail closed, and are reported under distinct reasons
+(`STATIC_TASK_CONFLICT` vs. `RUNTIME_RESERVATION_CONFLICT`).
+
+**WAITING_CI**: `resumeFromWaitingCi` makes exactly ONE classification
+decision per call (via `classifyCiWaitStatus`, reused verbatim — no loop,
+no sleep, no retry inside this function) and requires the caller's
+observed CI-evidence SHA to equal the task's own current `head_sha`
+exactly, else `HOLD_HEAD_DRIFT` — CI evidence from a stale SHA is never
+treated as evidence for the current one.
+
+**Evidence reuse**: `isEvidenceReusable({evidenceHeadSha, currentHeadSha})`
+is a small, real (not just documented) function — reuse is allowed only
+when both SHAs are non-empty and identical.
+
+**Status: `RUNTIME_WIRED_DECISION_ENFORCEMENT = TRUE`,
+`PHYSICAL_ROLE_SANDBOX = FALSE`.** Every state-mutating orchestrator
+operation genuinely calls the existing capability/state-transition/lock
+gates before persisting, and refuses to persist if any fails — this is
+real, verified by the adversarial test suite, not aspirational. But there
+is still no OS/tool-permission boundary between roles in this single-chat
+model (unlike `night-guard.mjs`'s real `PreToolUse` hook around an
+actually-separate spawned child): a human-typed message claiming "I am now
+B" while reusing A's own conclusions cannot be physically stopped —
+only its OUTPUT is judged, fail-closed, by the gates above. Do not claim
+"roles are physically sandboxed" or "Claude cannot physically call a
+forbidden tool" on the strength of this module; neither is true.
+
+**Out of scope for Task 4** (unchanged from Task 3's own boundary):
+`runner.mjs`'s triple execution lock, `KORIXA_NIGHT_REAL_SPAWN`, and
+autonomous Claude child spawning are untouched — this task coordinates
+roles/state, it does not turn on autonomous production execution.
+
+**Status (Task 2/3 primitives): MACHINE_ENFORCED_PRIMITIVE, and now also
+RUNTIME_WIRED_DECISION_ENFORCEMENT via task-orchestrator.mjs (Task 4).**
+Before Task 4, these were tested, correct functions a caller could invoke
+to get a real, fail-closed decision — but nothing in this repository
+required an agent to invoke them while actually role-switching (there was
+no orchestrator file this was wired into, unlike e.g. `command-safety.mjs`'s
+real wiring into `runner.mjs`). An independent audit of this exact question
+(B, Round 1) confirmed no repository evidence proved otherwise at the time.
+Task 4's `task-orchestrator.mjs` is that missing wiring — every
+state-mutating operation it exposes now genuinely calls these primitives
+before persisting anything (see "Task coordination, locks, handoff,
+resume" above). What remains true, unchanged: this is still decision-layer
+wiring, not a physical sandbox (`PHYSICAL_ROLE_SANDBOX = FALSE`) — see
+above.
 
 **Round 1 remediation (B audit → 2×P0, 2×P1, 1×P2, all fixed here):** a
 zero-width-Unicode identity-collision self-certification bypass, a
