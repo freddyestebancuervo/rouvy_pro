@@ -120,7 +120,21 @@ const STATE_TRANSITION_TABLE = Object.freeze({
   // path as any other HOLD.
   VALIDATING: Object.freeze({ PR_METADATA_SYNC_REQUIRED: 'C', HOLD: 'C' }),
   PR_METADATA_SYNC_REQUIRED: Object.freeze({ READY_FOR_HUMAN: 'C', HOLD: 'C' }),
-  READY_FOR_HUMAN: Object.freeze({ DONE: 'NIGHT' }), // NIGHT records the outcome; the human action itself (Ready/merge) is never performed by any role in this table -- see requiresHumanGateForAction below, which has no bypass parameter at all.
+  // Remediation (Task 6, Round 1, P2-02): a PR body can drift AFTER a
+  // genuine metadata verification (someone edits the description, a bot
+  // touches the body, ...) while HEAD and code remain untouched.
+  // requestHumanGate's own body-hash check (task-orchestrator.mjs) is what
+  // detects and DENIES MARK_READY/MERGE in that case -- this table entry
+  // is the recovery path back to re-verification once that's noticed: NIGHT
+  // (only NIGHT, same precedent as the HOLD->READY_FOR_B expired-attestation
+  // recovery above) may route READY_FOR_HUMAN directly back to
+  // PR_METADATA_SYNC_REQUIRED, where C performs a genuine
+  // recordFinalPrMetadataVerification against the NEW body -- never a
+  // silent auto-reverify, and never bypassing C's own independent check.
+  // This is metadata-only remediation: it does NOT touch, and cannot
+  // reach, EXECUTING/AUDITING/REMEDIATING -- a body-only drift never
+  // forces A or B to redo code work.
+  READY_FOR_HUMAN: Object.freeze({ DONE: 'NIGHT', PR_METADATA_SYNC_REQUIRED: 'NIGHT' }), // NIGHT records the DONE outcome; the human action itself (Ready/merge) is never performed by any role in this table -- see requiresHumanGateForAction below, which has no bypass parameter at all.
 });
 
 /**

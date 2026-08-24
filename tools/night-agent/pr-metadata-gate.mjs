@@ -58,6 +58,20 @@ const CI_STATUS_PATTERN = /^\d+\/\d+ SUCCESS$/;
 const NON_NEGATIVE_INT_PATTERN = /^\d+$/;
 
 /**
+ * The ONE canonical hash function for a PR body -- used both by
+ * `evaluateFinalPrMetadata` (to record what was verified) and by
+ * task-orchestrator.mjs's `requestHumanGate` (Task 6, Round 1, P2-02: to
+ * re-derive a FRESH body's hash and compare it against the stored,
+ * verified one before ever allowing MARK_READY/MERGE). Reused, never
+ * duplicated -- both callers must always agree on exactly the same bytes.
+ * @param {string} bodyText
+ * @returns {string} lowercase hex SHA-256
+ */
+export function computeBodySha256(bodyText) {
+  return createHash('sha256').update(bodyText, 'utf8').digest('hex');
+}
+
+/**
  * Build the canonical block's exact text (HTML-comment-wrapped). Throws on
  * any invalid field -- this function is used by A/the orchestrator to
  * produce a genuinely well-formed block; it must never itself emit
@@ -131,7 +145,20 @@ export function parseFinalPrMetadataBlock(bodyText) {
   if (endIdx === -1) return { valid: false, reason: 'UNTERMINATED_BLOCK' };
   const inner = normalized.slice(afterStart, endIdx);
 
-  const rawLines = inner.split('\n').map((l) => l.trim()).filter((l) => l.length > 0);
+  // Remediation (Task 6, Round 1, P2-01): this used to `.map((l) => l.trim())`
+  // on EVERY line before splitting on '=' -- which silently stripped
+  // leading/trailing whitespace off the VALUE too (e.g. "HEAD_SHA=<sha> "
+  // was normalized to "HEAD_SHA=<sha>"), violating this module's own
+  // stated "no trim-based identity relaxation for protocol values" rule.
+  // The fix: only whitespace-ONLY lines (pure blank-line spacing between
+  // KEY=VALUE entries) are ever discarded; a line with real content is
+  // parsed EXACTLY as written. A stray leading/trailing space or tab now
+  // fails closed naturally -- either the KEY no longer matches
+  // `^[A-Z0-9_]+$` (a leading space becomes part of the "key" and is
+  // rejected as MALFORMED_KEY), or the VALUE no longer matches its own
+  // closed-domain pattern below (every SHA/enum/integer check here is
+  // anchored `^...$`, so embedded whitespace never matches).
+  const rawLines = inner.split('\n').filter((l) => l.trim().length > 0);
   const fields = {};
   for (const line of rawLines) {
     const eq = line.indexOf('=');
@@ -269,6 +296,6 @@ export function evaluateFinalPrMetadata({ prSnapshot, expected }) {
     if (Number(f[blockKey]) !== Number(expected[key])) return { verified: false, reason: 'FINDINGS_MISMATCH' };
   }
 
-  const bodySha256 = createHash('sha256').update(prSnapshot.bodyText, 'utf8').digest('hex');
+  const bodySha256 = computeBodySha256(prSnapshot.bodyText);
   return { verified: true, reason: 'FINAL_PR_METADATA_VERIFIED', bodySha256, parsedFields: f };
 }

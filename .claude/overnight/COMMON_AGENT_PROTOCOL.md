@@ -102,20 +102,63 @@ are checked BEFORE the snapshot's content is ever consulted. A genuine
 PASS records a HEAD-bound `pr_metadata_verification` marker
 (`{pr_number, head_sha, body_sha256, verified_at}` — a new closed
 sub-schema field on `protocol-state.mjs`, never a full body copy, no
-secrets). `requestHumanGate`'s existing (Task 4) machinery now
-additionally requires, for `MARK_READY`/`MERGE` specifically, that
-`state.state === 'READY_FOR_HUMAN'` AND that marker's `head_sha` still
-equals the task's CURRENT `head_sha` — a verification bound to an OLDER
-head is never reusable after further work changes the head. Every other
-action type (`PRODUCTION_ACTION`, `IAM_OR_SECRET_ACTION`,
-`DESTRUCTIVE_ACTION`, `UNKNOWN_COMMAND_CLASS`) is unaffected — PR body
+secrets).
+
+**Remediation Round 1 (2026-08-24, 2 independent P2 findings, both fixed):**
+
+- **P2-01 — trailing-whitespace normalization.** `parseFinalPrMetadataBlock`
+  used to `.trim()` every line before splitting on `=`, which silently
+  stripped leading/trailing whitespace off a VALUE too (e.g.
+  `HEAD_SHA=<sha> ` was normalized to `HEAD_SHA=<sha>`), violating the
+  module's own "no trim-based identity relaxation" rule. Fixed: only
+  whitespace-ONLY lines (blank-line spacing) are ever discarded; a
+  non-blank line is parsed exactly as written, so stray whitespace in a
+  key or value now fails its own closed-domain check naturally (an
+  anchored `^...$` regex never matches embedded whitespace). CRLF-vs-LF
+  handling (a platform artifact, not semantic content) is unaffected.
+- **P2-02 — body hash stored but not enforced.** A stored
+  `pr_metadata_verification.body_sha256` proved a body was ONCE verified,
+  but nothing re-checked it before granting `MARK_READY`/`MERGE` — a PR
+  body could drift (bot edit, human touch-up, tampering) AFTER
+  verification and BEFORE the human gate, with only `head_sha` checked.
+  Fixed: `requestHumanGate` now REQUIRES a fresh, externally-obtained
+  `prSnapshot` (`{state, isDraft, merged, prNumber, bodyText}`) for
+  `MARK_READY`/`MERGE` specifically, independently recomputes its hash via
+  `computeBodySha256` (the SAME pure helper `evaluateFinalPrMetadata`
+  itself uses — never duplicated), and denies
+  (`HOLD_PR_METADATA_BODY_DRIFT`) on any mismatch — byte-exact, no fuzzy
+  "looks the same" comparison. A missing/malformed snapshot is
+  `FRESH_PR_SNAPSHOT_REQUIRED`; a snapshot for the wrong PR is
+  `PR_IDENTITY_MISMATCH`; the PR lifecycle expectation differs
+  deliberately by actionType (`PR_LIFECYCLE_INVALID` otherwise) —
+  `MARK_READY` expects the snapshot still Draft, `MERGE` expects it
+  already Ready (non-Draft) — but BOTH reuse the SAME stored
+  verification/hash once Draft flips to Ready: Ready authorization does
+  not itself require re-verification, and does not invalidate a
+  still-matching one either. Recovery when a real drift IS detected: a new
+  NIGHT-only `READY_FOR_HUMAN → PR_METADATA_SYNC_REQUIRED`
+  `STATE_TRANSITION_TABLE` entry (role-protocol.mjs) routes back to a
+  fresh `recordFinalPrMetadataVerification` call against the new body —
+  metadata-only remediation; it cannot reach EXECUTING/AUDITING/
+  REMEDIATING, so a body-only drift never forces A or B to redo code work.
+
+`requestHumanGate`'s (Task 4) HEAD-binding check is unchanged and remains
+the first gate: for `MARK_READY`/`MERGE`, `state.state === 'READY_FOR_HUMAN'`
+AND the stored marker's `head_sha` must still equal the task's CURRENT
+`head_sha` — a verification bound to an OLDER head is never reusable after
+further work changes the head. Every other action type
+(`PRODUCTION_ACTION`, `IAM_OR_SECRET_ACTION`, `DESTRUCTIVE_ACTION`,
+`UNKNOWN_COMMAND_CLASS`) is unaffected by any of this — PR body
 synchronization is routine metadata work, not itself a human gate; it is
-only Ready/Merge that now require this extra proof.
+only Ready/Merge that require this extra proof, and only they now require
+a `prSnapshot` argument at all.
 
 **Body edits are not code changes**: updating a PR body changes no source,
 creates no commit, changes no HEAD, and does not invalidate test evidence
-already valid for that same HEAD — Task 6 never triggers a test re-run
-merely because a PR body was synchronized.
+already valid for that same HEAD — Task 6 never triggers a code-test
+re-run merely because a PR body was synchronized. It DOES, correctly,
+invalidate the PR-BODY verification itself if the hash changed — that is
+a metadata-layer re-check, not a code-layer one.
 
 ## Task coordination, locks, handoff, resume (Task 4)
 

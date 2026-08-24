@@ -135,7 +135,7 @@ test('S6: happy path NIGHT -> A -> B -> C -> READY_FOR_HUMAN, via real orchestra
   assert.equal(metaResult.state.pr_metadata_verification.head_sha, HEAD_1);
 
   // STOP before any real human-gated action.
-  const gate = orch.requestHumanGate({ repoRoot, taskId, ownerToken, actionType: 'MARK_READY' });
+  const gate = orch.requestHumanGate({ repoRoot, taskId, ownerToken, actionType: 'MARK_READY', prSnapshot: snapshot });
   assert.equal(gate.ok, true);
   assert.equal(gate.humanGateRequired, true);
   assert.equal(gate.actionExecuted, false);

@@ -92,6 +92,16 @@ test('Task 6: a metadata problem at PR_METADATA_SYNC_REQUIRED routes to the ordi
   assert.doesNotThrow(() => validateStateTransition({ fromState: 'HOLD', toState: 'REMEDIATING', actingRole: 'A' }));
 });
 
+test('Task 6 Remediation Round 1 (P2-02): READY_FOR_HUMAN -> PR_METADATA_SYNC_REQUIRED is a NIGHT-only recovery move (body-drift re-verification), never C/A/B', () => {
+  assert.doesNotThrow(() => validateStateTransition({ fromState: 'READY_FOR_HUMAN', toState: 'PR_METADATA_SYNC_REQUIRED', actingRole: 'NIGHT' }));
+  assert.throws(() => validateStateTransition({ fromState: 'READY_FOR_HUMAN', toState: 'PR_METADATA_SYNC_REQUIRED', actingRole: 'C' }), InvalidRoleTransitionError);
+  assert.throws(() => validateStateTransition({ fromState: 'READY_FOR_HUMAN', toState: 'PR_METADATA_SYNC_REQUIRED', actingRole: 'A' }), InvalidRoleTransitionError);
+  assert.throws(() => validateStateTransition({ fromState: 'READY_FOR_HUMAN', toState: 'PR_METADATA_SYNC_REQUIRED', actingRole: 'B' }), InvalidRoleTransitionError);
+  // this recovery move never reaches EXECUTING/AUDITING/REMEDIATING directly -- it is metadata-only:
+  assert.throws(() => validateStateTransition({ fromState: 'READY_FOR_HUMAN', toState: 'EXECUTING', actingRole: 'NIGHT' }), InvalidRoleTransitionError);
+  assert.throws(() => validateStateTransition({ fromState: 'READY_FOR_HUMAN', toState: 'REMEDIATING', actingRole: 'NIGHT' }), InvalidRoleTransitionError);
+});
+
 test('a state transition not present in the table at all is rejected (e.g. IDLE -> DONE)', () => {
   assert.throws(() => validateStateTransition({ fromState: 'IDLE', toState: 'DONE', actingRole: 'NIGHT' }), InvalidRoleTransitionError);
 });

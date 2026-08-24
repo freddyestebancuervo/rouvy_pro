@@ -56,7 +56,7 @@ import {
   acquireActiveTaskSlot, releaseActiveTaskSlot,
 } from './task-lock.mjs';
 import { pathsOverlap } from './queue.mjs';
-import { evaluateFinalPrMetadata } from './pr-metadata-gate.mjs';
+import { evaluateFinalPrMetadata, computeBodySha256 } from './pr-metadata-gate.mjs';
 
 function countFindingsBySeverity(findings) {
   const counts = { P0: 0, P1: 0, P2: 0, P3: 0 };
@@ -533,8 +533,36 @@ const PR_READINESS_ACTION_TYPES = Object.freeze(['MARK_READY', 'MERGE']);
  * SECRET_ACTION, DESTRUCTIVE_ACTION, UNKNOWN_COMMAND_CLASS) are
  * unaffected -- their unconditional human-gate requirement has nothing to
  * do with a specific task's PR readiness.
+ *
+ * Remediation (Task 6, Round 1, P2-02): a stored `pr_metadata_verification`
+ * proves a body was ONCE verified -- it does not prove the CURRENT body is
+ * still that body. A PR description can change after verification (a bot
+ * edit, a human touch-up, an attacker) while HEAD stays untouched, and the
+ * old check above (HEAD-bound only) would have let MARK_READY/MERGE
+ * through anyway. For MARK_READY/MERGE specifically, callers must now
+ * additionally supply `prSnapshot` -- a FRESH, externally-obtained PR
+ * snapshot (`{state, isDraft, merged, prNumber, bodyText}`, same shape
+ * `evaluateFinalPrMetadata` itself consumes) -- and this function
+ * independently re-derives its hash via `computeBodySha256` (the SAME
+ * pure helper `evaluateFinalPrMetadata` used to record the stored hash;
+ * never duplicated) and compares it byte-for-byte against
+ * `pr_metadata_verification.body_sha256`. A mismatch is
+ * `HOLD_PR_METADATA_BODY_DRIFT`, fail-closed, no auto-reverify -- the
+ * recovery path is the READY_FOR_HUMAN -> PR_METADATA_SYNC_REQUIRED
+ * NIGHT-only transition (role-protocol.mjs) followed by a genuine new
+ * `recordFinalPrMetadataVerification` call. No natural-language claim of
+ * "body unchanged" is ever accepted as evidence; only a recomputed hash
+ * from bytes the caller actually supplied counts.
+ *
+ * The PR lifecycle expectation differs deliberately by actionType (brief
+ * section 5): MARK_READY expects the fresh snapshot to still be Draft (the
+ * human hasn't acted yet); MERGE expects it to already be Ready
+ * (`isDraft === false`, since a human already authorized Ready in a prior,
+ * separate gate). Both still require the SAME stored body-hash/HEAD
+ * binding -- Ready authorization does not itself re-verify anything, and
+ * does not invalidate a still-matching verification either.
  */
-export function requestHumanGate({ repoRoot, taskId, ownerToken, actionType, now }) {
+export function requestHumanGate({ repoRoot, taskId, ownerToken, actionType, prSnapshot, now }) {
   const lockCheck = verifyTaskLockOwnership({ repoRoot, taskId, ownerToken });
   if (!lockCheck.valid) return { ok: false, reason: lockCheck.reason ?? 'LOCK_OWNERSHIP_INVALID' };
   const state = loadState(repoRoot, taskId);
@@ -554,6 +582,25 @@ export function requestHumanGate({ repoRoot, taskId, ownerToken, actionType, now
     const verification = state.pr_metadata_verification;
     if (verification === null || verification.head_sha !== state.head_sha) {
       return { ok: false, reason: 'HOLD_PR_METADATA_STALE', detail: 'no valid pr_metadata_verification bound to the current head_sha' };
+    }
+    if (prSnapshot === null || typeof prSnapshot !== 'object' || typeof prSnapshot.bodyText !== 'string') {
+      return { ok: false, reason: 'FRESH_PR_SNAPSHOT_REQUIRED', detail: `${actionType} requires a fresh, externally-obtained PR snapshot` };
+    }
+    if (prSnapshot.prNumber !== verification.pr_number || prSnapshot.prNumber !== state.pr_number) {
+      return { ok: false, reason: 'PR_IDENTITY_MISMATCH' };
+    }
+    if (prSnapshot.state !== 'OPEN' || prSnapshot.merged === true) {
+      return { ok: false, reason: 'PR_LIFECYCLE_INVALID', detail: 'PR must be OPEN and unmerged at request time' };
+    }
+    if (actionType === 'MARK_READY' && prSnapshot.isDraft !== true) {
+      return { ok: false, reason: 'PR_LIFECYCLE_INVALID', detail: 'MARK_READY expects the PR to still be Draft at request time' };
+    }
+    if (actionType === 'MERGE' && prSnapshot.isDraft !== false) {
+      return { ok: false, reason: 'PR_LIFECYCLE_INVALID', detail: 'MERGE expects the PR to already be Ready (non-Draft) at request time' };
+    }
+    const currentBodySha256 = computeBodySha256(prSnapshot.bodyText);
+    if (currentBodySha256 !== verification.body_sha256) {
+      return { ok: false, reason: 'HOLD_PR_METADATA_BODY_DRIFT', detail: 'current PR body hash does not match the stored, verified hash -- re-run recordFinalPrMetadataVerification' };
     }
   }
 

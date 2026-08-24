@@ -397,3 +397,93 @@ test('FINAL_PR_STATE_REQUIRED_KEYS is exactly the closed set the brief specifies
     'CI_HEAD_SHA', 'CI_STATUS', 'P0', 'P1', 'P2', 'P3', 'FINAL_STATE',
   ].sort());
 });
+
+// ---------------------------------------------------------------------------
+// Remediation Round 1 (Task 6, 2026-08-24): P2-01 -- trailing/leading
+// whitespace on a protocol VALUE used to be silently normalized away by a
+// whole-line `.trim()` before parsing. Every named attack from the brief
+// must fail closed, not be coerced to the "clean" value.
+// ---------------------------------------------------------------------------
+
+function replaceField(block, key, value, newValue) {
+  return block.replace(`${key}=${value}`, `${key}=${newValue}`);
+}
+
+test('P2-01: HEAD_SHA=<sha><space> is rejected, not silently normalized', () => {
+  const head = HEAD_1;
+  const block = buildFinalPrMetadataBlock(goodFields());
+  const r = parseFinalPrMetadataBlock(replaceField(block, 'HEAD_SHA', head, `${head} `));
+  assert.equal(r.valid, false);
+  assert.equal(r.reason, 'MALFORMED_HEAD_SHA');
+});
+
+test('P2-01: <space>HEAD_SHA=<sha> (leading space before the key) is rejected', () => {
+  const head = HEAD_1;
+  const block = buildFinalPrMetadataBlock(goodFields());
+  const r = parseFinalPrMetadataBlock(block.replace(`HEAD_SHA=${head}`, ` HEAD_SHA=${head}`));
+  assert.equal(r.valid, false);
+  assert.equal(r.reason, 'MALFORMED_KEY: HEAD_SHA');
+});
+
+test('P2-01: HEAD_SHA=<tab><sha> (leading tab in the value) is rejected', () => {
+  const head = HEAD_1;
+  const block = buildFinalPrMetadataBlock(goodFields());
+  const r = parseFinalPrMetadataBlock(replaceField(block, 'HEAD_SHA', head, `\t${head}`));
+  assert.equal(r.valid, false);
+  assert.equal(r.reason, 'MALFORMED_HEAD_SHA');
+});
+
+test('P2-01: HEAD_SHA=<sha><tab> (trailing tab in the value) is rejected', () => {
+  const head = HEAD_1;
+  const block = buildFinalPrMetadataBlock(goodFields());
+  const r = parseFinalPrMetadataBlock(replaceField(block, 'HEAD_SHA', head, `${head}\t`));
+  assert.equal(r.valid, false);
+  assert.equal(r.reason, 'MALFORMED_HEAD_SHA');
+});
+
+test('P2-01: trailing space rejected on every other critical value (BASE_SHA, CI_HEAD_SHA, B_AUDIT_RESULT, C_CERTIFICATION, CI_STATUS, FINAL_STATE, P0-P3)', () => {
+  const cases = [
+    ['BASE_SHA', BASE_SHA, `${BASE_SHA} `, 'MALFORMED_BASE_SHA'],
+    ['CI_HEAD_SHA', HEAD_1, `${HEAD_1} `, 'MALFORMED_CI_HEAD_SHA'],
+    ['B_AUDIT_RESULT', 'PASS', 'PASS ', 'MALFORMED_B_AUDIT_RESULT'],
+    ['C_CERTIFICATION', 'PASS', 'PASS ', 'MALFORMED_C_CERTIFICATION'],
+    ['CI_STATUS', '4/4 SUCCESS', '4/4 SUCCESS ', 'MALFORMED_CI_STATUS'],
+    ['FINAL_STATE', 'PR_METADATA_SYNC_REQUIRED', 'PR_METADATA_SYNC_REQUIRED ', 'MALFORMED_FINAL_STATE'],
+    ['P0', '0', '0 ', 'MALFORMED_P0'],
+    ['P1', '0', '0 ', 'MALFORMED_P1'],
+    ['P2', '0', '0 ', 'MALFORMED_P2'],
+    ['P3', '0', '0 ', 'MALFORMED_P3'],
+  ];
+  for (const [key, oldValue, newValue, expectedReason] of cases) {
+    const block = buildFinalPrMetadataBlock(goodFields());
+    const r = parseFinalPrMetadataBlock(replaceField(block, key, oldValue, newValue));
+    assert.equal(r.valid, false, `${key} with trailing space should be rejected`);
+    assert.equal(r.reason, expectedReason);
+  }
+});
+
+test('P2-01: normal CRLF input (no embedded whitespace inside any value) still parses correctly -- CRLF handling is preserved', () => {
+  const block = buildFinalPrMetadataBlock(goodFields());
+  const crlfBlock = block.replace(/\n/g, '\r\n');
+  const r = parseFinalPrMetadataBlock(crlfBlock);
+  assert.equal(r.valid, true);
+});
+
+test('P2-01: blank/whitespace-only spacer lines between real KEY=VALUE lines are still tolerated (not a regression from the trim removal)', () => {
+  const block = buildFinalPrMetadataBlock(goodFields());
+  const withBlankLines = block.replace('B_AUDIT_RESULT=PASS\n', 'B_AUDIT_RESULT=PASS\n\n');
+  const r = parseFinalPrMetadataBlock(withBlankLines);
+  assert.equal(r.valid, true);
+});
+
+// ---------------------------------------------------------------------------
+// computeBodySha256 -- the one canonical hash helper (P2-02 fix), reused
+// (not duplicated) by task-orchestrator.mjs's requestHumanGate.
+// ---------------------------------------------------------------------------
+
+test('computeBodySha256 is deterministic and reused by evaluateFinalPrMetadata\'s own bodySha256 output', () => {
+  const body = goodBody();
+  const direct = createHash('sha256').update(body, 'utf8').digest('hex');
+  const result = evaluateFinalPrMetadata({ prSnapshot: goodSnapshot(), expected: goodExpected() });
+  assert.equal(result.bodySha256, direct);
+});
