@@ -540,6 +540,18 @@ export function recordFinalPrMetadataVerification({
 
   const state = loadState(repoRoot, taskId);
   if (state === null) return { ok: false, reason: 'NO_TASK_SESSION' };
+  // Remediation (Task 7 hotfix, B audit, P2-1): `state.pr_number !== prNumber`
+  // alone is not sufficient -- in JS, `null !== null` is `false`, so a task
+  // that never had `recordPrOpened` called (pr_number legitimately still
+  // null) combined with a caller passing `prNumber: null` (e.g. forwarding
+  // an unchecked field) would incorrectly read as "not mismatched" and fall
+  // through to content verification instead of being denied here, the
+  // correct, early point. This explicit `typeof` check closes that hole:
+  // a task with no bound PR identity is ALWAYS denied here, regardless of
+  // what the caller passes as `prNumber`.
+  if (typeof state.pr_number !== 'number') {
+    return { ok: false, reason: 'PR_IDENTITY_MISMATCH', detail: 'task has no bound PR identity -- call recordPrOpened first' };
+  }
   if (state.pr_number !== prNumber) return { ok: false, reason: 'PR_IDENTITY_MISMATCH', detail: `task's recorded pr_number is ${state.pr_number}, verification requested for ${prNumber}` };
   if (!isNonEmptyString(ciHeadSha) || ciHeadSha !== state.head_sha) {
     return { ok: false, reason: 'HOLD_HEAD_DRIFT', detail: `CI head ${JSON.stringify(ciHeadSha)} does not match task head_sha ${state.head_sha}` };

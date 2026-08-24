@@ -845,7 +845,7 @@ test('REAL-CHRONOLOGY REGRESSION TEST (brief section 10): the exact chronology T
   });
   assert.equal(withoutBinding.ok, false);
   assert.equal(withoutBinding.reason, 'PR_IDENTITY_MISMATCH');
-  assert.equal(withoutBinding.detail.includes('null'), true, 'must fail specifically because pr_number is still null');
+  assert.equal(withoutBinding.detail.includes('no bound PR identity'), true, 'must fail specifically because pr_number is still unbound (not yet recordPrOpened)');
 
   // 5. simulate PR creation only AFTER HEAD exists
   // 6. call recordPrOpened with fresh Draft PR snapshot
@@ -1052,6 +1052,25 @@ test('recordPrOpened: direct final metadata verify while pr_number null -> DENY 
   });
   assert.equal(r.ok, false);
   assert.equal(r.reason, 'PR_IDENTITY_MISMATCH');
+});
+
+test('B AUDIT P2-1 REGRESSION: recordFinalPrMetadataVerification(prNumber=null) on a task with pr_number still null must fail closed cleanly, never null===null-slip-through, never an unhandled throw', () => {
+  const ctx = driveThroughExecuting();
+  const exec = finalizeExecutorResult({ state: 'IMPLEMENTED_AND_VALIDATED', executorRole: 'A', baseSha: BASE_SHA, headSha: HEAD_1 });
+  recordExecutorResult({ repoRoot: ctx.repoRoot, taskId: ctx.taskId, ownerToken: ctx.ownerToken, executorResult: exec, toState: 'READY_FOR_B' });
+  assert.doesNotThrow(() => {
+    const r = recordFinalPrMetadataVerification({
+      repoRoot: ctx.repoRoot, taskId: ctx.taskId, ownerToken: ctx.ownerToken, prNumber: null,
+      prSnapshot: { state: 'OPEN', isDraft: true, merged: false, prNumber: null, bodyText: 'n/a' },
+      ciHeadSha: HEAD_1, ciStatusLabel: '4/4 SUCCESS',
+    });
+    assert.equal(r.ok, false);
+    assert.equal(r.reason, 'PR_IDENTITY_MISMATCH');
+  });
+  // the task's own state must remain untouched -- no partial/malformed write occurred
+  const state = getTaskState({ repoRoot: ctx.repoRoot, taskId: ctx.taskId });
+  assert.equal(state.pr_number, null);
+  assert.equal(state.pr_metadata_verification, null);
 });
 
 test('recordPrOpened: correct fresh binding -> PASS, and final metadata gate after binding -> PASS (proves the fix, not just the denials)', () => {
