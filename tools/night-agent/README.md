@@ -122,8 +122,10 @@ SAFETY.md`'s "NIGHT-V1-D" section for the full rationale.
   repo pattern `checkpoint.mjs` already established, reused rather than
   reimplemented).
 - **`role-protocol.mjs`** (Task 2) — the role/state transition tables
-  (`VALID_ROLE_TRANSITIONS`, `STATE_TRANSITION_TABLE`), exact-canonical-
-  identity independence checks, A's structurally-PASS-free output domain
+  (the exported `VALID_ROLE_TRANSITIONS`, plus an internal, unexported
+  `STATE_TRANSITION_TABLE` consulted by `validateStateTransition`),
+  exact-canonical-identity independence checks, A's structurally-PASS-free
+  output domain
   (`finalizeExecutorResult`), B's WeakSet-attested audit certification
   (`certifyAuditResult`/`isAttestedAuditorResult`), C's HEAD/CI/attestation-
   bound validation (`certifyByValidator`), and the human-gate mapping
@@ -150,7 +152,8 @@ SAFETY.md`'s "NIGHT-V1-D" section for the full rationale.
   modified) into one sequenced API (`createTaskSession`, `reserveTask`,
   `enterRole`, `recordExecutorResult`, `handoffToAuditor`,
   `recordAuditResult`, `handoffToValidator`, `recordValidationResult`,
-  `enterWaitingCi`, `resumeFromWaitingCi`, `requestHumanGate`,
+  `enterWaitingCi`, `resumeFromWaitingCi`, `recordFinalPrMetadataVerification`
+  (Task 6's own gate — see `pr-metadata-gate.mjs` below), `requestHumanGate`,
   `releaseTask`). Every state-mutating operation enforces task ownership,
   role capability, SHA binding, and state-transition legality before
   persisting anything.
