@@ -27,6 +27,7 @@ import * as roleProto from '../role-protocol.mjs';
 import { evaluateRoleCapability, CAPABILITIES, HUMAN_GATE_ONLY_CAPABILITIES } from '../role-capabilities.mjs';
 import { ROLES, HUMAN_GATE_TYPES, resolveProtocolStatePath } from '../protocol-state.mjs';
 import { validateSchema, findPathConflicts, findCycle } from '../queue.mjs';
+import { buildFinalPrMetadataBlock } from '../pr-metadata-gate.mjs';
 
 function fakeRepo() {
   return `/fake/repo-${randomUUID()}`;
@@ -35,6 +36,21 @@ const BASE_SHA = 'a'.repeat(40);
 const HEAD_1 = 'b'.repeat(40);
 const HEAD_2 = 'c'.repeat(40);
 const HEAD_3 = 'd'.repeat(40);
+const SIM_PR_NUMBER = 90001;
+
+/**
+ * Build a genuine, well-formed synthetic PR snapshot (Task 6) -- the exact
+ * shape `recordFinalPrMetadataVerification` expects an externally-fetched
+ * GitHub PR to have. `p0..p3` default to the counts already recorded on
+ * `state.findings` when omitted, so callers rarely need to pass them.
+ */
+function buildSyntheticPrSnapshot({ prNumber = SIM_PR_NUMBER, baseSha, headSha, bAuditResult, cCertification, ciHeadSha, ciStatus = '4/4 SUCCESS', p0 = 0, p1 = 0, p2 = 0, p3 = 0 }) {
+  const block = buildFinalPrMetadataBlock({
+    task: '6/7', baseSha, headSha, bAuditResult, cCertification, ciHeadSha, ciStatus, p0, p1, p2, p3,
+  });
+  const bodyText = `## Simulated PR\n\nSynthetic Task 5/6 simulation body.\n\n${block}\n`;
+  return { state: 'OPEN', isDraft: true, merged: false, prNumber, bodyText };
+}
 
 // ---------------------------------------------------------------------------
 // SECTION 6 -- REQUIRED PRIMARY HAPPY-PATH SIMULATION
@@ -45,7 +61,7 @@ test('S6: happy path NIGHT -> A -> B -> C -> READY_FOR_HUMAN, via real orchestra
   const taskId = `s6-${randomUUID()}`;
 
   // NIGHT
-  const created = orch.createTaskSession({ repoRoot, taskId, taskTitle: 'Simulated happy path', baseSha: BASE_SHA, riskClass: 'GREEN' });
+  const created = orch.createTaskSession({ repoRoot, taskId, taskTitle: 'Simulated happy path', baseSha: BASE_SHA, riskClass: 'GREEN', prNumber: SIM_PR_NUMBER });
   assert.equal(created.ok, true);
   const reserved = orch.reserveTask({ repoRoot, taskId, reservedPaths: ['tools/night-agent/sim-fixture.mjs'], baseSha: BASE_SHA });
   assert.equal(reserved.ok, true);
@@ -100,14 +116,29 @@ test('S6: happy path NIGHT -> A -> B -> C -> READY_FOR_HUMAN, via real orchestra
   });
   assert.equal(validatorResult.finalState, 'PASS');
   assert.equal(validatorResult.reason, 'CERTIFIED');
-  const recVal = orch.recordValidationResult({ repoRoot, taskId, ownerToken, validatorResult, toState: 'READY_FOR_HUMAN' });
+  const recVal = orch.recordValidationResult({ repoRoot, taskId, ownerToken, validatorResult, toState: 'PR_METADATA_SYNC_REQUIRED' });
   assert.equal(recVal.ok, true);
-  assert.equal(recVal.state.state, 'READY_FOR_HUMAN');
+  assert.equal(recVal.state.state, 'PR_METADATA_SYNC_REQUIRED');
+
+  // Task 6: C_PASS does not directly imply READY_FOR_HUMAN -- MARK_READY must
+  // be denied until the final PR metadata gate genuinely passes.
+  const gateTooEarly = orch.requestHumanGate({ repoRoot, taskId, ownerToken, actionType: 'MARK_READY' });
+  assert.equal(gateTooEarly.ok, false);
+  assert.equal(gateTooEarly.reason, 'PR_METADATA_VERIFICATION_MISSING');
+
+  const snapshot = buildSyntheticPrSnapshot({ baseSha: BASE_SHA, headSha: HEAD_1, bAuditResult: 'PASS', cCertification: 'PASS', ciHeadSha: HEAD_1 });
+  const metaResult = orch.recordFinalPrMetadataVerification({ repoRoot, taskId, ownerToken, prNumber: SIM_PR_NUMBER, prSnapshot: snapshot, ciHeadSha: HEAD_1, ciStatusLabel: '4/4 SUCCESS' });
+  assert.equal(metaResult.ok, true);
+  assert.equal(metaResult.verified, true);
+  assert.equal(metaResult.state.state, 'READY_FOR_HUMAN');
+  assert.notEqual(metaResult.state.pr_metadata_verification, null);
+  assert.equal(metaResult.state.pr_metadata_verification.head_sha, HEAD_1);
 
   // STOP before any real human-gated action.
-  const gate = orch.requestHumanGate({ repoRoot, taskId, ownerToken, actionType: 'MARK_READY' });
+  const gate = orch.requestHumanGate({ repoRoot, taskId, ownerToken, actionType: 'MARK_READY', prSnapshot: snapshot });
   assert.equal(gate.ok, true);
   assert.equal(gate.humanGateRequired, true);
+  assert.equal(gate.actionExecuted, false);
   const finalState = orch.getTaskState({ repoRoot, taskId });
   assert.equal(finalState.state, 'READY_FOR_HUMAN'); // never silently advances to DONE/merged
   assert.notEqual(finalState.state, 'DONE');
@@ -122,7 +153,7 @@ test('S6: happy path NIGHT -> A -> B -> C -> READY_FOR_HUMAN, via real orchestra
 test('S7: B HOLD -> A remediation (OLD_HEAD..NEW_HEAD) -> B re-audit -> C PASS', () => {
   const repoRoot = fakeRepo();
   const taskId = `s7-${randomUUID()}`;
-  orch.createTaskSession({ repoRoot, taskId, taskTitle: 'Simulated remediation loop', baseSha: BASE_SHA });
+  orch.createTaskSession({ repoRoot, taskId, taskTitle: 'Simulated remediation loop', baseSha: BASE_SHA, prNumber: SIM_PR_NUMBER });
   const reserved = orch.reserveTask({ repoRoot, taskId, reservedPaths: ['tools/night-agent/sim-remediation.mjs'], baseSha: BASE_SHA });
   const ownerToken = reserved.ownerToken;
   orch.enterRole({ repoRoot, taskId, ownerToken, toState: 'PLANNING', actingRole: 'NIGHT' });
@@ -173,10 +204,37 @@ test('S7: B HOLD -> A remediation (OLD_HEAD..NEW_HEAD) -> B re-audit -> C PASS',
   orch.handoffToValidator({ repoRoot, taskId, ownerToken, headSha: NEW_HEAD });
   const validatorResult = roleProto.certifyByValidator({ executorRole: 'A', validatorRole: 'C', currentHeadSha: NEW_HEAD, attestedAuditorResult: cleanAudit, ciHeadSha: NEW_HEAD, ciStatus: 'SUCCESS' });
   assert.equal(validatorResult.finalState, 'PASS');
-  const recVal = orch.recordValidationResult({ repoRoot, taskId, ownerToken, validatorResult, toState: 'READY_FOR_HUMAN' });
+  const recVal = orch.recordValidationResult({ repoRoot, taskId, ownerToken, validatorResult, toState: 'PR_METADATA_SYNC_REQUIRED' });
   assert.equal(recVal.ok, true);
-  assert.equal(recVal.state.state, 'READY_FOR_HUMAN');
+  assert.equal(recVal.state.state, 'PR_METADATA_SYNC_REQUIRED');
   assert.equal(recVal.state.head_sha, NEW_HEAD);
+
+  // Task 6: final metadata gate, bound to NEW_HEAD (a snapshot still
+  // claiming OLD_HEAD in its canonical block must be rejected).
+  const staleSnapshot = buildSyntheticPrSnapshot({ baseSha: BASE_SHA, headSha: OLD_HEAD, bAuditResult: 'PASS', cCertification: 'PASS', ciHeadSha: OLD_HEAD });
+  const staleMeta = orch.recordFinalPrMetadataVerification({ repoRoot, taskId, ownerToken, prNumber: SIM_PR_NUMBER, prSnapshot: staleSnapshot, ciHeadSha: NEW_HEAD, ciStatusLabel: '4/4 SUCCESS' });
+  assert.equal(staleMeta.ok, true);
+  assert.equal(staleMeta.verified, false, 'a PR body still claiming the OLD_HEAD after remediation must fail the metadata gate');
+  assert.equal(staleMeta.state.state, 'HOLD');
+
+  // recover: the underlying B/C work was genuinely fine -- only the PR BODY
+  // TEXT was stale -- so NIGHT routes this HOLD directly to READY_FOR_B
+  // (skipping A), exactly Task 2's own established attestation-recovery
+  // pattern (see S15), reused here for a metadata-only staleness cause.
+  orch.enterRole({ repoRoot, taskId, ownerToken, toState: 'READY_FOR_B', actingRole: 'NIGHT', requiredCapability: 'READ', headSha: NEW_HEAD });
+  orch.handoffToAuditor({ repoRoot, taskId, ownerToken, headSha: NEW_HEAD });
+  const reaudit = roleProto.certifyAuditResult({ executorRole: 'A', auditorRole: 'B', headSha: NEW_HEAD, requestedState: 'PASS', findings: [] });
+  orch.recordAuditResult({ repoRoot, taskId, ownerToken, auditorResult: reaudit, toState: 'READY_FOR_C' });
+  orch.handoffToValidator({ repoRoot, taskId, ownerToken, headSha: NEW_HEAD });
+  const revalidation = roleProto.certifyByValidator({ executorRole: 'A', validatorRole: 'C', currentHeadSha: NEW_HEAD, attestedAuditorResult: reaudit, ciHeadSha: NEW_HEAD, ciStatus: 'SUCCESS' });
+  orch.recordValidationResult({ repoRoot, taskId, ownerToken, validatorResult: revalidation, toState: 'PR_METADATA_SYNC_REQUIRED' });
+
+  const correctSnapshot = buildSyntheticPrSnapshot({ baseSha: BASE_SHA, headSha: NEW_HEAD, bAuditResult: 'PASS', cCertification: 'PASS', ciHeadSha: NEW_HEAD });
+  const finalMeta = orch.recordFinalPrMetadataVerification({ repoRoot, taskId, ownerToken, prNumber: SIM_PR_NUMBER, prSnapshot: correctSnapshot, ciHeadSha: NEW_HEAD, ciStatusLabel: '4/4 SUCCESS' });
+  assert.equal(finalMeta.ok, true);
+  assert.equal(finalMeta.verified, true);
+  assert.equal(finalMeta.state.state, 'READY_FOR_HUMAN');
+  assert.equal(finalMeta.state.head_sha, NEW_HEAD);
 
   orch.releaseTask({ repoRoot, taskId, ownerToken });
 });
@@ -303,19 +361,32 @@ test('S10: HUMAN_GATE-only capabilities are denied to every role, every combinat
   assert.equal(HUMAN_GATE_ONLY_CAPABILITIES.length, 6);
 });
 
-test('S10-b: C PASS never implies READY/MERGE/PRODUCTION authorization -- requestHumanGate only records, never executes', () => {
+test('S10-b: C PASS never implies READY/MERGE/PRODUCTION authorization -- requestHumanGate only records, never executes; Task 6 additionally requires a genuine PR metadata verification for MARK_READY/MERGE specifically', () => {
   const repoRoot = fakeRepo();
   const taskId = `s10b-${randomUUID()}`;
   orch.createTaskSession({ repoRoot, taskId, taskTitle: 'x', baseSha: BASE_SHA });
   const reserved = orch.reserveTask({ repoRoot, taskId, reservedPaths: ['tools/night-agent/s10b.mjs'], baseSha: BASE_SHA });
   const ownerToken = reserved.ownerToken;
-  for (const actionType of HUMAN_GATE_TYPES) {
+
+  // Not PR-readiness actions: still succeed unconditionally, from ANY state --
+  // PR body sync is unrelated to Production/IAM/secret/destructive gates.
+  for (const actionType of ['PRODUCTION_ACTION', 'IAM_OR_SECRET_ACTION', 'DESTRUCTIVE_ACTION', 'UNKNOWN_COMMAND_CLASS']) {
     const r = orch.requestHumanGate({ repoRoot, taskId, ownerToken, actionType });
     assert.equal(r.ok, true);
     assert.equal(r.humanGateRequired, true, `${actionType} must always require a human gate`);
+    assert.equal(r.actionExecuted, false);
     const state = orch.getTaskState({ repoRoot, taskId });
     assert.notEqual(state.state, 'DONE');
   }
+
+  // PR-readiness actions: denied while the task has not genuinely reached
+  // READY_FOR_HUMAN with a valid metadata verification (still in IDLE here).
+  for (const actionType of ['MARK_READY', 'MERGE']) {
+    const r = orch.requestHumanGate({ repoRoot, taskId, ownerToken, actionType });
+    assert.equal(r.ok, false);
+    assert.equal(r.reason, 'PR_METADATA_VERIFICATION_MISSING');
+  }
+
   const bogus = orch.requestHumanGate({ repoRoot, taskId, ownerToken, actionType: 'SOMETHING_NOT_IN_THE_CLOSED_SET' });
   assert.equal(bogus.ok, false);
   assert.equal(bogus.reason, 'UNKNOWN_ACTION_TYPE');
@@ -474,7 +545,7 @@ test('S14: evidence bound to HEAD_1 is not reusable as proof for HEAD_2; same-SH
 test('S15: attestation-expired recovery -- persisted-lookalike B result is refused by C, NIGHT routes HOLD->READY_FOR_B, genuine re-attestation then succeeds', () => {
   const repoRoot = fakeRepo();
   const taskId = `s15-${randomUUID()}`;
-  orch.createTaskSession({ repoRoot, taskId, taskTitle: 'x', baseSha: BASE_SHA });
+  orch.createTaskSession({ repoRoot, taskId, taskTitle: 'x', baseSha: BASE_SHA, prNumber: SIM_PR_NUMBER });
   const reserved = orch.reserveTask({ repoRoot, taskId, reservedPaths: ['tools/night-agent/s15.mjs'], baseSha: BASE_SHA });
   const ownerToken = reserved.ownerToken;
   orch.enterRole({ repoRoot, taskId, ownerToken, toState: 'PLANNING', actingRole: 'NIGHT' });
@@ -536,9 +607,18 @@ test('S15: attestation-expired recovery -- persisted-lookalike B result is refus
   orch.handoffToValidator({ repoRoot, taskId, ownerToken, headSha: HEAD_1 });
   const finalCPass = roleProto.certifyByValidator({ executorRole: 'A', validatorRole: 'C', currentHeadSha: HEAD_1, attestedAuditorResult: freshAttestation, ciHeadSha: HEAD_1, ciStatus: 'SUCCESS' });
   assert.equal(finalCPass.finalState, 'PASS');
-  const recFinal = orch.recordValidationResult({ repoRoot, taskId, ownerToken, validatorResult: finalCPass, toState: 'READY_FOR_HUMAN' });
+  const recFinal = orch.recordValidationResult({ repoRoot, taskId, ownerToken, validatorResult: finalCPass, toState: 'PR_METADATA_SYNC_REQUIRED' });
   assert.equal(recFinal.ok, true);
-  assert.equal(recFinal.state.state, 'READY_FOR_HUMAN');
+  assert.equal(recFinal.state.state, 'PR_METADATA_SYNC_REQUIRED');
+
+  // Task 6: a technical C PASS still isn't READY_FOR_HUMAN until the final
+  // PR metadata gate genuinely passes too -- both attestation recovery
+  // (Task 2) and metadata sync (Task 6) must hold for the task to reach it.
+  const snapshot = buildSyntheticPrSnapshot({ baseSha: BASE_SHA, headSha: HEAD_1, bAuditResult: 'PASS', cCertification: 'PASS', ciHeadSha: HEAD_1 });
+  const metaResult = orch.recordFinalPrMetadataVerification({ repoRoot, taskId, ownerToken, prNumber: SIM_PR_NUMBER, prSnapshot: snapshot, ciHeadSha: HEAD_1, ciStatusLabel: '4/4 SUCCESS' });
+  assert.equal(metaResult.ok, true);
+  assert.equal(metaResult.verified, true);
+  assert.equal(metaResult.state.state, 'READY_FOR_HUMAN');
 
   orch.releaseTask({ repoRoot, taskId, ownerToken });
 });

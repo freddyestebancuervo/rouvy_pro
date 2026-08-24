@@ -31,6 +31,15 @@ export const RISK_CLASSES = Object.freeze(['GREEN', 'YELLOW', 'RED']);
 export const ROLES = Object.freeze(['NIGHT', 'A', 'B', 'C']);
 
 // The finite state model named explicitly in Task 2's own brief.
+//
+// Task 6 (2026-08-23) inserts PR_METADATA_SYNC_REQUIRED between VALIDATING
+// and READY_FOR_HUMAN: a C-technical PASS must no longer directly imply
+// READY_FOR_HUMAN. Real recurring evidence (PR #78/#79) showed a Draft PR's
+// own body text can lag behind the real, already-certified task state --
+// the code was correct, but the PR metadata was stale. See
+// pr-metadata-gate.mjs and task-orchestrator.mjs's
+// recordFinalPrMetadataVerification for the machine-enforced gate this
+// state exists to require.
 export const PROTOCOL_STATES = Object.freeze([
   'IDLE',
   'PLANNING',
@@ -43,6 +52,7 @@ export const PROTOCOL_STATES = Object.freeze([
   'REMEDIATING',
   'READY_FOR_C',
   'VALIDATING',
+  'PR_METADATA_SYNC_REQUIRED',
   'READY_FOR_HUMAN',
   'DONE',
 ]);
@@ -95,6 +105,7 @@ const ALLOWED_FIELDS = new Set([
   'base_drift',
   'human_gate_required',
   'human_gate_type',
+  'pr_metadata_verification',
   'next_action',
   'updated_at',
 ]);
@@ -149,6 +160,12 @@ export function createProtocolState({
     base_drift: false,
     human_gate_required: false,
     human_gate_type: null,
+    // Task 6: set only by task-orchestrator.mjs's recordFinalPrMetadataVerification,
+    // on a genuine PASS from pr-metadata-gate.mjs's evaluateFinalPrMetadata --
+    // never hand-constructed. HEAD-bound: a caller must compare
+    // pr_metadata_verification.head_sha against the CURRENT head_sha before
+    // ever treating it as still valid (see requestHumanGate).
+    pr_metadata_verification: null,
     next_action: null,
     updated_at: timestamp,
   });
@@ -179,7 +196,30 @@ export function validateProtocolState(s) {
   if (typeof s.head_drift !== 'boolean' || typeof s.base_drift !== 'boolean') return false;
   if (typeof s.human_gate_required !== 'boolean') return false;
   if (s.human_gate_type !== null && !HUMAN_GATE_TYPES.includes(s.human_gate_type)) return false;
+  if (!isValidPrMetadataVerification(s.pr_metadata_verification)) return false;
   if (typeof s.updated_at !== 'string') return false;
+  return true;
+}
+
+/**
+ * Closed sub-schema for pr_metadata_verification: null (no verification on
+ * record) or an object with EXACTLY these 4 fields, each non-empty/typed --
+ * never a partial or extra-field object. This is the ONLY evidence
+ * task-orchestrator.mjs's requestHumanGate may treat as a genuine final PR
+ * metadata verification; see pr-metadata-gate.mjs.
+ * @param {any} v
+ * @returns {boolean}
+ */
+function isValidPrMetadataVerification(v) {
+  if (v === null) return true;
+  if (typeof v !== 'object') return false;
+  const keys = Object.keys(v);
+  const allowed = new Set(['pr_number', 'head_sha', 'body_sha256', 'verified_at']);
+  if (keys.length !== allowed.size || !keys.every((k) => allowed.has(k))) return false;
+  if (typeof v.pr_number !== 'number' || !Number.isInteger(v.pr_number) || v.pr_number <= 0) return false;
+  if (typeof v.head_sha !== 'string' || v.head_sha.length === 0) return false;
+  if (typeof v.body_sha256 !== 'string' || v.body_sha256.length === 0) return false;
+  if (typeof v.verified_at !== 'string' || v.verified_at.length === 0) return false;
   return true;
 }
 

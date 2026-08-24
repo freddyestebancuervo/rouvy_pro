@@ -71,12 +71,35 @@ test('state transitions: only the declared (state, role) pairs are valid', () =>
   assert.doesNotThrow(() => validateStateTransition({ fromState: 'IDLE', toState: 'PLANNING', actingRole: 'NIGHT' }));
   assert.doesNotThrow(() => validateStateTransition({ fromState: 'AUDITING', toState: 'HOLD', actingRole: 'B' }));
   assert.doesNotThrow(() => validateStateTransition({ fromState: 'HOLD', toState: 'REMEDIATING', actingRole: 'A' }));
-  assert.doesNotThrow(() => validateStateTransition({ fromState: 'VALIDATING', toState: 'READY_FOR_HUMAN', actingRole: 'C' }));
+  // Task 6: C's PASS lands on PR_METADATA_SYNC_REQUIRED, not directly on
+  // READY_FOR_HUMAN -- see the dedicated PR_METADATA_SYNC_REQUIRED tests below.
+  assert.doesNotThrow(() => validateStateTransition({ fromState: 'VALIDATING', toState: 'PR_METADATA_SYNC_REQUIRED', actingRole: 'C' }));
+  assert.doesNotThrow(() => validateStateTransition({ fromState: 'PR_METADATA_SYNC_REQUIRED', toState: 'READY_FOR_HUMAN', actingRole: 'C' }));
 });
 
 test('state transition attempted by the wrong role is rejected', () => {
   assert.throws(() => validateStateTransition({ fromState: 'AUDITING', toState: 'HOLD', actingRole: 'A' }), InvalidRoleTransitionError);
-  assert.throws(() => validateStateTransition({ fromState: 'VALIDATING', toState: 'READY_FOR_HUMAN', actingRole: 'B' }), InvalidRoleTransitionError);
+  assert.throws(() => validateStateTransition({ fromState: 'VALIDATING', toState: 'PR_METADATA_SYNC_REQUIRED', actingRole: 'B' }), InvalidRoleTransitionError);
+  assert.throws(() => validateStateTransition({ fromState: 'PR_METADATA_SYNC_REQUIRED', toState: 'READY_FOR_HUMAN', actingRole: 'B' }), InvalidRoleTransitionError);
+});
+
+test('Task 6: VALIDATING can no longer move directly to READY_FOR_HUMAN -- C_PASS must not directly imply HUMAN_GATE_READY', () => {
+  assert.throws(() => validateStateTransition({ fromState: 'VALIDATING', toState: 'READY_FOR_HUMAN', actingRole: 'C' }), InvalidRoleTransitionError);
+});
+
+test('Task 6: a metadata problem at PR_METADATA_SYNC_REQUIRED routes to the ordinary HOLD state, same recovery path as any other HOLD', () => {
+  assert.doesNotThrow(() => validateStateTransition({ fromState: 'PR_METADATA_SYNC_REQUIRED', toState: 'HOLD', actingRole: 'C' }));
+  assert.doesNotThrow(() => validateStateTransition({ fromState: 'HOLD', toState: 'REMEDIATING', actingRole: 'A' }));
+});
+
+test('Task 6 Remediation Round 1 (P2-02): READY_FOR_HUMAN -> PR_METADATA_SYNC_REQUIRED is a NIGHT-only recovery move (body-drift re-verification), never C/A/B', () => {
+  assert.doesNotThrow(() => validateStateTransition({ fromState: 'READY_FOR_HUMAN', toState: 'PR_METADATA_SYNC_REQUIRED', actingRole: 'NIGHT' }));
+  assert.throws(() => validateStateTransition({ fromState: 'READY_FOR_HUMAN', toState: 'PR_METADATA_SYNC_REQUIRED', actingRole: 'C' }), InvalidRoleTransitionError);
+  assert.throws(() => validateStateTransition({ fromState: 'READY_FOR_HUMAN', toState: 'PR_METADATA_SYNC_REQUIRED', actingRole: 'A' }), InvalidRoleTransitionError);
+  assert.throws(() => validateStateTransition({ fromState: 'READY_FOR_HUMAN', toState: 'PR_METADATA_SYNC_REQUIRED', actingRole: 'B' }), InvalidRoleTransitionError);
+  // this recovery move never reaches EXECUTING/AUDITING/REMEDIATING directly -- it is metadata-only:
+  assert.throws(() => validateStateTransition({ fromState: 'READY_FOR_HUMAN', toState: 'EXECUTING', actingRole: 'NIGHT' }), InvalidRoleTransitionError);
+  assert.throws(() => validateStateTransition({ fromState: 'READY_FOR_HUMAN', toState: 'REMEDIATING', actingRole: 'NIGHT' }), InvalidRoleTransitionError);
 });
 
 test('a state transition not present in the table at all is rejected (e.g. IDLE -> DONE)', () => {

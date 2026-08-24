@@ -1,15 +1,21 @@
-// Korixa — Common Agent Protocol (Task 4, 2026-08-23): the RUNTIME
-// ORCHESTRATOR. Composes Task 2's protocol-state.mjs + role-protocol.mjs,
-// Task 3's role-capabilities.mjs, this task's own task-lock.mjs, and
-// queue.mjs's static path-overlap primitive into one usable API -- so the
-// system stops relying on a long human prompt alone to decide what role is
-// active, what task owns a scope, or what role may receive a task next.
+// Korixa — Common Agent Protocol (Task 4, 2026-08-23; Task 6, 2026-08-23):
+// the RUNTIME ORCHESTRATOR. Composes Task 2's protocol-state.mjs +
+// role-protocol.mjs, Task 3's role-capabilities.mjs, this task's own
+// task-lock.mjs, queue.mjs's static path-overlap primitive, and (Task 6)
+// pr-metadata-gate.mjs into one usable API -- so the system stops relying
+// on a long human prompt alone to decide what role is active, what task
+// owns a scope, or what role may receive a task next.
 //
 // Every exported operation here is a REAL CALLER of the existing gates: it
 // fails closed if TASK_OWNERSHIP_VALID, CAPABILITY_ALLOWED, and
-// STATE_TRANSITION_ALLOWED are not ALL proven (brief section 17). None of
-// role-protocol.mjs, protocol-state.mjs, or role-capabilities.mjs is
-// modified by this file -- every decision they already make is reused
+// STATE_TRANSITION_ALLOWED are not ALL proven (brief section 17).
+// role-capabilities.mjs and pr-metadata-gate.mjs are never modified by
+// this file. Task 6 DID make a deliberate, brief-authorized change to
+// protocol-state.mjs (a new PROTOCOL_STATES member and a new
+// pr_metadata_verification field) and role-protocol.mjs (the
+// STATE_TRANSITION_TABLE routes C's PASS through the new
+// PR_METADATA_SYNC_REQUIRED stage) -- their own decision logic (identity,
+// attestation, capability checks) is otherwise unchanged and still reused
 // verbatim; this module only sequences the calls and persists the result.
 //
 // ENFORCEMENT CLASSIFICATION (truthful, not overclaimed — brief section 5):
@@ -50,6 +56,15 @@ import {
   acquireActiveTaskSlot, releaseActiveTaskSlot,
 } from './task-lock.mjs';
 import { pathsOverlap } from './queue.mjs';
+import { evaluateFinalPrMetadata, computeBodySha256 } from './pr-metadata-gate.mjs';
+
+function countFindingsBySeverity(findings) {
+  const counts = { P0: 0, P1: 0, P2: 0, P3: 0 };
+  for (const f of Array.isArray(findings) ? findings : []) {
+    if (Object.prototype.hasOwnProperty.call(counts, f?.severity)) counts[f.severity] += 1;
+  }
+  return counts;
+}
 
 function isNonEmptyString(v) {
   return typeof v === 'string' && v.length > 0;
@@ -349,10 +364,14 @@ export function recordValidationResult({ repoRoot, taskId, ownerToken, validator
     return { ok: false, reason: 'MALFORMED_VALIDATOR_RESULT_PASS_REASON' };
   }
   // Same toState/result-content consistency rule as recordAuditResult: a
-  // HOLD validator result can never reach toState:'READY_FOR_HUMAN', and a
-  // PASS validator result may only ever move to READY_FOR_HUMAN.
-  if (validatorResult.finalState === 'PASS' && toState !== 'READY_FOR_HUMAN') {
-    return { ok: false, reason: 'INVALID_TOSTATE_FOR_VALIDATOR_RESULT', detail: `validatorResult.finalState=PASS requires toState=READY_FOR_HUMAN, got ${toState}` };
+  // HOLD validator result can never reach toState:'PR_METADATA_SYNC_REQUIRED',
+  // and a PASS validator result may only ever move to
+  // PR_METADATA_SYNC_REQUIRED -- Task 6: C's technical PASS no longer
+  // directly implies READY_FOR_HUMAN; a genuine final PR metadata
+  // verification (recordFinalPrMetadataVerification, below) is required
+  // in between.
+  if (validatorResult.finalState === 'PASS' && toState !== 'PR_METADATA_SYNC_REQUIRED') {
+    return { ok: false, reason: 'INVALID_TOSTATE_FOR_VALIDATOR_RESULT', detail: `validatorResult.finalState=PASS requires toState=PR_METADATA_SYNC_REQUIRED, got ${toState}` };
   }
   if (validatorResult.finalState === 'HOLD' && toState !== 'HOLD') {
     return { ok: false, reason: 'INVALID_TOSTATE_FOR_VALIDATOR_RESULT', detail: `validatorResult.finalState=HOLD requires toState=HOLD, got ${toState}` };
@@ -363,6 +382,77 @@ export function recordValidationResult({ repoRoot, taskId, ownerToken, validator
     extraChanges: { validator_result: validatorResult },
     now,
   });
+}
+
+/**
+ * Task 6: the FINAL PR METADATA GATE. Only C may call this (metadata
+ * finalization is a stage of C's own validation work, per the brief's own
+ * "not Agent D" instruction -- no fourth role is created). Requires task
+ * ownership, PR identity match, and an exact CI-head binding BEFORE ever
+ * consulting the (externally-obtained, never fetched here) PR snapshot;
+ * only then calls pr-metadata-gate.mjs's evaluateFinalPrMetadata with
+ * `expected` values derived FRESH from the live, already-recorded task
+ * state (never from a prior verification's own memory -- there is none;
+ * this module has no persisted verdict of its own to reuse).
+ *
+ * A PASS moves PR_METADATA_SYNC_REQUIRED -> READY_FOR_HUMAN and records a
+ * HEAD-bound `pr_metadata_verification` marker (see protocol-state.mjs).
+ * Anything else moves to HOLD, exactly like any other HOLD-worthy outcome
+ * -- same REMEDIATING recovery path, no special-casing.
+ *
+ * @param {object} params
+ * @param {string} params.repoRoot
+ * @param {string} params.taskId
+ * @param {string} params.ownerToken
+ * @param {number} params.prNumber must equal the task's own recorded pr_number
+ * @param {object} params.prSnapshot `{state, isDraft, merged, prNumber, bodyText}` -- real, externally-fetched
+ * @param {string} params.ciHeadSha the exact SHA the caller independently confirmed CI ran against
+ * @param {string} params.ciStatusLabel e.g. "4/4 SUCCESS" -- must match the canonical block's own CI_STATUS field
+ * @param {string} [params.now]
+ */
+export function recordFinalPrMetadataVerification({
+  repoRoot, taskId, ownerToken, prNumber, prSnapshot, ciHeadSha, ciStatusLabel, now,
+}) {
+  const lockCheck = verifyTaskLockOwnership({ repoRoot, taskId, ownerToken });
+  if (!lockCheck.valid) return { ok: false, reason: lockCheck.reason ?? 'LOCK_OWNERSHIP_INVALID' };
+
+  const state = loadState(repoRoot, taskId);
+  if (state === null) return { ok: false, reason: 'NO_TASK_SESSION' };
+  if (state.pr_number !== prNumber) return { ok: false, reason: 'PR_IDENTITY_MISMATCH', detail: `task's recorded pr_number is ${state.pr_number}, verification requested for ${prNumber}` };
+  if (!isNonEmptyString(ciHeadSha) || ciHeadSha !== state.head_sha) {
+    return { ok: false, reason: 'HOLD_HEAD_DRIFT', detail: `CI head ${JSON.stringify(ciHeadSha)} does not match task head_sha ${state.head_sha}` };
+  }
+
+  const counts = countFindingsBySeverity(state.findings);
+  const expected = {
+    prNumber: state.pr_number,
+    baseSha: state.base_sha,
+    headSha: state.head_sha,
+    bAuditResult: state.auditor_result?.finalState ?? null,
+    cCertification: state.validator_result?.finalState ?? null,
+    ciHeadSha,
+    ciStatus: ciStatusLabel,
+    p0: counts.P0, p1: counts.P1, p2: counts.P2, p3: counts.P3,
+  };
+  const evalResult = evaluateFinalPrMetadata({ prSnapshot, expected });
+
+  const toState = evalResult.verified ? 'READY_FOR_HUMAN' : 'HOLD';
+  const extraChanges = evalResult.verified
+    ? {
+      pr_metadata_verification: {
+        pr_number: prNumber,
+        head_sha: state.head_sha,
+        body_sha256: evalResult.bodySha256,
+        verified_at: now ?? new Date().toISOString(),
+      },
+    }
+    : {};
+  const result = attemptTransition({
+    repoRoot, taskId, ownerToken, toState, actingRole: 'C', requiredCapability: 'CERTIFY_TECHNICAL_PASS',
+    requireHeadSha: state.head_sha, extraChanges, now,
+  });
+  if (!result.ok) return result;
+  return { ...result, verified: evalResult.verified, verificationReason: evalResult.reason };
 }
 
 /** A marks the task WAITING_CI, HEAD-bound. */
@@ -422,6 +512,8 @@ export function resumeFromWaitingCi({ repoRoot, taskId, ownerToken, ciHeadSha, c
   return { ok: true, state: nextState, ciClassification: classification };
 }
 
+const PR_READINESS_ACTION_TYPES = Object.freeze(['MARK_READY', 'MERGE']);
+
 /**
  * Records that a human gate is required for actionType. This NEVER grants
  * the action -- `requiresHumanGateForAction` (role-protocol.mjs, unmodified)
@@ -429,8 +521,48 @@ export function resumeFromWaitingCi({ repoRoot, taskId, ownerToken, ciHeadSha, c
  * toward DONE/Ready/merge on its own initiative. Unknown actionType fails
  * closed (DENY), matching requiresHumanGateForAction's own throw-on-unknown
  * behavior.
+ *
+ * Task 6: for MARK_READY/MERGE specifically -- the two actions that mean
+ * "this task itself is ready" -- this now additionally requires
+ * state.state === 'READY_FOR_HUMAN' AND a `pr_metadata_verification`
+ * marker that is HEAD-bound to the task's CURRENT head_sha. A stale or
+ * missing verification denies the request outright (HOLD_PR_METADATA_
+ * STALE / PR_METADATA_VERIFICATION_MISSING), closing exactly the gap PR
+ * #78/#79 exposed: MARK_READY can never be requested merely because C
+ * technically passed. Other action types (PRODUCTION_ACTION, IAM_OR_
+ * SECRET_ACTION, DESTRUCTIVE_ACTION, UNKNOWN_COMMAND_CLASS) are
+ * unaffected -- their unconditional human-gate requirement has nothing to
+ * do with a specific task's PR readiness.
+ *
+ * Remediation (Task 6, Round 1, P2-02): a stored `pr_metadata_verification`
+ * proves a body was ONCE verified -- it does not prove the CURRENT body is
+ * still that body. A PR description can change after verification (a bot
+ * edit, a human touch-up, an attacker) while HEAD stays untouched, and the
+ * old check above (HEAD-bound only) would have let MARK_READY/MERGE
+ * through anyway. For MARK_READY/MERGE specifically, callers must now
+ * additionally supply `prSnapshot` -- a FRESH, externally-obtained PR
+ * snapshot (`{state, isDraft, merged, prNumber, bodyText}`, same shape
+ * `evaluateFinalPrMetadata` itself consumes) -- and this function
+ * independently re-derives its hash via `computeBodySha256` (the SAME
+ * pure helper `evaluateFinalPrMetadata` used to record the stored hash;
+ * never duplicated) and compares it byte-for-byte against
+ * `pr_metadata_verification.body_sha256`. A mismatch is
+ * `HOLD_PR_METADATA_BODY_DRIFT`, fail-closed, no auto-reverify -- the
+ * recovery path is the READY_FOR_HUMAN -> PR_METADATA_SYNC_REQUIRED
+ * NIGHT-only transition (role-protocol.mjs) followed by a genuine new
+ * `recordFinalPrMetadataVerification` call. No natural-language claim of
+ * "body unchanged" is ever accepted as evidence; only a recomputed hash
+ * from bytes the caller actually supplied counts.
+ *
+ * The PR lifecycle expectation differs deliberately by actionType (brief
+ * section 5): MARK_READY expects the fresh snapshot to still be Draft (the
+ * human hasn't acted yet); MERGE expects it to already be Ready
+ * (`isDraft === false`, since a human already authorized Ready in a prior,
+ * separate gate). Both still require the SAME stored body-hash/HEAD
+ * binding -- Ready authorization does not itself re-verify anything, and
+ * does not invalidate a still-matching verification either.
  */
-export function requestHumanGate({ repoRoot, taskId, ownerToken, actionType, now }) {
+export function requestHumanGate({ repoRoot, taskId, ownerToken, actionType, prSnapshot, now }) {
   const lockCheck = verifyTaskLockOwnership({ repoRoot, taskId, ownerToken });
   if (!lockCheck.valid) return { ok: false, reason: lockCheck.reason ?? 'LOCK_OWNERSHIP_INVALID' };
   const state = loadState(repoRoot, taskId);
@@ -442,9 +574,39 @@ export function requestHumanGate({ repoRoot, taskId, ownerToken, actionType, now
   } catch {
     return { ok: false, reason: 'UNKNOWN_ACTION_TYPE' };
   }
+
+  if (PR_READINESS_ACTION_TYPES.includes(actionType)) {
+    if (state.state !== 'READY_FOR_HUMAN') {
+      return { ok: false, reason: 'PR_METADATA_VERIFICATION_MISSING', detail: `task state is ${state.state}, not READY_FOR_HUMAN` };
+    }
+    const verification = state.pr_metadata_verification;
+    if (verification === null || verification.head_sha !== state.head_sha) {
+      return { ok: false, reason: 'HOLD_PR_METADATA_STALE', detail: 'no valid pr_metadata_verification bound to the current head_sha' };
+    }
+    if (prSnapshot === null || typeof prSnapshot !== 'object' || typeof prSnapshot.bodyText !== 'string') {
+      return { ok: false, reason: 'FRESH_PR_SNAPSHOT_REQUIRED', detail: `${actionType} requires a fresh, externally-obtained PR snapshot` };
+    }
+    if (prSnapshot.prNumber !== verification.pr_number || prSnapshot.prNumber !== state.pr_number) {
+      return { ok: false, reason: 'PR_IDENTITY_MISMATCH' };
+    }
+    if (prSnapshot.state !== 'OPEN' || prSnapshot.merged === true) {
+      return { ok: false, reason: 'PR_LIFECYCLE_INVALID', detail: 'PR must be OPEN and unmerged at request time' };
+    }
+    if (actionType === 'MARK_READY' && prSnapshot.isDraft !== true) {
+      return { ok: false, reason: 'PR_LIFECYCLE_INVALID', detail: 'MARK_READY expects the PR to still be Draft at request time' };
+    }
+    if (actionType === 'MERGE' && prSnapshot.isDraft !== false) {
+      return { ok: false, reason: 'PR_LIFECYCLE_INVALID', detail: 'MERGE expects the PR to already be Ready (non-Draft) at request time' };
+    }
+    const currentBodySha256 = computeBodySha256(prSnapshot.bodyText);
+    if (currentBodySha256 !== verification.body_sha256) {
+      return { ok: false, reason: 'HOLD_PR_METADATA_BODY_DRIFT', detail: 'current PR body hash does not match the stored, verified hash -- re-run recordFinalPrMetadataVerification' };
+    }
+  }
+
   const nextState = advanceProtocolState(state, pruneUndefined({ human_gate_required: required, human_gate_type: actionType }), now);
   persistState(repoRoot, taskId, nextState);
-  return { ok: true, state: nextState, humanGateRequired: required };
+  return { ok: true, state: nextState, humanGateRequired: required, actionExecuted: false };
 }
 
 /**

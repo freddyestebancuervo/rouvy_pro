@@ -1,4 +1,4 @@
-# Common Agent Protocol (Task 2, 2026-08-23; Task 3, 2026-08-23; Task 4, 2026-08-23)
+# Common Agent Protocol (Task 2, 2026-08-23; Task 3, 2026-08-23; Task 4, 2026-08-23; Task 6, 2026-08-23)
 
 A single-chat, four-role coordination protocol for `NIGHT` (orchestrator),
 `A` (executor), `B` (independent adversarial auditor), and `C` (validator/
@@ -22,7 +22,11 @@ C = VALIDATOR  -- independently validates B's attested result; the only role tha
 `HUMAN_GATE_ONLY_CAPABILITIES` (role-capabilities.mjs, Task 3) both apply
 unconditionally, for every role including NIGHT — marking Ready, merging,
 and any Production/IAM/secret/destructive action always require a human,
-outside this protocol, outside this chat.
+outside this protocol, outside this chat. **Task 6 makes this stronger
+still for MARK_READY/MERGE specifically: a C technical PASS does not even
+reach the state (`READY_FOR_HUMAN`) those two actions require until a
+genuine, machine-checked final PR metadata verification has also passed —
+see "Final PR metadata gate" below.**
 
 **Code**: `tools/night-agent/protocol-state.mjs` (shared-state schema +
 atomic persistence), `tools/night-agent/role-protocol.mjs` (role/state
@@ -32,12 +36,129 @@ closed, fail-closed `evaluateRoleCapability(role, capability)` answering
 "may this role attempt this action", separate from role-protocol.mjs's
 "is this state transition legal"), `tools/night-agent/task-lock.mjs` and
 `tools/night-agent/task-orchestrator.mjs` (Task 4 — see "Task coordination,
-locks, handoff, resume" below). **Tests**:
+locks, handoff, resume" below), and `tools/night-agent/pr-metadata-gate.mjs`
+(Task 6 — see "Final PR metadata gate" below). **Tests**:
 `tools/night-agent/test/protocol-state.test.mjs`,
 `tools/night-agent/test/role-protocol.test.mjs`,
 `tools/night-agent/test/role-capabilities.test.mjs`,
 `tools/night-agent/test/task-lock.test.mjs`,
-`tools/night-agent/test/task-orchestrator.test.mjs` (168 tests total).
+`tools/night-agent/test/task-orchestrator.test.mjs`,
+`tools/night-agent/test/full-role-simulation.test.mjs`,
+`tools/night-agent/test/pr-metadata-gate.test.mjs` (1493 tests total,
+full Night Agent suite).
+
+## Final PR metadata gate (Task 6)
+
+**Why this exists**: real, recurring evidence from PR #78 and PR #79 —
+both reached final B/C validation while their Draft PR bodies still
+carried stale intermediate text ("Independent audit in progress",
+"pending independent B audit", "Not to be merged in this session"). The
+underlying implementation was correct in both cases; the PR metadata
+simply lagged behind the real, already-certified task state, because
+nothing machine-enforced ever checked the two against each other before
+the task was declared ready for a human.
+
+**The rule, permanently**: `C_CERTIFICATION=PASS` does NOT directly
+produce `READY_FOR_HUMAN`. The real, hardened flow is:
+
+```
+NIGHT → A → B → C (technical PASS)
+     → PR_METADATA_SYNC_REQUIRED
+     → recordFinalPrMetadataVerification(...)   -- the gate
+     → READY_FOR_HUMAN
+     → HUMAN_GATE
+```
+
+`PR_METADATA_SYNC_REQUIRED` is a new closed `PROTOCOL_STATES` member
+(`protocol-state.mjs`); `role-protocol.mjs`'s `STATE_TRANSITION_TABLE`
+routes `VALIDATING`'s PASS-shaped result there (not to `READY_FOR_HUMAN`
+directly) and only C may then move `PR_METADATA_SYNC_REQUIRED` onward — to
+`READY_FOR_HUMAN` on a genuine pass, or to the ordinary `HOLD` state
+(same recovery path as any other HOLD) otherwise. This is a protocol
+finalization STAGE of C's own existing work, not a fourth role — no
+Agent D was created.
+
+**Mechanism** (`pr-metadata-gate.mjs`, pure, no GitHub network calls): a
+canonical, versioned, strictly-parsed HTML-comment block
+(`KORIXA_FINAL_PR_STATE_V1`) is the ONLY source of machine-truth trusted
+inside a PR body — never free prose. Exactly one block is required;
+duplicate blocks, duplicate/missing/unknown keys, and malformed critical
+values (non-hex SHAs, out-of-domain enum values) are all rejected, never
+coerced. A separate, narrow stale-marker scan
+(`findStalePrBodyMarkers`) catches known contradicting claims
+("...in progress", "...pending", "awaiting auditor/validator") without
+false-positiving on legitimate historical prose that merely mentions
+"audit" or "validation". `evaluateFinalPrMetadata` is the single decision
+function: PR must be OPEN, Draft, unmerged, and identity-matched; body
+must be marker-clean and block-valid; every block field (`BASE_SHA`,
+`HEAD_SHA`, `B_AUDIT_RESULT`, `C_CERTIFICATION`, `CI_HEAD_SHA`,
+`CI_STATUS`, `P0`-`P3`) must exactly equal the CURRENT, live, already-
+recorded task facts — never a prior verification's own memory (the module
+has none; every call re-derives `expected` fresh).
+
+`task-orchestrator.mjs`'s `recordFinalPrMetadataVerification` is the real
+caller: task ownership, exact PR-number match, and exact CI-head binding
+are checked BEFORE the snapshot's content is ever consulted. A genuine
+PASS records a HEAD-bound `pr_metadata_verification` marker
+(`{pr_number, head_sha, body_sha256, verified_at}` — a new closed
+sub-schema field on `protocol-state.mjs`, never a full body copy, no
+secrets).
+
+**Remediation Round 1 (2026-08-24, 2 independent P2 findings, both fixed):**
+
+- **P2-01 — trailing-whitespace normalization.** `parseFinalPrMetadataBlock`
+  used to `.trim()` every line before splitting on `=`, which silently
+  stripped leading/trailing whitespace off a VALUE too (e.g.
+  `HEAD_SHA=<sha> ` was normalized to `HEAD_SHA=<sha>`), violating the
+  module's own "no trim-based identity relaxation" rule. Fixed: only
+  whitespace-ONLY lines (blank-line spacing) are ever discarded; a
+  non-blank line is parsed exactly as written, so stray whitespace in a
+  key or value now fails its own closed-domain check naturally (an
+  anchored `^...$` regex never matches embedded whitespace). CRLF-vs-LF
+  handling (a platform artifact, not semantic content) is unaffected.
+- **P2-02 — body hash stored but not enforced.** A stored
+  `pr_metadata_verification.body_sha256` proved a body was ONCE verified,
+  but nothing re-checked it before granting `MARK_READY`/`MERGE` — a PR
+  body could drift (bot edit, human touch-up, tampering) AFTER
+  verification and BEFORE the human gate, with only `head_sha` checked.
+  Fixed: `requestHumanGate` now REQUIRES a fresh, externally-obtained
+  `prSnapshot` (`{state, isDraft, merged, prNumber, bodyText}`) for
+  `MARK_READY`/`MERGE` specifically, independently recomputes its hash via
+  `computeBodySha256` (the SAME pure helper `evaluateFinalPrMetadata`
+  itself uses — never duplicated), and denies
+  (`HOLD_PR_METADATA_BODY_DRIFT`) on any mismatch — byte-exact, no fuzzy
+  "looks the same" comparison. A missing/malformed snapshot is
+  `FRESH_PR_SNAPSHOT_REQUIRED`; a snapshot for the wrong PR is
+  `PR_IDENTITY_MISMATCH`; the PR lifecycle expectation differs
+  deliberately by actionType (`PR_LIFECYCLE_INVALID` otherwise) —
+  `MARK_READY` expects the snapshot still Draft, `MERGE` expects it
+  already Ready (non-Draft) — but BOTH reuse the SAME stored
+  verification/hash once Draft flips to Ready: Ready authorization does
+  not itself require re-verification, and does not invalidate a
+  still-matching one either. Recovery when a real drift IS detected: a new
+  NIGHT-only `READY_FOR_HUMAN → PR_METADATA_SYNC_REQUIRED`
+  `STATE_TRANSITION_TABLE` entry (role-protocol.mjs) routes back to a
+  fresh `recordFinalPrMetadataVerification` call against the new body —
+  metadata-only remediation; it cannot reach EXECUTING/AUDITING/
+  REMEDIATING, so a body-only drift never forces A or B to redo code work.
+
+`requestHumanGate`'s (Task 4) HEAD-binding check is unchanged and remains
+the first gate: for `MARK_READY`/`MERGE`, `state.state === 'READY_FOR_HUMAN'`
+AND the stored marker's `head_sha` must still equal the task's CURRENT
+`head_sha` — a verification bound to an OLDER head is never reusable after
+further work changes the head. Every other action type
+(`PRODUCTION_ACTION`, `IAM_OR_SECRET_ACTION`, `DESTRUCTIVE_ACTION`,
+`UNKNOWN_COMMAND_CLASS`) is unaffected by any of this — PR body
+synchronization is routine metadata work, not itself a human gate; it is
+only Ready/Merge that require this extra proof, and only they now require
+a `prSnapshot` argument at all.
+
+**Body edits are not code changes**: updating a PR body changes no source,
+creates no commit, changes no HEAD, and does not invalidate test evidence
+already valid for that same HEAD — Task 6 never triggers a code-test
+re-run merely because a PR body was synchronized. It DOES, correctly,
+invalidate the PR-BODY verification itself if the hash changed — that is
+a metadata-layer re-check, not a code-layer one.
 
 ## Task coordination, locks, handoff, resume (Task 4)
 
