@@ -11,6 +11,7 @@ import {
   inspectWorkflowStructure,
   validateWorkflowDirectory,
 } from '../workflow-structure-gate.mjs';
+import { runActionlintGate } from '../actionlint-gate.mjs';
 
 const REPO_ROOT = fileURLToPath(new URL('../../../', import.meta.url));
 
@@ -90,4 +91,24 @@ test('required regression gate: every real repository workflow satisfies the enf
   console.log(`WORKFLOW_SCHEMA_VALIDATION=PASS files_checked=${result.filesChecked}`);
   assert.equal(result.valid, true);
   assert.ok(result.filesChecked > 0);
+});
+
+test('required CI second layer: pinned actionlint independently validates all GitHub Actions workflows', { timeout: 120_000 }, async () => {
+  const result = await runActionlintGate({ repoRoot: REPO_ROOT });
+
+  if (process.env.GITHUB_ACTIONS === 'true') {
+    assert.equal(
+      result.status,
+      'PASS',
+      `ACTIONLINT_VALIDATION=FAIL reason=${result.reason}\n${result.detail}`,
+    );
+    console.log(`ACTIONLINT_VALIDATION=PASS ${result.detail}`);
+    return;
+  }
+
+  // Local developer runs keep the deterministic parser active and do not
+  // download/execute a Linux CI artifact. This is a passing, explicit mode,
+  // not a skipped test. The external layer is mandatory on GitHub Actions.
+  assert.equal(result.status, 'NOT_APPLICABLE_LOCAL');
+  console.log('ACTIONLINT_VALIDATION=NOT_APPLICABLE_LOCAL (CI layer remains mandatory)');
 });
