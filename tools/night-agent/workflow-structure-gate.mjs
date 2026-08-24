@@ -19,6 +19,10 @@
 //     declare job-level `runs-on:`.
 //  3. A reusable-workflow caller job with job-level `uses:` MUST NOT also
 //     declare job-level `steps:`.
+//  4. A job must expose either job-level `steps:` or job-level `uses:`.
+//  5. Any two-space declaration directly under `jobs:` that cannot be
+//     recognized as a canonical job id fails closed instead of being ignored.
+//  6. Duplicate job ids fail closed.
 //
 // Fail closed: malformed/ambiguous jobs are reported as errors; nothing is
 // auto-fixed and no Production/remote mutation is ever performed here.
@@ -28,10 +32,21 @@ import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 
 const WORKFLOW_EXTENSIONS = new Set(['.yml', '.yaml']);
+const JOB_ID_PATTERN = /^[A-Za-z_][A-Za-z0-9_-]*$/;
 
 function isIgnorable(line) {
   const trimmed = line.trim();
   return trimmed.length === 0 || trimmed.startsWith('#');
+}
+
+function parseJobDeclaration(line) {
+  const match = line.match(/^  (?:("[^"\r\n]+")|('[^'\r\n]+')|([A-Za-z_][A-Za-z0-9_-]*)):\s*(?:#.*)?$/);
+  if (!match) return null;
+
+  let id = match[3] ?? match[1] ?? match[2] ?? null;
+  if (id?.startsWith('"') || id?.startsWith("'")) id = id.slice(1, -1);
+  if (!JOB_ID_PATTERN.test(id ?? '')) return null;
+  return id;
 }
 
 /**
@@ -71,6 +86,8 @@ export function inspectWorkflowStructure(source, { file = '<memory>' } = {}) {
   }
 
   const jobs = [];
+  const errors = [];
+  const seenJobIds = new Set();
   let current = null;
 
   const finishCurrent = () => {
@@ -87,11 +104,32 @@ export function inspectWorkflowStructure(source, { file = '<memory>' } = {}) {
       break;
     }
 
-    const jobMatch = line.match(/^  ([A-Za-z0-9_-]+):\s*(?:#.*)?$/);
-    if (jobMatch) {
+    if (!isIgnorable(line) && /^  \S/.test(line) && !/^    /.test(line)) {
+      const jobId = parseJobDeclaration(line);
       finishCurrent();
+
+      if (!jobId) {
+        errors.push({
+          code: 'UNSUPPORTED_OR_MALFORMED_JOB_DECLARATION',
+          file,
+          line: i + 1,
+          jobId: null,
+        });
+        continue;
+      }
+
+      if (seenJobIds.has(jobId)) {
+        errors.push({
+          code: 'DUPLICATE_JOB_ID',
+          file,
+          line: i + 1,
+          jobId,
+        });
+      }
+      seenJobIds.add(jobId);
+
       current = {
-        id: jobMatch[1],
+        id: jobId,
         line: i + 1,
         fields: new Set(),
       };
@@ -106,11 +144,19 @@ export function inspectWorkflowStructure(source, { file = '<memory>' } = {}) {
   }
   finishCurrent();
 
-  const errors = [];
   for (const job of jobs) {
     const hasSteps = job.fields.has('steps');
     const hasRunsOn = job.fields.has('runs-on');
     const hasUses = job.fields.has('uses');
+
+    if (!hasSteps && !hasUses) {
+      errors.push({
+        code: 'JOB_MISSING_STEPS_OR_USES',
+        file,
+        line: job.line,
+        jobId: job.id,
+      });
+    }
 
     if (hasSteps && !hasRunsOn) {
       errors.push({
