@@ -1,4 +1,4 @@
-# Common Agent Protocol (Task 2, 2026-08-23)
+# Common Agent Protocol (Task 2, 2026-08-23; Task 3, 2026-08-23)
 
 A single-chat, four-role coordination protocol for `NIGHT` (orchestrator),
 `A` (executor), `B` (independent adversarial auditor), and `C` (validator/
@@ -8,11 +8,31 @@ Night→A→B→C sequence) already followed by hand, across explicit role
 switches in one conversation — so future tasks don't have to re-derive it
 from a long prose instruction each time.
 
+```
+SINGLE_CHAT         = TRUE   -- one conversation, sequential role switches
+SUBAGENTS_REQUIRED  = FALSE  -- no `Agent`/subagent ever simulates A/B/C
+A = EXECUTOR   -- implements; can never self-certify (SelfCertificationForbiddenError)
+B = AUDITOR    -- independently audits A's delta; the only role that can CERTIFY_AUDIT
+C = VALIDATOR  -- independently validates B's attested result; the only role that can CERTIFY_TECHNICAL_PASS
+```
+
+**A technical PASS from C is never equivalent to human authorization.**
+`requiresHumanGateForAction` (role-protocol.mjs) and
+`HUMAN_GATE_ONLY_CAPABILITIES` (role-capabilities.mjs, Task 3) both apply
+unconditionally, for every role including NIGHT — marking Ready, merging,
+and any Production/IAM/secret/destructive action always require a human,
+outside this protocol, outside this chat.
+
 **Code**: `tools/night-agent/protocol-state.mjs` (shared-state schema +
-atomic persistence) and `tools/night-agent/role-protocol.mjs` (role/state
-machine, handoff contract, evidence binding, human gates). **Tests**:
+atomic persistence), `tools/night-agent/role-protocol.mjs` (role/state
+machine, handoff contract, evidence binding, human gates), and
+`tools/night-agent/role-capabilities.mjs` (Task 3 — the CAPABILITY MODEL: a
+closed, fail-closed `evaluateRoleCapability(role, capability)` answering
+"may this role attempt this action", separate from role-protocol.mjs's
+"is this state transition legal"). **Tests**:
 `tools/night-agent/test/protocol-state.test.mjs`,
-`tools/night-agent/test/role-protocol.test.mjs` (74 tests).
+`tools/night-agent/test/role-protocol.test.mjs`,
+`tools/night-agent/test/role-capabilities.test.mjs` (104 tests total).
 
 **Status: MACHINE_ENFORCED_PRIMITIVE, not RUNTIME_WIRED_ENFORCEMENT.** These
 are tested, correct functions a caller can invoke to get a real, fail-closed
@@ -48,6 +68,57 @@ silently change the other's already-independently-audited security
 behavior. `checkpoint.mjs`'s atomic-write/closed-schema/fail-closed-read
 pattern is the direct model for `protocol-state.mjs`'s persistence layer,
 same reasoning. Zero existing Task 1 file was modified by this task.
+
+## Task 3 — the capability model (`role-capabilities.mjs`)
+
+Task 2 answers "which STATE moves are legal for which role" (`VALID_ROLE_TRANSITIONS`,
+`STATE_TRANSITION_TABLE`). Task 3 answers a separate, narrower question:
+"which ACTIONS may this role attempt at all" — a closed, testable
+capability vocabulary (`CAPABILITIES`, 17 names) checked via
+`evaluateRoleCapability(role, capability)` / `isRoleAllowed(role, capability)`,
+fail-closed on unknown role, unknown capability, or any malformed input
+(never throws; always returns `{allowed:false, reason:...}` on anything not
+exactly a valid `ROLES`/`CAPABILITIES` string — no trim, no case-fold, no
+Unicode normalization, exactly `role-protocol.mjs`'s own post-Round-1
+exact-membership identity discipline, reused by design).
+
+A closed **allowlist** (`ROLE_CAPABILITIES`, a `Map` — never a plain object,
+so no prototype-chain surface exists for an attacker-controlled role
+string), not a blacklist:
+
+| Role | Capabilities |
+|---|---|
+| `NIGHT` | `READ` only — pure orchestrator, never executes/audits/validates |
+| `A` | `READ`, `WRITE_TASK_FILES`, `RUN_PRIMARY_TESTS`, `COMMIT_TASK_BRANCH`, `PUSH_TASK_BRANCH` |
+| `B` | `READ`, `RUN_ADVERSARIAL_TESTS`, `AUDIT`, `CREATE_FINDING`, `CERTIFY_AUDIT` |
+| `C` | `READ`, `VALIDATE`, `CERTIFY_TECHNICAL_PASS` |
+
+Six capabilities (`MARK_READY`, `MERGE_MAIN`, `PRODUCTION_MUTATION`,
+`IAM_MUTATION`, `SECRET_MUTATION`, `DESTRUCTIVE_OPERATION`) are never in
+*any* role's row and are refused unconditionally, before a role's row is
+even consulted (`HUMAN_GATE_ONLY_CAPABILITIES`) — the invariant "no role
+reaches these without a human gate" holds structurally, not by a
+special-case veto that a future edit could accidentally weaken.
+
+This closes every invariant Task 3 named as required-impossible:
+`A→CERTIFY_AUDIT`/`CERTIFY_TECHNICAL_PASS`, `B→WRITE_TASK_FILES`/
+`COMMIT_TASK_BRANCH`/`CERTIFY_TECHNICAL_PASS`, `C→WRITE_TASK_FILES`/
+`CERTIFY_AUDIT`/`COMMIT_TASK_BRANCH` are all simply absent from the
+relevant role's row — there is no code path that could grant them, not a
+check that blocks them after the fact.
+
+**Classification**: `MACHINE_ENFORCED_PRIMITIVE`, not
+`RUNTIME_WIRED_ENFORCEMENT` — same disclosure as Task 2's own primitives;
+nothing in this repository's real execution path currently calls
+`role-capabilities.mjs`. "A role cannot physically attempt a denied
+action" remains `PROCEDURAL_ENFORCED_BY_POLICY` for the same reason
+documented below for role-protocol.mjs: no OS/tool-permission boundary
+exists between roles in the single-chat model.
+
+**Out of scope for Task 3** (named explicitly, deferred to Task 4): the
+locks/queue/shared-task-orchestration system for concurrent multi-task
+execution. `role-capabilities.mjs` answers "may this role attempt X",
+never "is this role currently allowed to given what else is in flight".
 
 ## Flow
 
