@@ -86,8 +86,14 @@ export function evaluateWorkflowValidationRequirement({
   const context = classifyWorkflowChangeContext(filesChanged);
   const canonicalHead = typeof headSha === 'string' && headSha.length > 0 ? headSha : null;
 
+  const base = {
+    headSha: canonicalHead,
+    workflowFiles: context.workflowFiles,
+  };
+
   if (!context.valid) {
     return frozen({
+      ...base,
       required: true,
       proven: false,
       decision: 'HOLD',
@@ -95,12 +101,12 @@ export function evaluateWorkflowValidationRequirement({
       evidenceLevel: 'UNPROVEN',
       workflowChanged: null,
       productionWorkflowChanged: null,
-      workflowFiles: context.workflowFiles,
     });
   }
 
   if (!context.workflowChanged) {
     return frozen({
+      ...base,
       required: false,
       proven: true,
       decision: 'PROCEED',
@@ -108,7 +114,6 @@ export function evaluateWorkflowValidationRequirement({
       evidenceLevel: 'PROVEN_BY_CODE',
       workflowChanged: false,
       productionWorkflowChanged: false,
-      workflowFiles: context.workflowFiles,
     });
   }
 
@@ -118,6 +123,7 @@ export function evaluateWorkflowValidationRequirement({
 
   if (!canonicalHead || !validateEvidenceShape(workflowValidation)) {
     return frozen({
+      ...base,
       required: true,
       proven: false,
       decision: 'HOLD',
@@ -125,12 +131,12 @@ export function evaluateWorkflowValidationRequirement({
       evidenceLevel: 'UNPROVEN',
       workflowChanged: true,
       productionWorkflowChanged: context.productionWorkflowChanged,
-      workflowFiles: context.workflowFiles,
     });
   }
 
   if (workflowValidation.headSha !== canonicalHead) {
     return frozen({
+      ...base,
       required: true,
       proven: false,
       decision: 'HOLD',
@@ -138,7 +144,6 @@ export function evaluateWorkflowValidationRequirement({
       evidenceLevel: 'UNPROVEN',
       workflowChanged: true,
       productionWorkflowChanged: context.productionWorkflowChanged,
-      workflowFiles: context.workflowFiles,
     });
   }
 
@@ -147,6 +152,7 @@ export function evaluateWorkflowValidationRequirement({
     || workflowValidation.actionlintValidation !== WORKFLOW_VALIDATION_PASS
   ) {
     return frozen({
+      ...base,
       required: true,
       proven: false,
       decision: 'HOLD',
@@ -154,11 +160,11 @@ export function evaluateWorkflowValidationRequirement({
       evidenceLevel: 'UNPROVEN',
       workflowChanged: true,
       productionWorkflowChanged: context.productionWorkflowChanged,
-      workflowFiles: context.workflowFiles,
     });
   }
 
   return frozen({
+    ...base,
     required: true,
     proven: true,
     decision: 'PROCEED',
@@ -166,6 +172,5 @@ export function evaluateWorkflowValidationRequirement({
     evidenceLevel: 'PROVEN_BY_CODE',
     workflowChanged: true,
     productionWorkflowChanged: context.productionWorkflowChanged,
-    workflowFiles: context.workflowFiles,
   });
 }
