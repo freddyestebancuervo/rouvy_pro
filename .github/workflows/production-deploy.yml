@@ -167,6 +167,7 @@ jobs:
   verify-build-output:
     name: Verify build output identity (sin cloud)
     needs: [guard, build-production-artifact]
+    runs-on: ubuntu-latest
     permissions: {}
     outputs:
       verify_pass: ${{ steps.verify.outputs.verify_pass }}
