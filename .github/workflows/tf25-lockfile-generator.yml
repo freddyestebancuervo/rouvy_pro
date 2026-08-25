@@ -1,0 +1,36 @@
+name: T-F2.5 — temporary lockfile generator
+
+on:
+  push:
+    branches:
+      - chore/tf25-remove-dead-dependencies-20260825
+
+permissions:
+  contents: read
+
+jobs:
+  regenerate-lockfile:
+    name: T-F2.5 — regenerate pubspec.lock
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - uses: subosito/flutter-action@1a449444c387b1966244ae4d4f8c696479add0b2 # v2.23.0
+        with:
+          flutter-version: '3.32.0'
+          channel: stable
+
+      - name: Regenerar lockfile
+        run: flutter pub get
+
+      - name: Mostrar diff del lockfile
+        run: git diff -- pubspec.lock
+
+      - name: Publicar lockfile regenerado
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0 # v7.0.1
+        with:
+          name: tf25-pubspec-lock
+          path: pubspec.lock
+          if-no-files-found: error
+          retention-days: 1
