@@ -38,6 +38,28 @@
 // HUMAN_GATE_ONLY_CAPABILITIES already makes that structurally impossible
 // (see requestHumanGate below, which only RECORDS that a human gate is
 // needed, and never transitions state to DONE on its own initiative).
+//
+// P1-E REMEDIATION (T-F1.2 external re-audit round 4, HOLD): the workflow-
+// certification enforcement added for P1-1/P1-2 (WeakSet-attested CI
+// evidence, real Git-changeset-derived workflow-change context) used to
+// live exclusively in task-orchestrator.mjs's "hardened facade" wrapper
+// around recordAuditResult/recordValidationResult/
+// recordFinalPrMetadataVerification/requestHumanGate -- while this file
+// (independently importable, and imported directly by that facade itself)
+// kept the original, unhardened versions of those same four functions. A
+// caller that imported THIS module directly, bypassing the facade, reached
+// an authoritative READY_FOR_C / READY_FOR_HUMAN transition for a genuinely
+// workflow-changing task with zero workflow proof -- reproduced
+// mechanically: a raw, genuinely-attested (WeakSet-real, but workflowGate-
+// less) role-protocol-core.mjs PASS, recorded via this file's OWN
+// recordAuditResult, advanced the task with no gate at all. "Everyone must
+// import the facade, never the core" is a convention, not a security
+// boundary -- the same principle this program already applied to
+// __installTestGitChangesetProvider (P1-B) and to caller-suppliable CI
+// policy (P1-C). The four functions below now enforce the workflow-
+// certification requirement THEMSELVES, unconditionally, and
+// task-orchestrator.mjs is now a pure `export *` -- there is no longer a
+// second, weaker path to any of them, direct import or not.
 
 import {
   createProtocolState, validateProtocolState, advanceProtocolState,
@@ -47,7 +69,10 @@ import {
   validateStateTransition, isAttestedAuditorResult, classifyCiWaitStatus,
   requiresHumanGateForAction, InvalidRoleTransitionError,
   EXECUTOR_RESULT_STATES, AUDITOR_RESULT_STATES, VALIDATOR_RESULT_STATES,
+  isPersistedWorkflowGateProven, isWorkflowAwareValidatorResult,
 } from './role-protocol.mjs';
+import { classifyWorkflowChangeContext } from './workflow-certification-gate.mjs';
+import { deriveChangedFilesFromGit } from './git-changeset.mjs';
 
 const AUDITOR_PASS_SHAPED_STATES = Object.freeze(['PASS', 'PASS_WITH_FINDINGS']);
 import { evaluateRoleCapability } from './role-capabilities.mjs';
@@ -414,6 +439,102 @@ export function handoffToAuditor({ repoRoot, taskId, ownerToken, headSha, now })
   });
 }
 
+// ---------------------------------------------------------------------------
+// Workflow-certification enforcement (P1-1/P1-2, consolidated here by P1-E --
+// see this file's own header comment). `state.files_changed` (A's own
+// self-declared list) is NEVER consulted for this security-relevant
+// decision; the changeset is derived exclusively from a real
+// `git diff --name-status BASE_SHA..HEAD_SHA` (git-changeset.mjs). If Git
+// cannot determine the changeset, the result is UNPROVEN -> HOLD, never
+// silently treated as "no change".
+// ---------------------------------------------------------------------------
+
+function workflowHoldReason(context) {
+  return context?.productionWorkflowChanged
+    ? 'HOLD_UNPROVEN_PRODUCTION_WORKFLOW_SCHEMA'
+    : 'HOLD_WORKFLOW_SCHEMA_VALIDATION_REQUIRED';
+}
+
+/**
+ * @param {object} state persisted protocol state (or null)
+ * @param {{repoRoot?: string}} [options]
+ */
+function inspectTaskWorkflowContext(state, { repoRoot } = {}) {
+  if (state === null || typeof state !== 'object') {
+    return { valid: false, workflowChanged: null, productionWorkflowChanged: null, workflowFiles: [] };
+  }
+
+  const changeset = deriveChangedFilesFromGit({ repoRoot, baseSha: state.base_sha, headSha: state.head_sha });
+  if (!changeset.ok) {
+    return {
+      valid: false,
+      workflowChanged: null,
+      productionWorkflowChanged: null,
+      workflowFiles: [],
+      reason: 'GIT_CHANGESET_UNDETERMINED',
+      gitChangesetReason: changeset.reason,
+    };
+  }
+
+  return classifyWorkflowChangeContext(changeset.files);
+}
+
+function resultHasCurrentWorkflowProof(result, state, { repoRoot } = {}) {
+  const changeset = deriveChangedFilesFromGit({ repoRoot, baseSha: state?.base_sha, headSha: state?.head_sha });
+  if (!changeset.ok) return false;
+  return isPersistedWorkflowGateProven({
+    gate: result?.workflowGate,
+    filesChanged: changeset.files,
+    headSha: state?.head_sha,
+  });
+}
+
+/**
+ * Public/pure-ish inspection helper used by tests and by the two final
+ * gates below. It never mutates state. `repoRoot` is required to derive the
+ * real, mechanical changeset -- without it, Git cannot run and the result
+ * is UNPROVEN -> HOLD, never silently treated as "no workflow change".
+ */
+export function evaluatePersistedWorkflowCertification(state, { repoRoot } = {}) {
+  const context = inspectTaskWorkflowContext(state, { repoRoot });
+  if (!context.valid) {
+    return {
+      required: true,
+      proven: false,
+      decision: 'HOLD',
+      reason: 'HOLD_WORKFLOW_CHANGE_CONTEXT_UNPROVEN',
+      context,
+    };
+  }
+  if (!context.workflowChanged) {
+    return { required: false, proven: true, decision: 'PROCEED', reason: 'NO_WORKFLOW_CHANGE', context };
+  }
+
+  const auditorProven = resultHasCurrentWorkflowProof(state?.auditor_result, state, { repoRoot });
+  const validatorProven = resultHasCurrentWorkflowProof(state?.validator_result, state, { repoRoot });
+  if (!auditorProven || !validatorProven) {
+    return {
+      required: true,
+      proven: false,
+      decision: 'HOLD',
+      reason: workflowHoldReason(context),
+      context,
+      auditorProven,
+      validatorProven,
+    };
+  }
+
+  return {
+    required: true,
+    proven: true,
+    decision: 'PROCEED',
+    reason: 'WORKFLOW_SCHEMA_VALIDATION_PROVEN',
+    context,
+    auditorProven: true,
+    validatorProven: true,
+  };
+}
+
 /**
  * B records its result. Requires auditorResult to pass role-protocol.mjs's
  * `isAttestedAuditorResult` -- a WeakSet membership check proving this
@@ -423,6 +544,12 @@ export function handoffToAuditor({ repoRoot, taskId, ownerToken, headSha, now })
  * reused verbatim, now genuinely wired into a real caller). A handoff
  * envelope claiming "TESTS = PASS" is a CLAIM the orchestrator does NOT
  * trust on its own -- only the attested result object itself is trusted.
+ *
+ * A legacy/core-minted PASS object with no workflowGate is rejected
+ * whenever the REAL Git changeset proves .github/workflows/** changed
+ * (P1-E: this check is unconditional here, not only in a wrapper a caller
+ * could import around). HOLD results remain recordable so the system can
+ * persist the blocker.
  */
 export function recordAuditResult({ repoRoot, taskId, ownerToken, auditorResult, toState, now }) {
   if (!isAttestedAuditorResult(auditorResult)) {
@@ -430,6 +557,19 @@ export function recordAuditResult({ repoRoot, taskId, ownerToken, auditorResult,
   }
   if (!AUDITOR_RESULT_STATES.includes(auditorResult.finalState)) {
     return { ok: false, reason: 'MALFORMED_AUDITOR_RESULT_STATE' };
+  }
+  {
+    const state = loadState(repoRoot, taskId);
+    const context = inspectTaskWorkflowContext(state, { repoRoot });
+    const isPass = AUDITOR_PASS_SHAPED_STATES.includes(auditorResult.finalState);
+    if (context.valid && context.workflowChanged && isPass) {
+      if (!resultHasCurrentWorkflowProof(auditorResult, state, { repoRoot })) {
+        return { ok: false, reason: workflowHoldReason(context), detail: 'B PASS cannot be recorded: same-HEAD WORKFLOW_SCHEMA_VALIDATION + ACTIONLINT validation is not proven' };
+      }
+    }
+    if (!context.valid && isPass) {
+      return { ok: false, reason: 'HOLD_WORKFLOW_CHANGE_CONTEXT_UNPROVEN' };
+    }
   }
   // toState must match what the result actually says -- a HOLD-shaped
   // result can never be recorded under toState:'READY_FOR_C' (that would
@@ -484,6 +624,26 @@ export function recordValidationResult({ repoRoot, taskId, ownerToken, validator
   }
   if (validatorResult.finalState === 'PASS' && validatorResult.reason !== 'CERTIFIED') {
     return { ok: false, reason: 'MALFORMED_VALIDATOR_RESULT_PASS_REASON' };
+  }
+  // Runtime C enforcement (P1-E: unconditional here, see recordAuditResult's
+  // own comment). Even if a caller fabricates a PASS-shaped validator
+  // object, workflow-changing tasks require a live workflow-aware C result
+  // and a persisted same-HEAD workflowGate before C PASS can be recorded.
+  {
+    const state = loadState(repoRoot, taskId);
+    const context = inspectTaskWorkflowContext(state, { repoRoot });
+    const isPass = validatorResult.finalState === 'PASS';
+    if (context.valid && context.workflowChanged && isPass) {
+      if (!isWorkflowAwareValidatorResult(validatorResult)) {
+        return { ok: false, reason: 'HOLD_WORKFLOW_SCHEMA_VALIDATION_REQUIRED', detail: 'validator PASS is not a live workflow-aware C result' };
+      }
+      if (!resultHasCurrentWorkflowProof(validatorResult, state, { repoRoot })) {
+        return { ok: false, reason: workflowHoldReason(context), detail: 'C PASS cannot be recorded: same-HEAD workflow validation proof is missing/stale' };
+      }
+    }
+    if (!context.valid && isPass) {
+      return { ok: false, reason: 'HOLD_WORKFLOW_CHANGE_CONTEXT_UNPROVEN' };
+    }
   }
   // Same toState/result-content consistency rule as recordAuditResult: a
   // HOLD validator result can never reach toState:'PR_METADATA_SYNC_REQUIRED',
@@ -540,6 +700,16 @@ export function recordFinalPrMetadataVerification({
 
   const state = loadState(repoRoot, taskId);
   if (state === null) return { ok: false, reason: 'NO_TASK_SESSION' };
+  // Prevent PR_METADATA_SYNC_REQUIRED -> READY_FOR_HUMAN unless BOTH B and C
+  // persisted workflow proof on the current HEAD (P1-E: unconditional here,
+  // see recordAuditResult's own comment). Makes the workflow gate a real
+  // prerequisite to reaching the Human Gate, not merely a CI log line.
+  {
+    const decision = evaluatePersistedWorkflowCertification(state, { repoRoot });
+    if (decision.required && !decision.proven) {
+      return { ok: false, reason: decision.reason, detail: 'workflow schema evidence is not sufficient to enter READY_FOR_HUMAN' };
+    }
+  }
   // Remediation (Task 7 hotfix, B audit, P2-1): `state.pr_number !== prNumber`
   // alone is not sufficient -- in JS, `null !== null` is `false`, so a task
   // that never had `recordPrOpened` called (pr_number legitimately still
@@ -701,6 +871,15 @@ export function requestHumanGate({ repoRoot, taskId, ownerToken, actionType, prS
   if (!lockCheck.valid) return { ok: false, reason: lockCheck.reason ?? 'LOCK_OWNERSHIP_INVALID' };
   const state = loadState(repoRoot, taskId);
   if (state === null) return { ok: false, reason: 'NO_TASK_SESSION' };
+
+  // Defense in depth at the final human-action request boundary (P1-E:
+  // unconditional here, see recordAuditResult's own comment).
+  {
+    const decision = evaluatePersistedWorkflowCertification(state, { repoRoot });
+    if (decision.required && !decision.proven) {
+      return { ok: false, reason: decision.reason, detail: 'Human Gate denied: workflow schema evidence is missing, stale, or unproven' };
+    }
+  }
 
   let required;
   try {
