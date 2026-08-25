@@ -1,0 +1,69 @@
+name: Night Agent — temporary incremental no-replace patch
+
+on:
+  push:
+    branches:
+      - fix/night-agent-incremental-no-replace-20260825
+
+permissions:
+  contents: write
+
+jobs:
+  patch-and-test:
+    name: Harden incremental-audit Git calls
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: '24'
+
+      - name: Aplicar hardening determinístico
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+
+          path = Path('tools/night-agent/incremental-audit.mjs')
+          text = path.read_text(encoding='utf-8')
+          needle = "spawnSyncFn('git', ['-C', repoRoot,"
+          replacement = "spawnSyncFn('git', ['--no-replace-objects', '-C', repoRoot,"
+          count = text.count(needle)
+          if count != 7:
+              raise SystemExit(f'expected exactly 7 direct Git calls to harden, found {count}')
+          patched = text.replace(needle, replacement)
+          if needle in patched:
+              raise SystemExit('unguarded direct Git invocation remains after patch')
+          if patched.count(replacement) != 7:
+              raise SystemExit('unexpected guarded-call count after patch')
+          path.write_text(patched, encoding='utf-8')
+          PY
+
+      - name: Ejecutar regresiones focalizadas
+        run: >-
+          node --test
+          tools/night-agent/test/incremental-audit.test.mjs
+          tools/night-agent/test/incremental-audit-git-replace.test.mjs
+
+      - name: Commit hardening y retirar workflow temporal
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add tools/night-agent/incremental-audit.mjs
+          git rm .github/workflows/night-agent-incremental-no-replace-patch.yml
+          EXPECTED="$(git diff --cached --name-only | sort)"
+          ACTUAL="$(printf '%s\n' '.github/workflows/night-agent-incremental-no-replace-patch.yml' 'tools/night-agent/incremental-audit.mjs' | sort)"
+          if [[ "$EXPECTED" != "$ACTUAL" ]]; then
+            echo "::error::El commit intentaría tocar archivos fuera del alcance esperado"
+            git diff --cached --name-only
+            exit 1
+          fi
+          git commit -m "fix(night-agent): ignore Git replacement objects in incremental audit"
+          git push origin "HEAD:${GITHUB_REF_NAME}"
