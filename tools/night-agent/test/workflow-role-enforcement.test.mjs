@@ -11,23 +11,31 @@ import {
   isAttestedAuditorResult,
 } from '../role-protocol.mjs';
 import { evaluatePersistedWorkflowCertification } from '../task-orchestrator.mjs';
-import { produceWorkflowValidationEvidenceFromCiRun } from '../workflow-certification-gate.mjs';
+import { attestCiRunEvidence } from '../ci-evidence-authority.mjs';
 
-const HEAD_1 = 'a'.repeat(40);
-const HEAD_2 = 'b'.repeat(40);
+// T-F1.2 P1-A remediation: produceWorkflowValidationEvidenceFromCiRun (a
+// caller-supplied `ciRun` object with zero independent observation) has been
+// deleted. HEAD_1/HEAD_2 are real, already-merged commits with real,
+// completed, successful "Night Agent — security + test" CI runs
+// (independently verified via `gh api` before this revision was written) --
+// see ci-evidence-authority.test.mjs for full mechanism-level adversarial
+// coverage and workflow-certification-gate.test.mjs's header comment for the
+// evidence-policy.test.mjs precedent this real-network pattern follows.
+const HEAD_1 = '2e909e18579108928ff0728323d570491795fbee';
+const HEAD_2 = '78a8c2dc2f4a414eee09b83c6596b5e69f630430';
 const PROD_FILES = ['.github/workflows/production-deploy.yml'];
 const CI_FILES = ['.github/workflows/ci.yml'];
-const REQUIRED_JOB = 'Night Agent — security + test';
 
-// GENUINE evidence, minted by the real function -- see workflow-certification-
-// gate.test.mjs for the adversarial proof that a hand-built object of this
-// exact shape (the historical `passEvidence()` pattern this remediation
-// removes) is rejected.
-function realEvidence(headSha = HEAD_1, conclusion = 'success') {
-  return produceWorkflowValidationEvidenceFromCiRun({
-    headSha,
-    ciRun: { headSha, event: 'push', jobs: [{ name: REQUIRED_JOB, conclusion }] },
-  });
+const evidenceCache = new Map();
+
+/** Real, attested evidence for a real HEAD -- memoized to avoid redundant `gh` calls across tests for the same SHA. */
+function realEvidence(headSha = HEAD_1) {
+  if (!evidenceCache.has(headSha)) {
+    const result = attestCiRunEvidence({ headSha });
+    if (!result.ok) throw new Error(`realEvidence(${headSha}) failed: ${result.reason}`);
+    evidenceCache.set(headSha, result.evidence);
+  }
+  return evidenceCache.get(headSha);
 }
 
 test('B: Production workflow + no schema proof => UNPROVEN -> HOLD', () => {
@@ -284,42 +292,50 @@ test('P1-2: an accurate files_changed declaration for a genuine non-workflow-onl
   }
 });
 
-test('P1-2: Git changeset genuinely proven + real attested B/C workflow proof on that exact HEAD => PROCEED', () => {
-  const { repoRoot, baseSha, run } = createGitFixture();
-  try {
-    fs.writeFileSync(
-      path.join(repoRoot, '.github', 'workflows', 'production-deploy.yml'),
-      'name: production-deploy\non:\n  workflow_dispatch: {}\n# genuine real change\n',
-    );
-    run(['add', '-A']);
-    run(['commit', '-m', 'genuine workflow change, accurately declared']);
-    const headSha = run(['rev-parse', 'HEAD']);
+test('P1-2 + P1-A combined: real Git changeset proof + real attested CI evidence on the SAME real, already-merged HEAD => PROCEED', () => {
+  // Unlike the synthetic fixtures above, this test needs a headSha that is
+  // simultaneously (a) a real commit reachable from THIS repository's own
+  // history, so the real `git diff` changeset detection (P1-2) has real
+  // objects to compare, and (b) a real GitHub-hosted commit with a real
+  // completed+successful CI run, so attestCiRunEvidence (P1-A) can mint
+  // genuine evidence for it. HEAD_1 (2e909e...) satisfies both: it is an
+  // ancestor of this worktree's own branch (real local Git objects, no
+  // network needed for the diff) AND a real, already-merged commit with real
+  // CI history. Its real first-parent diff genuinely adds a Production-
+  // capable workflow file, verified below via classifyWorkflowChangeContext
+  // rather than assumed.
+  const realRepoRoot = spawnSync('git', ['rev-parse', '--show-toplevel'], { encoding: 'utf8', shell: false }).stdout.trim();
+  const baseSha = spawnSync('git', ['rev-parse', `${HEAD_1}^`], { cwd: realRepoRoot, encoding: 'utf8', shell: false }).stdout.trim();
+  const headSha = HEAD_1;
 
-    const b = certifyAuditResult({
-      executorRole: 'A', auditorRole: 'B', headSha,
-      requestedState: 'PASS', findings: [], evidence: [],
-      filesChanged: PROD_FILES,
-      workflowValidation: realEvidence(headSha),
-    });
-    const c = certifyByValidator({
-      executorRole: 'A', validatorRole: 'C', currentHeadSha: headSha,
-      attestedAuditorResult: b, ciHeadSha: headSha, ciStatus: 'SUCCESS',
-      filesChanged: PROD_FILES,
-      workflowValidation: realEvidence(headSha),
-    });
-    assert.equal(c.finalState, 'PASS');
+  const realDiff = spawnSync('git', ['diff', '--name-status', '--no-renames', `${baseSha}..${headSha}`], { cwd: realRepoRoot, encoding: 'utf8', shell: false });
+  assert.equal(realDiff.status, 0);
+  const realFilesChanged = realDiff.stdout.split('\n').filter((l) => l.trim().length > 0).map((l) => l.split('\t')[1]);
+  const realProdFiles = realFilesChanged.filter((f) => f.startsWith('.github/workflows/') && f.includes('production'));
+  assert.ok(realProdFiles.length > 0, 'sanity: this real HEAD must genuinely touch a Production workflow file');
 
-    const decision = evaluatePersistedWorkflowCertification(
-      { base_sha: baseSha, head_sha: headSha, files_changed: PROD_FILES, auditor_result: b, validator_result: c },
-      { repoRoot },
-    );
-    assert.equal(decision.proven, true);
-    assert.equal(decision.decision, 'PROCEED');
-    assert.equal(decision.auditorProven, true);
-    assert.equal(decision.validatorProven, true);
-  } finally {
-    fs.rmSync(repoRoot, { recursive: true, force: true });
-  }
+  const b = certifyAuditResult({
+    executorRole: 'A', auditorRole: 'B', headSha,
+    requestedState: 'PASS', findings: [], evidence: [],
+    filesChanged: realProdFiles,
+    workflowValidation: realEvidence(headSha),
+  });
+  const c = certifyByValidator({
+    executorRole: 'A', validatorRole: 'C', currentHeadSha: headSha,
+    attestedAuditorResult: b, ciHeadSha: headSha, ciStatus: 'SUCCESS',
+    filesChanged: realProdFiles,
+    workflowValidation: realEvidence(headSha),
+  });
+  assert.equal(c.finalState, 'PASS');
+
+  const decision = evaluatePersistedWorkflowCertification(
+    { base_sha: baseSha, head_sha: headSha, files_changed: realProdFiles, auditor_result: b, validator_result: c },
+    { repoRoot: realRepoRoot },
+  );
+  assert.equal(decision.proven, true);
+  assert.equal(decision.decision, 'PROCEED');
+  assert.equal(decision.auditorProven, true);
+  assert.equal(decision.validatorProven, true);
 });
 
 test('P1-2: Git cannot determine the changeset (missing repoRoot) => HOLD, never treated as "no change"', () => {

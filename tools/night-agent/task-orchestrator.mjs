@@ -19,6 +19,21 @@
 // changeset (missing repoRoot, unresolvable SHAs, command failure), the
 // result is UNPROVEN -> HOLD, exactly as an unproven workflow-schema
 // evidence gate already is -- never silently treated as "no change".
+//
+// P1-B REMEDIATION (T-F1.2 external re-audit, HOLD): the previous revision
+// of this facade exposed __installTestGitChangesetProvider /
+// __clearTestGitChangesetProvider, a public, module-level override that let
+// ANY caller substitute the entire Git-changeset authority. The audit's
+// finding stands regardless of the export's name: "that the name contains
+// '__installTest' is NOT a security boundary" -- a public export is a public
+// export. That override has been deleted outright. deriveChangedFilesFromGit
+// (git-changeset.mjs) now runs unconditionally, with no override parameter
+// of any name accepted anywhere in this module. The two pre-existing test
+// files that relied on the override (task-orchestrator.test.mjs,
+// full-role-simulation.test.mjs) were retrofitted to use real, disposable
+// Git repositories (test/support/git-orchestration-fixture.mjs, a test-only
+// module never imported by any runtime file) instead of overriding
+// production authority.
 
 export * from './task-orchestrator-core.mjs';
 
@@ -38,36 +53,6 @@ import {
 
 const AUDITOR_PASS_SHAPED_STATES = Object.freeze(['PASS', 'PASS_WITH_FINDINGS']);
 
-// ---------------------------------------------------------------------------
-// EXPLICIT test-only seam. Real production callers never touch this -- the
-// real deriveChangedFilesFromGit always runs. It exists solely because
-// task-orchestrator.test.mjs / full-role-simulation.test.mjs predate this
-// remediation and exercise ORCHESTRATION STATE-MACHINE logic that is
-// deliberately decoupled from any real filesystem/Git repository (synthetic
-// repoRoot paths, synthetic SHAs -- none of those scenarios involve
-// .github/workflows/** at all). Forcing every one of those pre-existing,
-// already-audited tests to fabricate a real Git history was assessed as
-// disproportionate scope expansion for this remediation; this named,
-// explicit override -- never a silent default, always visibly installed and
-// torn down by the test file itself -- keeps the REAL enforcement path
-// (deriveChangedFilesFromGit, unconditionally required otherwise) intact for
-// every real caller and for the tests that specifically exercise it
-// (workflow-role-enforcement.test.mjs). `node --test` runs each test file in
-// its own process, so this module-level override never crosses test files.
-// ---------------------------------------------------------------------------
-let testOnlyGitChangesetProvider = null;
-
-/** Test-only. Installs an explicit override for deriveChangedFilesFromGit. */
-export function __installTestGitChangesetProvider(fn) {
-  if (typeof fn !== 'function') throw new TypeError('__installTestGitChangesetProvider requires a function');
-  testOnlyGitChangesetProvider = fn;
-}
-
-/** Test-only. Restores the real deriveChangedFilesFromGit. */
-export function __clearTestGitChangesetProvider() {
-  testOnlyGitChangesetProvider = null;
-}
-
 function workflowHoldReason(context) {
   return context?.productionWorkflowChanged
     ? 'HOLD_UNPROVEN_PRODUCTION_WORKFLOW_SCHEMA'
@@ -76,14 +61,14 @@ function workflowHoldReason(context) {
 
 /**
  * @param {object} state persisted protocol state (or null)
- * @param {{repoRoot?: string, deriveChangedFilesFromGitFn?: Function}} [options]
+ * @param {{repoRoot?: string}} [options]
  */
-function inspectTaskWorkflowContext(state, { repoRoot, deriveChangedFilesFromGitFn = testOnlyGitChangesetProvider ?? deriveChangedFilesFromGit } = {}) {
+function inspectTaskWorkflowContext(state, { repoRoot } = {}) {
   if (state === null || typeof state !== 'object') {
     return { valid: false, workflowChanged: null, productionWorkflowChanged: null, workflowFiles: [] };
   }
 
-  const changeset = deriveChangedFilesFromGitFn({ repoRoot, baseSha: state.base_sha, headSha: state.head_sha });
+  const changeset = deriveChangedFilesFromGit({ repoRoot, baseSha: state.base_sha, headSha: state.head_sha });
   if (!changeset.ok) {
     return {
       valid: false,
@@ -98,8 +83,8 @@ function inspectTaskWorkflowContext(state, { repoRoot, deriveChangedFilesFromGit
   return classifyWorkflowChangeContext(changeset.files);
 }
 
-function resultHasCurrentWorkflowProof(result, state, { repoRoot, deriveChangedFilesFromGitFn = testOnlyGitChangesetProvider ?? deriveChangedFilesFromGit } = {}) {
-  const changeset = deriveChangedFilesFromGitFn({ repoRoot, baseSha: state?.base_sha, headSha: state?.head_sha });
+function resultHasCurrentWorkflowProof(result, state, { repoRoot } = {}) {
+  const changeset = deriveChangedFilesFromGit({ repoRoot, baseSha: state?.base_sha, headSha: state?.head_sha });
   if (!changeset.ok) return false;
   return isPersistedWorkflowGateProven({
     gate: result?.workflowGate,

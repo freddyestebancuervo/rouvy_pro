@@ -12,7 +12,6 @@ import {
   recordExecutorResult, handoffToAuditor, recordAuditResult,
   handoffToValidator, recordValidationResult, enterWaitingCi,
   resumeFromWaitingCi, requestHumanGate, releaseTask, isEvidenceReusable,
-  __installTestGitChangesetProvider,
 } from '../task-orchestrator.mjs';
 import { finalizeExecutorResult, certifyAuditResult, certifyByValidator } from '../role-protocol.mjs';
 import { resolveTaskLockPath } from '../task-lock.mjs';
@@ -20,21 +19,19 @@ import { resolveProtocolStatePath } from '../protocol-state.mjs';
 import { buildFinalPrMetadataBlock } from '../pr-metadata-gate.mjs';
 import { recordFinalPrMetadataVerification, recordPrOpened } from '../task-orchestrator.mjs';
 import { isRoleAllowed } from '../role-capabilities.mjs';
+import { fakeRepo, FIXTURE_BASE_SHA, FIXTURE_HEAD_1, FIXTURE_HEAD_2 } from './support/git-orchestration-fixture.mjs';
 
-// T-F1.2 P1-2 remediation note: this whole file exercises the ORCHESTRATION
-// state machine against synthetic repoRoot paths and synthetic SHAs -- by
-// design, none of these scenarios touch .github/workflows/** or any real
-// filesystem/Git state. See task-orchestrator.mjs's own header comment on
-// __installTestGitChangesetProvider for why this explicit, visible seam
-// exists and why it can never leak into real production use.
-__installTestGitChangesetProvider(() => ({ ok: true, files: [] }));
-
-function fakeRepo() {
-  return `/fake/repo-${randomUUID()}`;
-}
-const BASE_SHA = 'a'.repeat(40);
-const HEAD_1 = 'b'.repeat(40);
-const HEAD_2 = 'c'.repeat(40);
+// T-F1.2 P1-B remediation note: this whole file exercises the ORCHESTRATION
+// state machine. task-orchestrator.mjs no longer accepts ANY override of its
+// Git-changeset authority (deriveChangedFilesFromGit runs unconditionally),
+// so `repoRoot` here is a real, disposable Git repository (see
+// support/git-orchestration-fixture.mjs) whose deterministic commit history
+// never touches .github/workflows/** -- meaning every scenario below is
+// correctly classified as NOT a workflow change by the real, unmodified gate,
+// exactly as these scenarios always assumed.
+const BASE_SHA = FIXTURE_BASE_SHA;
+const HEAD_1 = FIXTURE_HEAD_1;
+const HEAD_2 = FIXTURE_HEAD_2;
 
 /** Drives NIGHT -> A -> EXECUTING for a fresh task, returns {repoRoot, taskId, ownerToken}. */
 function setupThroughExecuting(taskTitle = 'demo') {

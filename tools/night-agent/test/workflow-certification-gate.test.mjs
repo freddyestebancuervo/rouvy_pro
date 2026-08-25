@@ -6,25 +6,37 @@ import {
   evaluateWorkflowValidationRequirement,
   isGithubActionsWorkflowPath,
   isProductionWorkflowPath,
-  produceWorkflowValidationEvidenceFromCiRun,
   isAttestedWorkflowValidationEvidence,
 } from '../workflow-certification-gate.mjs';
+import { attestCiRunEvidence } from '../ci-evidence-authority.mjs';
 
-const HEAD_1 = '1'.repeat(40);
-const HEAD_2 = '2'.repeat(40);
-const REQUIRED_JOB = 'Night Agent — security + test';
+// T-F1.2 P1-A remediation: produceWorkflowValidationEvidenceFromCiRun (which
+// took a caller-supplied `ciRun` object with zero independent observation)
+// has been deleted. The ONLY way to obtain genuine, attested evidence is now
+// ci-evidence-authority.mjs's attestCiRunEvidence, which performs its own
+// real `gh api` observation and accepts no override. HEAD_1/HEAD_2 below are
+// therefore real, already-merged commits with real, completed, successful
+// "Night Agent — security + test" CI runs (independently verified via
+// `gh api` before this revision was written) -- this file's genuine-evidence
+// helper hits real network, mirroring the already-audited precedent in
+// evidence-policy.test.mjs (attestRemoteMainEvidence's positive-path tests
+// likewise hit the real GitHub remote). See ci-evidence-authority.test.mjs
+// for the mechanism-level (gatherer) adversarial coverage of every failure
+// mode; this file only exercises evaluateWorkflowValidationRequirement's own
+// decision logic against genuine, real evidence.
+const HEAD_1 = '2e909e18579108928ff0728323d570491795fbee';
+const HEAD_2 = '78a8c2dc2f4a414eee09b83c6596b5e69f630430';
 
-// GENUINE evidence: the only legitimate way to produce it is to run the real
-// minting function against a real (here, simulated but structurally real)
-// CI run summary. This replaces the historical `passEvidence()` helper,
-// which returned a bare object literal -- exactly the P1-1 fabrication this
-// remediation closes. See workflow-role-enforcement.test.mjs for the
-// adversarial proof that a hand-built object of this exact shape is REJECTED.
-function realEvidence(headSha = HEAD_1, conclusion = 'success') {
-  return produceWorkflowValidationEvidenceFromCiRun({
-    headSha,
-    ciRun: { headSha, event: 'push', jobs: [{ name: REQUIRED_JOB, conclusion }] },
-  });
+const evidenceCache = new Map();
+
+/** Real, attested evidence for a real HEAD -- memoized to avoid redundant `gh` calls across tests for the same SHA. */
+function realEvidence(headSha = HEAD_1) {
+  if (!evidenceCache.has(headSha)) {
+    const result = attestCiRunEvidence({ headSha });
+    if (!result.ok) throw new Error(`realEvidence(${headSha}) failed: ${result.reason}`);
+    evidenceCache.set(headSha, result.evidence);
+  }
+  return evidenceCache.get(headSha);
 }
 
 test('workflow path classifier recognizes only .github/workflows YAML files', () => {
@@ -147,43 +159,19 @@ test('P1-1 POSITIVE: genuine evidence minted by the real validators for the corr
   assert.equal(result.evidenceLevel, 'PROVEN_BY_CODE');
 });
 
-test('produceWorkflowValidationEvidenceFromCiRun mints FAIL evidence (still attested) when the required job did not succeed', () => {
-  const failed = realEvidence(HEAD_1, 'failure');
-  assert.equal(isAttestedWorkflowValidationEvidence(failed), true, 'a FAIL result is still genuine, attested evidence -- it is not fabricated, it is proof of failure');
-  assert.equal(failed.workflowSchemaValidation, 'FAIL');
-  assert.equal(failed.actionlintValidation, 'FAIL');
-
+// T-F1.2 P1-A note: attestCiRunEvidence never mints FAIL-shaped evidence --
+// on any failure mode it returns { ok: false, reason } with NO evidence
+// object at all (see ci-evidence-authority.test.mjs's ATTACK_CI_1..10 for
+// the full mechanism-level failure-mode coverage, and the P2-1
+// CI_HEAD_REUSE_ATTACK/head-binding proof specifically). From this decision-
+// logic file's point of view, "the required job did not succeed" and "no
+// evidence at all" are the SAME observable state: workflowValidation is
+// simply absent, already covered by 'workflow changed + evidence missing ->
+// HOLD' above.
+test('Production workflow changed + schema not proven (no evidence supplied) -> UNPROVEN -> HOLD', () => {
   const result = evaluateWorkflowValidationRequirement({
     filesChanged: ['.github/workflows/production-deploy.yml'],
     headSha: HEAD_1,
-    workflowValidation: failed,
-  });
-  assert.equal(result.proven, false);
-  assert.equal(result.decision, 'HOLD');
-  assert.equal(result.reason, 'HOLD_UNPROVEN_PRODUCTION_WORKFLOW_SCHEMA');
-});
-
-test('produceWorkflowValidationEvidenceFromCiRun mints FAIL evidence when ciRun.headSha does not match the requested headSha (P2-1 binding)', () => {
-  const wrongSubject = produceWorkflowValidationEvidenceFromCiRun({
-    headSha: HEAD_1,
-    ciRun: { headSha: HEAD_2, event: 'push', jobs: [{ name: REQUIRED_JOB, conclusion: 'success' }] },
-  });
-  assert.equal(wrongSubject.headSha, HEAD_1);
-  assert.equal(wrongSubject.workflowSchemaValidation, 'FAIL');
-  assert.equal(isAttestedWorkflowValidationEvidence(wrongSubject), true, 'still real, attested evidence -- of a mismatch, never silently substituted');
-});
-
-test('produceWorkflowValidationEvidenceFromCiRun requires a real ciRun shape, not a caller-supplied verdict', () => {
-  assert.throws(() => produceWorkflowValidationEvidenceFromCiRun({ headSha: HEAD_1 }));
-  assert.throws(() => produceWorkflowValidationEvidenceFromCiRun({ headSha: HEAD_1, ciRun: { headSha: HEAD_1 } }));
-  assert.throws(() => produceWorkflowValidationEvidenceFromCiRun({ headSha: HEAD_1, ciRun: { headSha: HEAD_1, event: 'push' } }));
-});
-
-test('Production workflow changed + schema not proven -> UNPROVEN -> HOLD', () => {
-  const result = evaluateWorkflowValidationRequirement({
-    filesChanged: ['.github/workflows/production-deploy.yml'],
-    headSha: HEAD_1,
-    workflowValidation: realEvidence(HEAD_1, 'failure'),
   });
   assert.equal(result.productionWorkflowChanged, true);
   assert.equal(result.proven, false);
