@@ -303,6 +303,15 @@ jobs:
     name: Night Agent — security + test
     runs-on: ubuntu-latest
     timeout-minutes: 10
+    # actions: read — tools/night-agent/test/ci-evidence-authority.test.mjs's
+    # real, no-override attestor tests make genuine read-only `gh api
+    # repos/.../actions/runs` / `.../jobs` calls against THIS repository (see
+    # that file's own header comment). GH_TOKEN is scoped to the single step
+    # that actually runs the suite, never the whole job -- no other step here
+    # needs GitHub API access.
+    permissions:
+      contents: read
+      actions: read
     steps:
       # fetch-depth: 0 (full history) — tools/night-agent/test/evidence-policy.test.mjs
       # clones this checkout's own working tree to build real, identity-verified
@@ -333,4 +342,6 @@ jobs:
           echo "NIGHT_AGENT_NODE24_RUNTIME_ASSERTION=PASS"
 
       - name: Correr suite Night Agent
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: node --test tools/night-agent/test/*.test.mjs
