@@ -242,4 +242,6 @@ jobs:
       immutable_ref: ${{ needs.verify-build-output.outputs.immutable_ref }}
       expected_migration_set_hash: ${{ needs.prepare-inspection-inputs.outputs.expected_migration_set_hash }}
       database_secret_version: ${{ inputs.database_secret_version }}
-      inspection_authorized: ${{ needs.guard.outputs.inspection_authorized }}
+      # Job/step outputs are strings; workflow_call declares this input boolean.
+      # Convert explicitly so GitHub can instantiate the reusable workflow.
+      inspection_authorized: ${{ fromJSON(needs.guard.outputs.inspection_authorized) }}
