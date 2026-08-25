@@ -247,13 +247,23 @@ operativo vía Workload Identity Federation (sin credenciales de larga
 duración): un `workflow_dispatch` construye la imagen, la publica en
 Artifact Registry y la despliega con validación previa, switch explícito
 de tráfico, health check y rollback automático condicionado — primer
-deploy real completado con éxito. **Pendiente:** despliegue real a un
-hosting en vivo de **Producción** (`T-F1.1`) — no confundir con
-Development, que sí está desplegado. `T-F0.2`/`C1` **está cerrado**: las
-10 puertas de la reconciliación de entornos (Documento 15 §12) quedan
-cumplidas para Development, incluidas la validación de reglas de
-Firestore contra el proyecto real, el CI/CD de despliegue autenticado y
-el ensayo real de rollback. Ver `PROJECT_STATUS.md`.
+deploy real completado con éxito. Para **Production**, `T-F1.1` está
+**CERRADA** con Google Cloud Run seleccionado como plataforma; `T-F1.2`
+(pipeline de CD) permanece **EN PROGRESO**. La infraestructura de datos e
+identidad de Production ya está provisionada, y los callers de deploy e
+inspección de base de datos están versionados y endurecidos, pero siguen
+siendo manuales y **no se ha ejecutado un deploy real de Cloud Run de
+Production**. El hardening de workflows quedó fusionado en `main`
+`caf4afbfbf70efc6306ee9bd83ff8f48feb0f599` con CI post-merge 4/4 en
+verde (run `32801653025`). La precondición de migraciones sigue sin prueba
+técnica: `MIGRATION_PRECONDITION_PROVEN=NO`; el siguiente paso es un
+preflight de solo lectura de la inspección de la base de datos y, solo con
+autorización humana separada, su eventual dispatch. `T-F0.2`/`C1`
+**está cerrado**: las 10 puertas de la reconciliación de entornos
+(Documento 15 §12) quedan cumplidas para Development, incluidas la
+validación de reglas de Firestore contra el proyecto real, el CI/CD de
+despliegue autenticado y el ensayo real de rollback. Ver
+`PROJECT_STATUS.md`.
 
 **Ver `VERIFICATION_GUIDE.md`** para los comandos exactos y el resultado
 esperado de cada uno. **Sin terminal disponible (p. ej. desde el celular)?**
