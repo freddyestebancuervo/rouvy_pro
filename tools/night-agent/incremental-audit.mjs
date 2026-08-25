@@ -338,7 +338,7 @@ export function createTrustedBaseline({
   if (!identity.verified) {
     return { baseline: null, error: `HOLD_REPOSITORY_IDENTITY_UNVERIFIED:${identity.reason}` };
   }
-  const commitCheck = spawnSyncFn('git', ['-C', repoRoot, 'cat-file', '-e', `${sha}^{commit}`], { encoding: 'utf8', shell: false });
+  const commitCheck = spawnSyncFn('git', ['--no-replace-objects', '-C', repoRoot, 'cat-file', '-e', `${sha}^{commit}`], { encoding: 'utf8', shell: false });
   if (!commitCheck || commitCheck.status !== 0) {
     return { baseline: null, error: 'BASELINE_SHA_NOT_RESOLVABLE' };
   }
@@ -387,7 +387,7 @@ export function computeChangeset({ baseline, repoRoot, spawnSyncFn = spawnSync }
   if (!isTrustedBaseline(baseline)) {
     return { changeset: null, error: 'UNTRUSTED_BASELINE' };
   }
-  const headResult = spawnSyncFn('git', ['-C', repoRoot, 'rev-parse', 'HEAD'], { encoding: 'utf8', shell: false });
+  const headResult = spawnSyncFn('git', ['--no-replace-objects', '-C', repoRoot, 'rev-parse', 'HEAD'], { encoding: 'utf8', shell: false });
   if (!headResult || headResult.status !== 0 || typeof headResult.stdout !== 'string') {
     return { changeset: null, error: 'HEAD_UNRESOLVED' };
   }
@@ -395,7 +395,7 @@ export function computeChangeset({ baseline, repoRoot, spawnSyncFn = spawnSync }
 
   const files = [];
   if (currentSha !== baseline.sha) {
-    const diffResult = spawnSyncFn('git', ['-C', repoRoot, 'diff', '--name-status', '-M', baseline.sha, currentSha], { encoding: 'utf8', shell: false });
+    const diffResult = spawnSyncFn('git', ['--no-replace-objects', '-C', repoRoot, 'diff', '--name-status', '-M', baseline.sha, currentSha], { encoding: 'utf8', shell: false });
     if (!diffResult || diffResult.status !== 0 || typeof diffResult.stdout !== 'string') {
       return { changeset: null, error: 'DIFF_UNRESOLVED' };
     }
@@ -414,7 +414,7 @@ export function computeChangeset({ baseline, repoRoot, spawnSyncFn = spawnSync }
     }
   }
 
-  const statusResult = spawnSyncFn('git', ['-C', repoRoot, 'status', '--porcelain'], { encoding: 'utf8', shell: false });
+  const statusResult = spawnSyncFn('git', ['--no-replace-objects', '-C', repoRoot, 'status', '--porcelain'], { encoding: 'utf8', shell: false });
   if (!statusResult || statusResult.status !== 0 || typeof statusResult.stdout !== 'string') {
     return { changeset: null, error: 'STATUS_UNRESOLVED' };
   }
@@ -579,8 +579,8 @@ export function decideIncrementalAudit({
       // uncommitted-only modifications to a test file are still caught by
       // DIRTY_WORKTREE above.
       try {
-        const oldShow = spawnSyncFn('git', ['-C', repoRoot, 'show', `${baseline.sha}:${f.path}`], { encoding: 'utf8', shell: false });
-        const newShow = spawnSyncFn('git', ['-C', repoRoot, 'show', `${changeset.currentSha}:${f.path}`], { encoding: 'utf8', shell: false });
+        const oldShow = spawnSyncFn('git', ['--no-replace-objects', '-C', repoRoot, 'show', `${baseline.sha}:${f.path}`], { encoding: 'utf8', shell: false });
+        const newShow = spawnSyncFn('git', ['--no-replace-objects', '-C', repoRoot, 'show', `${changeset.currentSha}:${f.path}`], { encoding: 'utf8', shell: false });
         if (oldShow && oldShow.status === 0 && newShow && newShow.status === 0) {
           const weaken = detectTestWeakening({ oldContent: oldShow.stdout, newContent: newShow.stdout });
           if (weaken.weakened) escalationReasons.push(`TEST_WEAKENING:${f.path}:${weaken.reasons.join(',')}`);
@@ -653,7 +653,7 @@ export function decideIncrementalAudit({
  */
 export function isDecisionStale({ decision, repoRoot, spawnSyncFn = spawnSync }) {
   if (!decision || typeof decision.currentSha !== 'string' || !FROZEN_SHA_PATTERN.test(decision.currentSha)) return true;
-  const headResult = spawnSyncFn('git', ['-C', repoRoot, 'rev-parse', 'HEAD'], { encoding: 'utf8', shell: false });
+  const headResult = spawnSyncFn('git', ['--no-replace-objects', '-C', repoRoot, 'rev-parse', 'HEAD'], { encoding: 'utf8', shell: false });
   if (!headResult || headResult.status !== 0 || typeof headResult.stdout !== 'string') return true;
   return headResult.stdout.trim() !== decision.currentSha;
 }
