@@ -6,15 +6,17 @@ on:
       - chore/tf25-remove-dead-dependencies-20260825
 
 permissions:
-  contents: read
+  contents: write
 
 jobs:
   regenerate-lockfile:
-    name: T-F2.5 — regenerate pubspec.lock
+    name: T-F2.5 — regenerate and commit pubspec.lock
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
 
       - uses: subosito/flutter-action@1a449444c387b1966244ae4d4f8c696479add0b2 # v2.23.0
         with:
@@ -24,13 +26,30 @@ jobs:
       - name: Regenerar lockfile
         run: flutter pub get
 
-      - name: Mostrar diff del lockfile
-        run: git diff -- pubspec.lock
+      - name: Verificar que el lockfile cambió
+        shell: bash
+        run: |
+          set -euo pipefail
+          if git diff --quiet -- pubspec.lock; then
+            echo "::error::pubspec.lock no cambió después de retirar las dependencias muertas"
+            exit 1
+          fi
+          git diff --stat -- pubspec.lock
 
-      - name: Publicar lockfile regenerado
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
-        with:
-          name: tf25-pubspec-lock
-          path: pubspec.lock
-          if-no-files-found: error
-          retention-days: 1
+      - name: Commit lockfile y retirar workflow temporal
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add pubspec.lock
+          git rm .github/workflows/tf25-lockfile-generator.yml
+          git diff --cached --name-only
+          EXPECTED="$(git diff --cached --name-only | sort)"
+          ACTUAL="$(printf '%s\n' '.github/workflows/tf25-lockfile-generator.yml' 'pubspec.lock' | sort)"
+          if [[ "$EXPECTED" != "$ACTUAL" ]]; then
+            echo "::error::El commit temporal intentaría tocar archivos fuera del alcance esperado"
+            exit 1
+          fi
+          git commit -m "chore(tf2.5): reconcile Flutter lockfile"
+          git push origin "HEAD:${GITHUB_REF_NAME}"
