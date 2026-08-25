@@ -5,7 +5,7 @@ import {
 
 describe('T-F2.4 — 0007_drop_unused_ride_sessions', () => {
   it('models 0007 as removing ride_sessions and all of its physical objects', () => {
-    expect(EXPECTED_MIGRATION_NAMES.at(-1)).toBe('0007_drop_unused_ride_sessions');
+    expect(EXPECTED_MIGRATION_NAMES[EXPECTED_MIGRATION_NAMES.length - 1]).toBe('0007_drop_unused_ride_sessions');
     const expected = expectedObjectsForApplied([...EXPECTED_MIGRATION_NAMES]);
 
     expect(expected.tables.has('ride_sessions')).toBe(false);
