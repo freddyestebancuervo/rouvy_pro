@@ -300,8 +300,8 @@ export function topLevelStatementForm(sql: string): 'BEGIN_READ_ONLY' | 'SELECT'
 
 // =============================================================================
 // PHASE 14 — mapa completo de objetos físicos esperados, derivado
-// exclusivamente del SQL real de los 6 archivos de migración
-// (backend/migrations/000{1..6}_*.sql) + comportamiento documentado y
+// exclusivamente del SQL real de los 7 archivos de migración
+// (backend/migrations/000{1..7}_*.sql) + comportamiento documentado y
 // determinístico de PostgreSQL para nombres implícitos (PK/UNIQUE/
 // SERIAL) + comportamiento real de node-pg-migrate (ver
 // migration.js:142 y runner.js `ensureMigrationsTable`, node_modules
@@ -321,6 +321,7 @@ export const EXPECTED_MIGRATION_NAMES = [
   '0004_workouts',
   '0005_users_firebase_uid',
   '0006_tf0_5_pagination_indexes',
+  '0007_drop_unused_ride_sessions',
 ] as const;
 
 export type ExpectedMigrationName = (typeof EXPECTED_MIGRATION_NAMES)[number];
@@ -339,10 +340,12 @@ interface MigrationObjectDelta {
   /** Columnas creadas por esta migración, ya sea vía CREATE TABLE o
    * ALTER TABLE ... ADD COLUMN — formato `{table, column}`. */
   columns: { table: string; column: string }[];
-  /** Objetos de una migración ANTERIOR que esta migración elimina
-   * (solo índices en el conjunto actual de 6 migraciones — ninguna
-   * elimina una columna en su dirección UP). */
+  /** Índices de una migración ANTERIOR que esta migración elimina. */
   removes?: string[];
+  /** Tablas de una migración ANTERIOR que esta migración elimina. */
+  removesTables?: string[];
+  /** Columnas de una migración ANTERIOR que esta migración elimina. */
+  removesColumns?: { table: string; column: string }[];
 }
 
 function cols(table: string, columns: string[]): { table: string; column: string }[] {
@@ -459,6 +462,23 @@ export const EXPECTED_MIGRATION_OBJECTS: Record<ExpectedMigrationName, Migration
     sequences: [],
     columns: [],
   },
+  '0007_drop_unused_ride_sessions': {
+    extensions: [],
+    tables: [],
+    indexes: [],
+    sequences: [],
+    columns: [],
+    // DROP TABLE removes the table, both indexes that belong to it and
+    // every one of its columns. Keeping those removals explicit lets the
+    // read-only Production inspector distinguish an applied 0007 from an
+    // unexpectedly incomplete schema.
+    removesTables: ['ride_sessions'],
+    removes: ['idx_ride_sessions_user_start', 'ride_sessions_pkey'],
+    removesColumns: cols('ride_sessions', [
+      'id', 'user_id', 'start_time', 'end_time', 'distance_meters', 'calories_kcal',
+      'last_power_watts', 'last_cadence_rpm', 'last_heart_rate_bpm', 'device_count', 'created_at',
+    ]),
+  },
 };
 
 /** Objetos propios del motor node-pg-migrate — nunca deben clasificarse
@@ -513,7 +533,7 @@ export function classifyMigrationPrefix(trackedNames: string[]): MigrationPrefix
     if (trackedNames[i] !== expectedPrefix[i]) {
       return {
         state: 'INVALID_MIGRATION_ORDER',
-        reason: `Posición ${i}: se esperaba '${expectedPrefix[i]}', se encontró '${trackedNames[i]}' — el conjunto trackeado no es un prefijo ordenado válido de las 6 migraciones conocidas.`,
+        reason: `Posición ${i}: se esperaba '${expectedPrefix[i]}', se encontró '${trackedNames[i]}' — el conjunto trackeado no es un prefijo ordenado válido de las ${EXPECTED_MIGRATION_NAMES.length} migraciones conocidas.`,
       };
     }
   }
@@ -545,7 +565,9 @@ export function expectedObjectsForApplied(applied: ExpectedMigrationName[]): {
     delta.sequences.forEach((s) => sequences.add(s));
     delta.extensions.forEach((e) => extensions.add(e));
     delta.columns.forEach((c) => columns.add(`${c.table}.${c.column}`));
+    (delta.removesTables ?? []).forEach((t) => tables.delete(t));
     (delta.removes ?? []).forEach((r) => indexes.delete(r));
+    (delta.removesColumns ?? []).forEach((c) => columns.delete(`${c.table}.${c.column}`));
   }
 
   return { tables, indexes, sequences, extensions, columns };
