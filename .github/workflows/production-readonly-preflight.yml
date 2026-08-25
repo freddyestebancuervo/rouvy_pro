@@ -1,0 +1,235 @@
+name: Backend — Production read-only metadata preflight
+
+# T-F1.2 — live Production metadata preflight with ZERO Production mutations.
+# This workflow exists so current cloud facts can be proven before the separate
+# Production DB inspection workflow is ever dispatched. It authenticates with
+# the same Production deployer identity used by the inspection reusable, but
+# performs only describe/list/read operations and never accesses secret payloads.
+#
+# IMPORTANT: this is NOT the DB inspection itself. It does not build or push an
+# image, deploy/update/execute a Cloud Run Job, run migrations, alter IAM/network,
+# or read application data. A later real inspection remains a separate Human Gate.
+
+on:
+  workflow_dispatch:
+    inputs:
+      confirm_production_readonly_preflight:
+        description: "Must be exactly: PREFLIGHT_PRODUCTION_READONLY"
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+env:
+  PRODUCTION_PROJECT: ridepro-dbafe
+  PRODUCTION_REGION: southamerica-east1
+  CLOUD_SQL_INSTANCE: korixa-production-postgres
+  EXPECTED_DATABASE: korixa_production
+  RUNTIME_SA: korixa-production-runtime@ridepro-dbafe.iam.gserviceaccount.com
+  DEPLOYER_SA: korixa-production-deployer@ridepro-dbafe.iam.gserviceaccount.com
+  SECRET_DATABASE_URL: korixa-production-database-url
+  ARTIFACT_IMAGE: southamerica-east1-docker.pkg.dev/ridepro-dbafe/korixa-backend/api
+  INSPECTOR_JOB: korixa-production-db-readonly-inspector
+
+jobs:
+  guard:
+    name: Guard — exact main + explicit read-only intent
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions: {}
+    outputs:
+      guard_pass: ${{ steps.guard.outputs.guard_pass }}
+    steps:
+      - name: Validate event, repository, ref, SHA and confirmation
+        id: guard
+        shell: bash
+        env:
+          CONFIRM: ${{ inputs.confirm_production_readonly_preflight }}
+          EVENT_NAME: ${{ github.event_name }}
+          REPOSITORY: ${{ github.repository }}
+          REF: ${{ github.ref }}
+          SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          fail() { echo "::error::$1"; exit 1; }
+
+          [ "$EVENT_NAME" = "workflow_dispatch" ] || fail "Expected workflow_dispatch, got '$EVENT_NAME'."
+          [ "$REPOSITORY" = "freddyestebancuervo/rouvy_pro" ] || fail "Unexpected repository '$REPOSITORY'."
+          [ "$REF" = "refs/heads/main" ] || fail "Only refs/heads/main is allowed; got '$REF'."
+          [[ "$SHA" =~ ^[0-9a-f]{40}$ ]] || fail "github.sha is not a full lowercase 40-hex SHA."
+          [ "$CONFIRM" = "PREFLIGHT_PRODUCTION_READONLY" ] || fail "Confirmation must be exactly PREFLIGHT_PRODUCTION_READONLY."
+
+          echo "guard_pass=YES" >> "$GITHUB_OUTPUT"
+          echo "PREFLIGHT_GUARD=PASS"
+
+  production-readonly-preflight:
+    name: Production metadata — live read-only checks
+    needs: guard
+    if: needs.guard.outputs.guard_pass == 'YES'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    environment: production
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - name: Checkout exact dispatched SHA
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+
+      - name: Verify checkout identity and current-main freshness before OIDC
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          CHECKED_OUT_SHA="$(git rev-parse HEAD)"
+          [ "$CHECKED_OUT_SHA" = "${{ github.sha }}" ] || { echo "::error::Checkout SHA mismatch."; exit 1; }
+
+          REMOTE_MAIN_SHA="$(gh api "repos/${{ github.repository }}/commits/main" --jq '.sha')"
+          [ -n "$REMOTE_MAIN_SHA" ] || { echo "::error::Could not resolve current main SHA."; exit 1; }
+          [ "$REMOTE_MAIN_SHA" = "${{ github.sha }}" ] || { echo "::error::main advanced: dispatched=${{ github.sha }} current=$REMOTE_MAIN_SHA — FAIL CLOSED."; exit 1; }
+          echo "SOURCE_FRESHNESS_VERIFIED=YES ($REMOTE_MAIN_SHA)"
+
+      - name: Google Auth — WIF to Production deployer SA
+        id: auth
+        uses: google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093 # v3
+        with:
+          project_id: ${{ env.PRODUCTION_PROJECT }}
+          workload_identity_provider: projects/731660820861/locations/global/workloadIdentityPools/github-actions-pool/providers/github-production-deployer
+          service_account: ${{ env.DEPLOYER_SA }}
+
+      - name: Setup gcloud
+        uses: google-github-actions/setup-gcloud@aa5489c8933f4cc7a4f7d45035b3b1440c9c10db # v3
+
+      - name: Verify authenticated project
+        shell: bash
+        run: |
+          set -euo pipefail
+          ACTUAL_PROJECT="$(gcloud config get-value project)"
+          [ "$ACTUAL_PROJECT" = "${{ env.PRODUCTION_PROJECT }}" ] || { echo "::error::Project mismatch: '$ACTUAL_PROJECT'."; exit 1; }
+          echo "PROJECT_ID_MATCH=YES"
+
+      - name: Read Cloud SQL state, private-IP posture and expected database
+        id: cloud-sql
+        shell: bash
+        run: |
+          set -euo pipefail
+          INSTANCE_JSON="$(gcloud sql instances describe "${{ env.CLOUD_SQL_INSTANCE }}" --project="${{ env.PRODUCTION_PROJECT }}" --format=json)"
+
+          STATE="$(echo "$INSTANCE_JSON" | jq -r '.state')"
+          [ "$STATE" = "RUNNABLE" ] || { echo "::error::Cloud SQL state='$STATE'; expected RUNNABLE."; exit 1; }
+
+          IPV4_ENABLED="$(echo "$INSTANCE_JSON" | jq -r '.settings.ipConfiguration.ipv4Enabled')"
+          [ "$IPV4_ENABLED" != "true" ] || { echo "::error::Cloud SQL public IPv4 is enabled — FAIL CLOSED."; exit 1; }
+
+          PRIVATE_IP_COUNT="$(echo "$INSTANCE_JSON" | jq '[.ipAddresses[]? | select(.type=="PRIVATE" and (.ipAddress|type=="string") and (.ipAddress|length>0))] | length')"
+          [ "$PRIVATE_IP_COUNT" = "1" ] || { echo "::error::Expected exactly one usable PRIVATE IP; found $PRIVATE_IP_COUNT."; exit 1; }
+
+          DB_COUNT="$(gcloud sql databases list --instance="${{ env.CLOUD_SQL_INSTANCE }}" --project="${{ env.PRODUCTION_PROJECT }}" --format=json | jq --arg db "${{ env.EXPECTED_DATABASE }}" '[.[] | select(.name==$db)] | length')"
+          [ "$DB_COUNT" = "1" ] || { echo "::error::Expected database '${{ env.EXPECTED_DATABASE }}' count=$DB_COUNT."; exit 1; }
+
+          echo "CLOUD_SQL_STATE=RUNNABLE"
+          echo "CLOUD_SQL_PRIVATE_ONLY=YES"
+          echo "EXPECTED_DATABASE_PRESENT=YES"
+
+      - name: Read runtime service-account state
+        shell: bash
+        run: |
+          set -euo pipefail
+          DISABLED="$(gcloud iam service-accounts describe "${{ env.RUNTIME_SA }}" --project="${{ env.PRODUCTION_PROJECT }}" --format='value(disabled)')"
+          [ "$DISABLED" != "True" ] && [ "$DISABLED" != "true" ] || { echo "::error::Runtime service account is disabled."; exit 1; }
+          echo "RUNTIME_SA_ENABLED=YES"
+
+      - name: List ENABLED database-secret version numbers only — never access payload
+        id: secret-versions
+        shell: bash
+        run: |
+          set -euo pipefail
+          VERSIONS_JSON="$(gcloud secrets versions list "${{ env.SECRET_DATABASE_URL }}" --project="${{ env.PRODUCTION_PROJECT }}" --filter='state=ENABLED' --format=json)"
+          ENABLED_VERSIONS="$(echo "$VERSIONS_JSON" | jq -r '.[].name | split("/")[-1]' | grep -E '^[1-9][0-9]*$' | sort -n | paste -sd, - || true)"
+          [ -n "$ENABLED_VERSIONS" ] || { echo "::error::No ENABLED numeric version found for database secret."; exit 1; }
+          ENABLED_COUNT="$(printf '%s\n' "$ENABLED_VERSIONS" | awk -F, '{print NF}')"
+
+          echo "enabled_versions=$ENABLED_VERSIONS" >> "$GITHUB_OUTPUT"
+          echo "enabled_count=$ENABLED_COUNT" >> "$GITHUB_OUTPUT"
+          echo "DATABASE_SECRET_ENABLED_VERSION_COUNT=$ENABLED_COUNT"
+          echo "DATABASE_SECRET_ENABLED_VERSION_NUMBERS=$ENABLED_VERSIONS"
+          echo "DATABASE_SECRET_PAYLOAD_ACCESSED=NO"
+
+      - name: Read Artifact Registry and require current-main immutable tag to be unused
+        id: artifact-tag
+        shell: bash
+        run: |
+          set -euo pipefail
+          IMAGE_LIST="$(mktemp)"
+          trap 'rm -f "$IMAGE_LIST"' EXIT
+
+          gcloud artifacts docker images list "${{ env.ARTIFACT_IMAGE }}" \
+            --include-tags \
+            --project="${{ env.PRODUCTION_PROJECT }}" \
+            --format=json > "$IMAGE_LIST"
+
+          MATCH_COUNT="$(python3 - "${{ github.sha }}" "$IMAGE_LIST" <<'PY'
+          import json
+          import sys
+
+          source_sha, path = sys.argv[1], sys.argv[2]
+          with open(path, 'r', encoding='utf-8') as handle:
+              payload = json.load(handle)
+          if not isinstance(payload, list):
+              raise SystemExit(20)
+          count = 0
+          for image in payload:
+              if not isinstance(image, dict):
+                  raise SystemExit(21)
+              tags = image.get('tags') or []
+              if not isinstance(tags, list):
+                  raise SystemExit(22)
+              count += sum(1 for tag in tags if tag == source_sha)
+          print(count)
+          PY
+          )"
+
+          [[ "$MATCH_COUNT" =~ ^[0-9]+$ ]] || { echo "::error::Artifact tag parser returned invalid count."; exit 1; }
+          [ "$MATCH_COUNT" = "0" ] || { echo "::error::Current main SHA tag already exists in Production Artifact Registry (count=$MATCH_COUNT); build-publish would fail closed."; exit 1; }
+          echo "CURRENT_MAIN_ARTIFACT_TAG_UNUSED=YES"
+
+      - name: Read current inspector Job existence only
+        shell: bash
+        run: |
+          set -euo pipefail
+          set +e
+          JOB_NAME="$(gcloud run jobs describe "${{ env.INSPECTOR_JOB }}" --region="${{ env.PRODUCTION_REGION }}" --project="${{ env.PRODUCTION_PROJECT }}" --format='value(metadata.name)' 2>/dev/null)"
+          DESCRIBE_EXIT=$?
+          set -e
+
+          if [ "$DESCRIBE_EXIT" -eq 0 ] && [ -n "$JOB_NAME" ]; then
+            echo "INSPECTOR_JOB_EXISTS=YES"
+          else
+            echo "INSPECTOR_JOB_EXISTS=NO_OR_UNREADABLE"
+          fi
+
+      - name: Emit safe preflight summary
+        shell: bash
+        run: |
+          {
+            echo "### T-F1.2 Production read-only metadata preflight"
+            echo ""
+            echo "- SOURCE_SHA = ${{ github.sha }}"
+            echo "- PROJECT_ID_MATCH = YES"
+            echo "- CLOUD_SQL_STATE = RUNNABLE"
+            echo "- CLOUD_SQL_PRIVATE_ONLY = YES"
+            echo "- EXPECTED_DATABASE_PRESENT = YES"
+            echo "- RUNTIME_SA_ENABLED = YES"
+            echo "- DATABASE_SECRET_ENABLED_VERSION_COUNT = ${{ steps.secret-versions.outputs.enabled_count }}"
+            echo "- DATABASE_SECRET_ENABLED_VERSION_NUMBERS = ${{ steps.secret-versions.outputs.enabled_versions }}"
+            echo "- DATABASE_SECRET_PAYLOAD_ACCESSED = NO"
+            echo "- CURRENT_MAIN_ARTIFACT_TAG_UNUSED = YES"
+            echo "- PRODUCTION_MUTATIONS = 0"
+            echo ""
+            echo "This run does not authorize or perform the Production DB inspection."
+          } >> "$GITHUB_STEP_SUMMARY"
