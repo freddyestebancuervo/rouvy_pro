@@ -56,10 +56,35 @@ export function deriveChangedFilesFromGit({ repoRoot, baseSha, headSha, spawnSyn
   // flag, not repository config -- deliberately not relying on
   // core.quotePath=false (a config value this module never touches) as the
   // only defense.
+  //
+  // --no-replace-objects (P1-F REMEDIATION, T-F1.2 external re-audit round
+  // 5, HOLD): Git transparently substitutes any object for which a
+  // `refs/replace/<sha>` ref exists, for essentially every plumbing and
+  // porcelain command -- including `git diff`, even though the two SHAs on
+  // the command line stay the textual BASE_SHA/HEAD_SHA the caller asked
+  // about. Reproduced independently: a real commit genuinely adding
+  // `.github/workflows/production-deploy.yml` was replaced with a commit
+  // sharing BASE's tree; `git diff --name-status -z --no-renames BASE..HEAD`
+  // then returned an EMPTY diff (exit 0, no output) for that exact same real
+  // HEAD_SHA -- files=[] -> workflowChanged=false, while the real object
+  // genuinely contains the change. `--no-replace-objects` is a global Git
+  // option (must precede the subcommand) that disables replacement-ref
+  // lookup entirely for this one invocation, regardless of which ref
+  // namespace holds them or whether the caller's repo has any replace refs
+  // at all -- this module's authority does not depend on "no replace refs
+  // currently exist", only on replacement lookup being off. GIT_NO_REPLACE_
+  // OBJECTS is additionally forced (redundant with the flag, defense in
+  // depth) and any inherited GIT_REPLACE_REF_BASE is stripped, so a hostile
+  // parent-process environment cannot reactivate or redirect replacement
+  // semantics for this call either.
+  const gitEnv = { ...process.env };
+  delete gitEnv.GIT_REPLACE_REF_BASE;
+  gitEnv.GIT_NO_REPLACE_OBJECTS = '1';
+
   const result = spawnSyncFn(
     'git',
-    ['diff', '--name-status', '-z', '--no-renames', `${baseSha}..${headSha}`],
-    { cwd: repoRoot, encoding: 'utf8', shell: false, timeout: 30_000, maxBuffer: 16 * 1024 * 1024 },
+    ['--no-replace-objects', 'diff', '--name-status', '-z', '--no-renames', `${baseSha}..${headSha}`],
+    { cwd: repoRoot, encoding: 'utf8', shell: false, timeout: 30_000, maxBuffer: 16 * 1024 * 1024, env: gitEnv },
   );
 
   if (result?.error) {
