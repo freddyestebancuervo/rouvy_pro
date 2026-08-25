@@ -49,8 +49,22 @@ const CANONICAL_REPO_SLUG = `${CANONICAL_REPOSITORY_OWNER}/${CANONICAL_REPOSITOR
 
 // This project's real CI workflow identity (.github/workflows/ci.yml):
 // top-level `name: CI`, required job `name: Night Agent — security + test`.
-export const REQUIRED_CI_WORKFLOW_NAME = 'CI';
-export const REQUIRED_CI_JOB_NAME = 'Night Agent — security + test';
+//
+// P1-C REMEDIATION (T-F1.2 external re-audit round 3, HOLD): these two
+// constants used to be exported, and attestCiRunEvidence read
+// params.requiredWorkflowName / params.requiredJobName from its caller as
+// optional overrides -- meaning the trust boundary still let a caller define
+// the POLICY of what counts as valid CI, even though the P1-A remediation
+// had already fixed the transport/observation itself. That is a real bypass:
+// a caller could pass requiredWorkflowName: 'Attacker Workflow' and
+// requiredJobName: 'Easy Green Job' and get attested evidence for a run that
+// never actually proves this project's real CI passed. Neither constant is
+// exported any more (same discipline evidence-policy.mjs's R5 already
+// applies to CANONICAL_REPOSITORY_OWNER/CANONICAL_ROOT_COMMIT -- never
+// exported, never a function parameter), and attestCiRunEvidence never reads
+// any workflow/job-identity field from its params, under any name.
+const REQUIRED_CI_WORKFLOW_NAME = 'CI';
+const REQUIRED_CI_JOB_NAME = 'Night Agent — security + test';
 
 const FULL_SHA_RE = /^[0-9a-f]{40}$/;
 
@@ -209,19 +223,26 @@ export function gatherCiRunEvidence({
 
 // ---------------------------------------------------------------------------
 // ATTESTOR — the ONLY function production code may call to mint CI evidence.
-// R4 discipline: this function's parameter object accepts ONLY observation
-// data (headSha, requiredJobName, requiredWorkflowName). No execFileSyncFn,
-// gatherCiRunEvidenceFn, or any similarly-named executable-dependency
-// override is ever read here, even if present on the caller's params object
-// -- it is silently ignored, exactly as evidence-policy.mjs's
-// attestRemoteMainEvidence never forwards a caller-supplied spawnSyncFn.
+// R4/P1-C discipline: this function's parameter object accepts ONLY
+// observation data -- in fact, ONLY headSha. No execFileSyncFn,
+// gatherCiRunEvidenceFn, requiredJobName, requiredWorkflowName, or any
+// similarly-named executable-dependency or CI-POLICY override (workflowName,
+// jobName, requiredWorkflow, requiredJob, ciWorkflowName, ciJobName, policy,
+// config, ...) is ever read here, even if present on the caller's params
+// object -- it is silently ignored. The canonical workflow/job identity
+// (REQUIRED_CI_WORKFLOW_NAME/REQUIRED_CI_JOB_NAME, private, unexported, fixed
+// above) is used unconditionally, exactly as evidence-policy.mjs's
+// attestRemoteMainEvidence never forwards a caller-supplied spawnSyncFn and
+// never lets a caller redefine CANONICAL_REPOSITORY_OWNER/CANONICAL_ROOT_COMMIT.
 // ---------------------------------------------------------------------------
 export function attestCiRunEvidence(params = {}) {
   const headSha = params?.headSha;
-  const requiredJobName = typeof params?.requiredJobName === 'string' ? params.requiredJobName : REQUIRED_CI_JOB_NAME;
-  const requiredWorkflowName = typeof params?.requiredWorkflowName === 'string' ? params.requiredWorkflowName : REQUIRED_CI_WORKFLOW_NAME;
 
-  const gathered = gatherCiRunEvidence({ headSha, requiredJobName, requiredWorkflowName });
+  const gathered = gatherCiRunEvidence({
+    headSha,
+    requiredJobName: REQUIRED_CI_JOB_NAME,
+    requiredWorkflowName: REQUIRED_CI_WORKFLOW_NAME,
+  });
   if (!gathered.ok) {
     return { ok: false, reason: gathered.reason, detail: gathered.detail };
   }

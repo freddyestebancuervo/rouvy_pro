@@ -40,9 +40,25 @@ export function deriveChangedFilesFromGit({ repoRoot, baseSha, headSha, spawnSyn
   // as a real, individually-classifiable path change on either side, with no
   // separate rename-record parsing branch that could itself be a source of
   // divergent/incomplete detection.
+  //
+  // -z (P1-D REMEDIATION, T-F1.2 external re-audit round 3, HOLD): without
+  // -z, git C-quotes "unusual" filenames (Unicode, spaces, tabs, quotes,
+  // embedded newlines) into a double-quoted, octal-escaped string (e.g.
+  // `"...producci\303\263n.yml"`), which no longer starts with the literal
+  // `.github/workflows/` prefix isGithubActionsWorkflowPath requires --
+  // reproduced independently: a real Unicode-named workflow change was
+  // silently exempted from every downstream gate. -z makes git emit
+  // NUL-delimited, byte-exact, unquoted paths instead -- with --no-renames,
+  // every record is exactly <status>\0<path>\0. NUL cannot appear in a real
+  // filename on any filesystem this process runs on, so it is an
+  // unambiguous delimiter for every one of those "unusual" bytes, including
+  // ones a quoting/unquoting parser could still get wrong. This is a command
+  // flag, not repository config -- deliberately not relying on
+  // core.quotePath=false (a config value this module never touches) as the
+  // only defense.
   const result = spawnSyncFn(
     'git',
-    ['diff', '--name-status', '--no-renames', `${baseSha}..${headSha}`],
+    ['diff', '--name-status', '-z', '--no-renames', `${baseSha}..${headSha}`],
     { cwd: repoRoot, encoding: 'utf8', shell: false, timeout: 30_000, maxBuffer: 16 * 1024 * 1024 },
   );
 
@@ -53,17 +69,31 @@ export function deriveChangedFilesFromGit({ repoRoot, baseSha, headSha, spawnSyn
     return { ok: false, files: null, reason: 'GIT_CHANGESET_COMMAND_FAILED', detail: result?.stderr ?? `exit status ${result?.status}` };
   }
 
-  const lines = (result.stdout ?? '').split('\n').filter((l) => l.trim().length > 0);
+  const tokens = (result.stdout ?? '').split('\0');
+  // A well-formed -z stream always ends with a trailing NUL, which yields
+  // exactly one empty trailing element from split('\0'); drop only that one
+  // placeholder -- never blindly filter every empty string, or a genuinely
+  // malformed/truncated stream (two adjacent NULs, a missing final record)
+  // would silently pass the parity check below instead of failing closed.
+  if (tokens.length > 0 && tokens[tokens.length - 1] === '') {
+    tokens.pop();
+  }
+
+  if (tokens.length % 2 !== 0) {
+    return { ok: false, files: null, reason: 'GIT_CHANGESET_UNPARSEABLE_OUTPUT', detail: 'odd token count in NUL-delimited output' };
+  }
+
   const files = new Set();
-  for (const line of lines) {
-    const parts = line.split('\t');
+  for (let i = 0; i < tokens.length; i += 2) {
+    const status = tokens[i];
+    const filePath = tokens[i + 1];
     // status codes: A (added), M (modified), D (deleted), T (type change).
-    // Malformed/unexpected lines fail closed rather than being silently
-    // skipped -- an unparseable line could hide a real change.
-    if (parts.length < 2 || !parts[0] || !parts[1]) {
-      return { ok: false, files: null, reason: 'GIT_CHANGESET_UNPARSEABLE_OUTPUT', detail: line };
+    // Malformed/unexpected tokens fail closed rather than being silently
+    // skipped -- an unparseable record could hide a real change.
+    if (typeof status !== 'string' || status.length === 0 || typeof filePath !== 'string' || filePath.length === 0) {
+      return { ok: false, files: null, reason: 'GIT_CHANGESET_UNPARSEABLE_OUTPUT', detail: `token index ${i}` };
     }
-    files.add(parts[1]);
+    files.add(filePath);
   }
 
   return { ok: true, files: Object.freeze([...files]), reason: null };

@@ -34,9 +34,18 @@ import {
   gatherCiRunEvidence,
   attestCiRunEvidence,
   isAttestedCiRunEvidence,
-  REQUIRED_CI_JOB_NAME,
-  REQUIRED_CI_WORKFLOW_NAME,
 } from '../ci-evidence-authority.mjs';
+
+// P1-C REMEDIATION note: REQUIRED_CI_JOB_NAME/REQUIRED_CI_WORKFLOW_NAME are no
+// longer exported by the module under test (see its header comment -- a
+// caller, including this test file, must never be able to influence the
+// attestor's canonical policy, even by importing the "real" constant and
+// handing it back). These are independent literal duplicates, used only to
+// build realistic GATHERER-level transport fixtures (the gatherer's own
+// execFileSyncFn seam is a legitimate, directly-tested mechanism -- see the
+// module header). They are never passed to attestCiRunEvidence.
+const REQUIRED_CI_JOB_NAME = 'Night Agent — security + test';
+const REQUIRED_CI_WORKFLOW_NAME = 'CI';
 
 const VALID_SHA = 'a'.repeat(40);
 const OTHER_SHA = 'b'.repeat(40);
@@ -198,6 +207,71 @@ test('structural: attestCiRunEvidence accepts no ciRun/execFileSyncFn/gatherCiRu
   // nothing, exactly as it would for any caller, override or not.
   assert.equal(result.ok, false);
   assert.equal(result.reason, 'CI_EVIDENCE_NO_MATCHING_RUN');
+});
+
+// ---------------------------------------------------------------------------
+// P1-C REMEDIATION (T-F1.2 external re-audit round 3, HOLD): P1-A fixed the
+// TRANSPORT (no caller-suppliable ciRun conclusion), but attestCiRunEvidence
+// still read params.requiredJobName / params.requiredWorkflowName from its
+// caller -- letting a caller redefine the POLICY of what counts as valid CI,
+// even though the observation itself was now real. A caller supplying
+// requiredWorkflowName: 'Attacker Workflow' / requiredJobName: 'Easy Green
+// Job' could steer the attestor toward a run that never actually proves
+// THIS project's real CI passed. Fixed: attestCiRunEvidence reads ONLY
+// headSha from params; the canonical workflow/job identity is fixed,
+// private, unexported policy. These tests prove it with real network calls
+// against real, already-merged commits -- not simulated.
+// ---------------------------------------------------------------------------
+
+test('ATTESTOR_CALLER_CAN_OVERRIDE_REQUIRED_WORKFLOW = NO: a bogus requiredWorkflowName has zero effect on real attestation', () => {
+  const result = attestCiRunEvidence({ headSha: REAL_PASS_SHA_1, requiredWorkflowName: 'Attacker Workflow' });
+  // If the override had been honored, the gatherer would search for a run
+  // named 'Attacker Workflow' for this commit -- which does not exist -- and
+  // fail with CI_EVIDENCE_NO_MATCHING_RUN. It instead succeeds, bound to the
+  // real canonical "CI" workflow, proving the override was never read.
+  assert.equal(result.ok, true);
+  assert.equal(result.evidence.headSha, REAL_PASS_SHA_1);
+  assert.equal(isAttestedCiRunEvidence(result.evidence), true);
+});
+
+test('ATTESTOR_CALLER_CAN_OVERRIDE_REQUIRED_JOB = NO: a bogus requiredJobName has zero effect on real attestation', () => {
+  const result = attestCiRunEvidence({ headSha: REAL_PASS_SHA_1, requiredJobName: 'Easy Green Job' });
+  // If honored, the gatherer would search this run's real jobs for a job
+  // literally named 'Easy Green Job' -- which does not exist -- and fail
+  // with CI_EVIDENCE_REQUIRED_JOB_NOT_FOUND. It instead succeeds, bound to
+  // the real canonical "Night Agent — security + test" job.
+  assert.equal(result.ok, true);
+  assert.equal(result.evidence.headSha, REAL_PASS_SHA_1);
+  assert.equal(isAttestedCiRunEvidence(result.evidence), true);
+});
+
+test('P1-C ATTACK: every plausible alias for workflow/job policy override has zero effect (combined attack, real attestation)', () => {
+  const attackParams = {
+    headSha: REAL_PASS_SHA_1,
+    requiredWorkflowName: 'Attacker Workflow',
+    requiredJobName: 'Easy Green Job',
+    workflowName: 'Attacker Workflow',
+    jobName: 'Easy Green Job',
+    requiredWorkflow: 'Attacker Workflow',
+    requiredJob: 'Easy Green Job',
+    ciWorkflowName: 'Attacker Workflow',
+    ciJobName: 'Easy Green Job',
+    policy: { workflow: 'Attacker Workflow', job: 'Easy Green Job' },
+    config: { requiredWorkflowName: 'Attacker Workflow', requiredJobName: 'Easy Green Job' },
+  };
+  const result = attestCiRunEvidence(attackParams);
+  assert.equal(result.ok, true, 'none of these aliases may influence the real, canonical attestation');
+  assert.equal(result.evidence.headSha, REAL_PASS_SHA_1);
+  assert.equal(isAttestedCiRunEvidence(result.evidence), true);
+});
+
+test('P1-C POSITIVE CONTROL: real canonical CI + real canonical Night Agent job + correct HEAD, with no override attempted, attests successfully', () => {
+  const result = attestCiRunEvidence({ headSha: REAL_PASS_SHA_2 });
+  assert.equal(result.ok, true);
+  assert.equal(result.evidence.headSha, REAL_PASS_SHA_2);
+  assert.equal(result.evidence.workflowSchemaValidation, 'PASS');
+  assert.equal(result.evidence.actionlintValidation, 'PASS');
+  assert.equal(isAttestedCiRunEvidence(result.evidence), true);
 });
 
 // ---------------------------------------------------------------------------
