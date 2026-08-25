@@ -42,11 +42,23 @@ function createReplacement(repoRoot, { targetSha, treeOfSha, parentSha }) {
 
 test('incremental-audit has no direct Git invocation left without --no-replace-objects', () => {
   const source = readFileSync(new URL('../incremental-audit.mjs', import.meta.url), 'utf8');
-  const unguarded = "spawnSyncFn('git', ['-C', repoRoot,";
-  assert.equal(source.includes(unguarded), false, 'every direct incremental-audit Git call must disable replacement objects');
+  const directGitCallLines = source
+    .split('\n')
+    .filter((line) => /spawnSyncFn\(\s*["']git["']/.test(line));
 
-  const guardedCount = (source.match(/spawnSyncFn\('git', \['--no-replace-objects', '-C', repoRoot,/g) ?? []).length;
-  assert.equal(guardedCount, 7, `expected exactly 7 hardened direct Git calls, got ${guardedCount}`);
+  assert.equal(
+    directGitCallLines.length,
+    7,
+    `expected exactly 7 direct Git calls in incremental-audit, got ${directGitCallLines.length}`,
+  );
+
+  for (const line of directGitCallLines) {
+    assert.match(
+      line,
+      /spawnSyncFn\(\s*["']git["']\s*,\s*\[\s*["']--no-replace-objects["']/,
+      `direct Git invocation is missing --no-replace-objects: ${line.trim()}`,
+    );
+  }
 });
 
 test('computeChangeset still detects a real security-scope change hidden from plain Git by git replace', () => {
