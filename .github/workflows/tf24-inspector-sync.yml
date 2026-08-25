@@ -1,0 +1,152 @@
+name: T-F2.4 inspector migration-model sync (temporary)
+
+on:
+  push:
+    branches:
+      - chore/tf24-drop-unused-ride-sessions-20260825
+    paths:
+      - .github/workflows/tf24-inspector-sync.yml
+
+permissions:
+  contents: write
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: chore/tf24-drop-unused-ride-sessions-20260825
+          fetch-depth: 0
+
+      - name: Synchronize inspector migration model with 0007
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+
+          p = Path('backend/src/ops/db-readonly-inspector.ts')
+          s = p.read_text(encoding='utf-8')
+
+          def replace_once(old: str, new: str, label: str):
+              global s
+              count = s.count(old)
+              if count != 1:
+                  raise SystemExit(f'{label}: expected exactly 1 match, got {count}')
+              s = s.replace(old, new, 1)
+
+          replace_once(
+              "// exclusivamente del SQL real de los 6 archivos de migración\n// (backend/migrations/000{1..6}_*.sql)",
+              "// exclusivamente del SQL real de los 7 archivos de migración\n// (backend/migrations/000{1..7}_*.sql)",
+              'phase14-count',
+          )
+
+          replace_once(
+              "  '0006_tf0_5_pagination_indexes',\n] as const;",
+              "  '0006_tf0_5_pagination_indexes',\n  '0007_drop_unused_ride_sessions',\n] as const;",
+              'migration-names',
+          )
+
+          replace_once(
+              "  /** Objetos de una migración ANTERIOR que esta migración elimina\n   * (solo índices en el conjunto actual de 6 migraciones — ninguna\n   * elimina una columna en su dirección UP). */\n  removes?: string[];",
+              "  /** Índices de una migración ANTERIOR que esta migración elimina. */\n  removes?: string[];\n  /** Tablas de una migración ANTERIOR que esta migración elimina. */\n  removesTables?: string[];\n  /** Columnas de una migración ANTERIOR que esta migración elimina. */\n  removesColumns?: { table: string; column: string }[];",
+              'delta-removals-schema',
+          )
+
+          old_0006 = """  '0006_tf0_5_pagination_indexes': {
+    extensions: [],
+    tables: [],
+    indexes: ['idx_equipment_user_created_id', 'idx_workouts_owner_created_id', 'idx_workouts_visible_created_id'],
+    sequences: [],
+    columns: [],
+  },
+};"""
+          new_0006 = """  '0006_tf0_5_pagination_indexes': {
+    extensions: [],
+    tables: [],
+    indexes: ['idx_equipment_user_created_id', 'idx_workouts_owner_created_id', 'idx_workouts_visible_created_id'],
+    sequences: [],
+    columns: [],
+  },
+  '0007_drop_unused_ride_sessions': {
+    extensions: [],
+    tables: [],
+    indexes: [],
+    sequences: [],
+    columns: [],
+    // DROP TABLE removes the table, both indexes that belong to it and
+    // every one of its columns. Keeping those removals explicit is what
+    // lets the read-only Production inspector distinguish an applied 0007
+    // from a schema that is unexpectedly missing objects.
+    removesTables: ['ride_sessions'],
+    removes: ['idx_ride_sessions_user_start', 'ride_sessions_pkey'],
+    removesColumns: cols('ride_sessions', [
+      'id', 'user_id', 'start_time', 'end_time', 'distance_meters', 'calories_kcal',
+      'last_power_watts', 'last_cadence_rpm', 'last_heart_rate_bpm', 'device_count', 'created_at',
+    ]),
+  },
+};"""
+          replace_once(old_0006, new_0006, 'migration-objects-0007')
+
+          replace_once(
+              "    delta.columns.forEach((c) => columns.add(`${c.table}.${c.column}`));\n    (delta.removes ?? []).forEach((r) => indexes.delete(r));",
+              "    delta.columns.forEach((c) => columns.add(`${c.table}.${c.column}`));\n    (delta.removesTables ?? []).forEach((t) => tables.delete(t));\n    (delta.removes ?? []).forEach((r) => indexes.delete(r));\n    (delta.removesColumns ?? []).forEach((c) => columns.delete(`${c.table}.${c.column}`));",
+              'apply-removals',
+          )
+
+          s = s.replace('de las 6 migraciones conocidas.', 'de las ${EXPECTED_MIGRATION_NAMES.length} migraciones conocidas.')
+          p.write_text(s, encoding='utf-8')
+          PY
+
+      - name: Add T-F2.4 inspector regression
+        shell: bash
+        run: |
+          set -euo pipefail
+          cat > backend/src/ops/db-readonly-inspector-tf24.spec.ts <<'EOF'
+          import {
+            EXPECTED_MIGRATION_NAMES,
+            expectedObjectsForApplied,
+          } from './db-readonly-inspector';
+
+          describe('T-F2.4 — 0007_drop_unused_ride_sessions', () => {
+            it('models 0007 as removing ride_sessions and all of its physical objects', () => {
+              expect(EXPECTED_MIGRATION_NAMES.at(-1)).toBe('0007_drop_unused_ride_sessions');
+
+              const expected = expectedObjectsForApplied([...EXPECTED_MIGRATION_NAMES]);
+
+              expect(expected.tables.has('ride_sessions')).toBe(false);
+              expect(expected.indexes.has('idx_ride_sessions_user_start')).toBe(false);
+              expect(expected.indexes.has('ride_sessions_pkey')).toBe(false);
+              expect([...expected.columns].some((column) => column.startsWith('ride_sessions.'))).toBe(false);
+
+              // Unrelated objects from 0001 must remain modeled as present.
+              expect(expected.tables.has('users')).toBe(true);
+              expect(expected.tables.has('audit_log')).toBe(true);
+              expect(expected.indexes.has('users_pkey')).toBe(true);
+            });
+          });
+          EOF
+
+      - name: Assert final task scope and self-remove
+        shell: bash
+        run: |
+          set -euo pipefail
+          git rm .github/workflows/tf24-inspector-sync.yml
+          git add backend/src/ops/db-readonly-inspector.ts backend/src/ops/db-readonly-inspector-tf24.spec.ts
+          CHANGED="$(git diff --cached --name-only)"
+          printf '%s\n' "$CHANGED"
+          if printf '%s\n' "$CHANGED" | grep -Ev '^(backend/src/ops/db-readonly-inspector\.ts|backend/src/ops/db-readonly-inspector-tf24\.spec\.ts|\.github/workflows/tf24-inspector-sync\.yml)$' | grep -q .; then
+            echo '::error::Unexpected path outside T-F2.4 remediation scope.'
+            exit 1
+          fi
+
+      - name: Commit remediation
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git commit -m 'fix(tf2.4): synchronize DB inspector with migration 0007'
+          git push origin HEAD:chore/tf24-drop-unused-ride-sessions-20260825
