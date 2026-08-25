@@ -37,6 +37,44 @@ import {
 } from './role-protocol.mjs';
 
 // ---------------------------------------------------------------------------
+// Canonical role missions — official protocol-level intent, not free-form
+// prompt wording. These values are deliberately closed/frozen so a future
+// prompt, test, or orchestrator can assert the same semantics without
+// reinterpreting prose.
+//
+// B is explicitly a BREAKER / RED TEAM AUDITOR. Its mission is not to
+// confirm that A is probably correct; it must try to falsify A's work before
+// certifying it. When B finds a defect, remediation belongs to A.
+// ---------------------------------------------------------------------------
+
+export const ROLE_MISSIONS = Object.freeze({
+  NIGHT: 'ORCHESTRATE_AND_ENFORCE_FLOW',
+  A: 'BUILD_AND_PRIMARY_VALIDATE',
+  B: 'BREAK_BEFORE_CERTIFY',
+  C: 'CERTIFY_SURVIVING_HEAD',
+});
+
+export const BREAKER_MISSION = ROLE_MISSIONS.B;
+export const BREAKER_REMEDIATION_OWNER = 'A';
+
+export const BREAKER_REQUIRED_CAPABILITIES = Object.freeze([
+  'READ',
+  'RUN_ADVERSARIAL_TESTS',
+  'AUDIT',
+  'CREATE_FINDING',
+  'CERTIFY_AUDIT',
+]);
+
+export const BREAKER_FORBIDDEN_CAPABILITIES = Object.freeze([
+  'WRITE_TASK_FILES',
+  'RUN_PRIMARY_TESTS',
+  'COMMIT_TASK_BRANCH',
+  'PUSH_TASK_BRANCH',
+  'VALIDATE',
+  'CERTIFY_TECHNICAL_PASS',
+]);
+
+// ---------------------------------------------------------------------------
 // Closed capability vocabulary -- exactly the names given in Task 3's own
 // brief (no renaming; a future reader diffing against the brief should find
 // an exact match).
@@ -107,10 +145,11 @@ export const HUMAN_GATE_ONLY_CAPABILITIES = Object.freeze([
 //    and commit/push the task branch -- but has no path to AUDIT,
 //    CERTIFY_AUDIT, VALIDATE, or CERTIFY_TECHNICAL_PASS: those verbs simply
 //    do not appear in A's row.
-//  - B (Auditor) may read, run adversarial tests, audit, create findings,
-//    and certify an audit result -- but has no path to WRITE_TASK_FILES,
-//    COMMIT_TASK_BRANCH, PUSH_TASK_BRANCH, VALIDATE, or
-//    CERTIFY_TECHNICAL_PASS.
+//  - B (Breaker / Red Team Auditor) must operate under BREAK_BEFORE_CERTIFY:
+//    read the target, run adversarial tests, audit, create findings, and
+//    certify the audit result. B has no path to WRITE_TASK_FILES,
+//    RUN_PRIMARY_TESTS, COMMIT_TASK_BRANCH, PUSH_TASK_BRANCH, VALIDATE, or
+//    CERTIFY_TECHNICAL_PASS. B reports breakage; A owns remediation.
 //  - C (Validator) may read, validate, and certify a technical pass -- but
 //    has no path to WRITE_TASK_FILES, AUDIT, CERTIFY_AUDIT,
 //    COMMIT_TASK_BRANCH, or PUSH_TASK_BRANCH.
@@ -180,6 +219,42 @@ export function isRoleAllowed(role, capability) {
   return evaluateRoleCapability(role, capability).allowed;
 }
 
+/**
+ * Return the canonical mission for one role, or null for an unknown role.
+ * This is intentionally exact: no trimming/case-folding/fuzzy aliases.
+ */
+export function getRoleMission(role) {
+  return isKnownRole(role) ? ROLE_MISSIONS[role] : null;
+}
+
+/**
+ * Machine-checkable summary of the B/BREAKER boundary.
+ *
+ * `valid=true` means the static role model currently grants every breaker
+ * capability B needs, denies every remediation/certification capability B
+ * must not have, and leaves WRITE_TASK_FILES with A. This cannot prove that
+ * a same-chat actor genuinely tried hard enough to break a task; that
+ * behavioral obligation remains explicit in BREAKER_POLICY.md and is
+ * audited through B's evidence/findings. It does prevent silent drift of the
+ * formal role boundary itself.
+ */
+export function evaluateBreakerRoleContract() {
+  const requiredCapabilitiesGranted = BREAKER_REQUIRED_CAPABILITIES.every((capability) => isRoleAllowed('B', capability));
+  const forbiddenCapabilitiesDenied = BREAKER_FORBIDDEN_CAPABILITIES.every((capability) => !isRoleAllowed('B', capability));
+  const remediationOwnedByA = isRoleAllowed(BREAKER_REMEDIATION_OWNER, 'WRITE_TASK_FILES') && !isRoleAllowed('B', 'WRITE_TASK_FILES');
+  const missionCanonical = getRoleMission('B') === 'BREAK_BEFORE_CERTIFY';
+
+  return Object.freeze({
+    valid: requiredCapabilitiesGranted && forbiddenCapabilitiesDenied && remediationOwnedByA && missionCanonical,
+    mission: BREAKER_MISSION,
+    remediationOwner: BREAKER_REMEDIATION_OWNER,
+    requiredCapabilitiesGranted,
+    forbiddenCapabilitiesDenied,
+    remediationOwnedByA,
+    missionCanonical,
+  });
+}
+
 // ---------------------------------------------------------------------------
 // Formal minimum output contracts for A/B/C -- made MORE EXPLICIT (per
 // Task 3's own brief) as a named, importable, closed reference, rather than
@@ -199,6 +274,8 @@ export const ROLE_OUTPUT_CONTRACTS = Object.freeze({
   }),
   B: Object.freeze({
     producedBy: 'certifyAuditResult',
+    mission: BREAKER_MISSION,
+    remediationOwner: BREAKER_REMEDIATION_OWNER,
     requiredFields: Object.freeze(['role', 'executorRole', 'auditorRole', 'headSha', 'requestedState', 'independent', 'findings', 'evidence', 'finalState', 'reason']),
     stateDomain: AUDITOR_RESULT_STATES,
   }),
