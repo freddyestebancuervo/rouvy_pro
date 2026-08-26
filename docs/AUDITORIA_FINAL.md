@@ -1,5 +1,7 @@
 # Auditoría final del repositorio — rouvy_pro
 
+> **Snapshot histórico previo al PR #2.** Este documento conserva la evidencia observada el 2026-07-23 antes de integrar `feature/d2`. Las afirmaciones de "sin push", "sin merge" y "commits locales" describen esa sesión y no el estado posterior del repositorio. `feature/d2` fue integrada a `main` mediante PR #2 (`5cc684e43fe5ab6dc4a41411e65facc3f4529b9c`). Para el estado reconciliado posterior, usar `PROJECT_STATUS_CURRENT.md` y `docs/audits/PR_01_95_DOCUMENTATION_RECONCILIATION.md`.
+
 - **Fecha:** 2026-07-23
 - **Rama:** `feature/d2`
 - **Rol:** arquitecto principal / desarrollador senior (modo permanente activado por el usuario el 2026-07-23)
