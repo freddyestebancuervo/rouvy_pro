@@ -1,10 +1,11 @@
 # Especificación Técnica — Bloque D (Núcleo funcional del usuario)
 
-**Nivel:** producción/empresarial · **Estado:** diseño propuesto, sin
-implementar — documento de referencia para revisión antes de escribir
-código. Complementa (no reemplaza) `docs/TECHNICAL_SPECIFICATION_M0_M1.md`,
-que sigue siendo autoritativo para Auth/Perfil tal como ya están
-implementados (Bloque C).
+**Nivel:** producción/empresarial · **Estado:** documento de diseño y
+referencia con desviaciones reales registradas; D1 y D2 ya fueron
+implementados/verificados, mientras los módulos posteriores conservan su
+carácter propuesto hasta su implementación. Complementa (no reemplaza)
+`docs/TECHNICAL_SPECIFICATION_M0_M1.md`, que sigue siendo autoritativo
+para Auth/Perfil tal como ya están implementados (Bloque C).
 
 **Revisión 2 (2026-07-22):** el módulo 2 se rediseñó por completo — la
 versión anterior (`bikes` + `devices` como dos tablas separadas) quedó
@@ -619,10 +620,12 @@ columna todavía (sin caso de uso real hoy).
 
 ### 3.10 Desviaciones reales de implementación (2026-07-22)
 
-> **✅ Implementado y verificado** — D2 completo en la rama
-> `feature/d2` (23 tests unitarios + 16 e2e, todos en verde en el primer
-> intento, sin fallos que corregir). El código se apartó del boceto de
-> arriba en tres puntos concretos, todos deliberados:
+> **✅ Implementado y verificado** — D2 se completó originalmente en la
+> rama `feature/d2` (23 tests unitarios + 16 e2e, todos en verde en el
+> primer intento, sin fallos que corregir) y **fue integrado a `main`
+> mediante PR #1** (`c2b2da9d395a5a4f03f821fd2854a032e38c4313`). El código se
+> apartó del boceto de arriba en los puntos concretos siguientes, todos
+> deliberados:
 
 1. **`position` no se recibe del cliente.** El boceto proponía validar
    en servicio que fuera "secuencial sin huecos" — en cambio, el
@@ -1078,13 +1081,3 @@ tarea algo mayor a cambio de evitar exactamente el rework estructural
 que motivó este pedido de revisión — construir bicicletas y sensores
 por separado primero, para luego tener que fusionarlos, hubiera costado
 más en total que empezar ya por el modelo correcto.
-
-**Alternativa considerada y descartada para el primer lugar:** exponer
-`GET/POST /activities` directamente sobre la tabla `ride_sessions` ya
-existente desde C2, sin `equipment_id`/`workout_id` todavía. Sigue
-siendo plausible (la tabla ya existe), pero se descarta como *primera*
-tarea por la misma razón que en la revisión 1: mezclaría, en una sola
-sesión de trabajo, la superficie REST nueva, la pregunta abierta de la
-migración de Firestore, y servir de banco de pruebas del helper de
-ownership — mejor resolver esas piezas por separado, con Equipamiento
-primero validando el patrón.
