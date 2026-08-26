@@ -1,7 +1,5 @@
 # RidePro — Documento 22: Auditoría y Plan de Despliegue del Backend NestJS (Development)
 
-> **Snapshot histórico (2026-07-26).** Este documento se conserva como evidencia del estado previo a la contenedorización. Las afirmaciones `Dockerfile = No existe`, el bloqueo asociado y la Fase 2 descrita como futura eran correctas al momento de esta auditoría. La contenedorización fue implementada y validada posteriormente mediante PR #3 (`511a5db50619c0786cd09a9fd1ddc03df42c0590`). Esa integración no implica por sí sola un despliegue real a Production. Para el estado reconciliado usar `docs/audits/PR_01_95_DOCUMENTATION_RECONCILIATION.md`.
-
 - **Fecha:** 2026-07-26
 - **Rol:** Arquitecto de Software Senior / DevOps
 - **Estado de esta tarea:** Solo auditoría (con evidencia real de ejecución) y planificación. **Cero recursos cloud creados, cero despliegues, cero cambios de DNS, cero cambios en Firebase, cero cambios de código de producción.** Se ejecutaron comandos de verificación local (`npm run build`, `npm test`) y se intentó (sin éxito, Docker Desktop no está corriendo) levantar un contenedor Postgres efímero para e2e — ninguno de estos comandos crea infraestructura persistente ni modifica el repositorio.

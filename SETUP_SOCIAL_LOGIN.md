@@ -1,187 +1,231 @@
 # Guía de configuración — Login social (Google + Apple)
 
 Toda la **lógica y arquitectura** de Google Sign-In, Apple Sign-In y Firebase
-Authentication ya está implementada (ver `features/auth/`). Esta guía combina
-la configuración ya integrada con los pasos que todavía pueden requerir trabajo
-manual por plataforma.
+Authentication ya está implementada (ver `features/auth/`). Esta guía cubre
+únicamente el paso que falta: **pegar tus credenciales reales** en los
+placeholders ya dejados en el proyecto.
 
-> **Reconciliación PR #12:** desde PR #12 la configuración Firebase del cliente
-iOS dejó de ser un placeholder: se integraron opciones iOS en
-`lib/firebase_options.dart`, un `GoogleService-Info.plist` real para la app iOS
-y el URL scheme de Google en `ios/Runner/Info.plist`. La compilación nativa y
-el runtime macOS/Xcode no quedaron probados por ese PR y requieren evidencia
-separada. La evolución posterior de Bundle IDs/entornos debe leerse desde la
-configuración vigente, no desde los valores históricos de PR #12.
+## Dónde están los placeholders — resumen rápido
 
-## Estado de configuración — resumen rápido
-
-| Archivo | Estado / acción |
+| Archivo | Qué reemplazar |
 |---|---|
-| `lib/core/config/social_login_config.dart` | Verificar `googleWebClientId` para Web |
-| `android/app/build.gradle` | Verificar `applicationId` y `namespace` contra Firebase |
-| `android/app/google-services.json` | Verificar que corresponda al proyecto/app Android vigentes |
-| `ios/Runner/Info.plist` | URL scheme Google configurado desde PR #12; verificar consistencia con la configuración iOS vigente |
-| configuración Firebase iOS seleccionada por Xcode | Configurada desde PR #12; no tratarla como placeholder |
-| `web/index.html` | Verificar el Web client ID configurado |
-| `lib/firebase_options.dart` | Incluye `FirebaseOptions` para iOS desde PR #12 |
+| `lib/core/config/social_login_config.dart` | `googleWebClientId` |
+| `android/app/build.gradle` | `applicationId`, `namespace` |
+| `android/app/google-services.json` | **Archivo entero** (descargar de Firebase) |
+| `ios/Runner/Info.plist` | `YOUR_REVERSED_CLIENT_ID` dentro de `CFBundleURLSchemes` |
+| `ios/Runner/GoogleService-Info.plist` | **Archivo entero** (descargar de Firebase) |
+| `web/index.html` | `YOUR_GOOGLE_WEB_CLIENT_ID` en el meta tag |
+| `lib/firebase_options.dart` | Se regenera automáticamente con `flutterfire configure` (ver paso 1) |
 
-No hace falta tocar ninguna línea de lógica en `features/auth/` para cambiar
-identificadores de plataforma; deben mantenerse coherentes las configuraciones
-Firebase/Google y los Bundle IDs reales del entorno que se esté validando.
+No hace falta tocar ninguna línea de lógica en `features/auth/` — todo ese
+código ya lee las credenciales desde estos archivos de configuración.
 
 ---
 
 ## 1. Firebase Authentication
 
-1. En Firebase Console → **Authentication → Sign-in method**, verificar los
-   proveedores que se vayan a utilizar:
+1. Ve a [console.firebase.google.com](https://console.firebase.google.com) →
+   **Crear un proyecto** (o usa uno existente).
+2. En el menú lateral: **Authentication → Comenzar**.
+3. Pestaña **Sign-in method** → habilita:
    - **Correo electrónico/contraseña**
    - **Google**
    - **Apple**
-2. Si se reconfigura deliberadamente una app Firebase, usar FlutterFire CLI o
-   los archivos descargados desde Firebase y revisar el diff antes de integrar:
+4. Instala la CLI de FlutterFire y conecta el proyecto (esto genera
+   automáticamente `lib/firebase_options.dart` con las credenciales
+   correctas para las 3 plataformas a la vez):
    ```bash
    dart pub global activate flutterfire_cli
    flutterfire configure
    ```
-3. No ejecutar `flutterfire configure` solo para “rellenar placeholders” de iOS:
-   PR #12 ya eliminó ese estado histórico. Una reconfiguración posterior debe
-   preservar la separación de entornos y los identificadores vigentes.
+   Selecciona tu proyecto de Firebase y las plataformas Android/iOS/Web
+   cuando te lo pregunte. Esto crea/actualiza automáticamente
+   `google-services.json` y `GoogleService-Info.plist` con los valores
+   reales — si prefieres hacerlo manualmente, sigue los pasos 9 y 10 de
+   esta guía en su lugar.
 
 ---
 
 ## 2. Google Sign-In en Android
 
-1. Firebase Console → **Configuración del proyecto → Tus apps → Android**.
-2. Confirmar que el **package name** coincida exactamente con `applicationId`
-   en `android/app/build.gradle`.
-3. Añadir SHA-1 y SHA-256 de las keystores necesarias para Development/Release.
-4. Confirmar que `android/app/google-services.json` corresponde a esa app.
-5. Verificar que el proveedor Google esté habilitado en Firebase Authentication.
+1. Firebase Console → **Configuración del proyecto** (ícono de engranaje) →
+   pestaña **Tus apps** → **Agregar app → Android** (si no existe ya).
+2. **Package name**: debe coincidir EXACTO con `applicationId` en
+   `android/app/build.gradle` (reemplaza el placeholder
+   `com.ridepro.app.YOUR_APPLICATION_ID` por tu ID real, y actualiza
+   también el `applicationId` en Firebase Console para que coincidan).
+3. Pega el **SHA-1** de tu keystore (ver sección 6 de esta guía) en el
+   campo correspondiente — es obligatorio para que Google Sign-In
+   funcione en Android, aunque no lo es para el resto de Firebase.
+4. Descarga el `google-services.json` generado y reemplaza POR COMPLETO el
+   archivo placeholder en `android/app/google-services.json`.
+5. En Firebase Console → Authentication → Sign-in method → Google, copia
+   el **"Web client ID"** que aparece ahí (aunque es Android, Firebase usa
+   el client ID web como "server client ID" para verificar el token) — NO
+   hace falta pegarlo en ningún lado para Android, el plugin lo resuelve
+   solo desde `google-services.json`.
 
 ---
 
 ## 3. Google Sign-In en iOS
 
-PR #12 integró la primera configuración real del cliente Firebase iOS. Por
-eso estos pasos son ahora de **verificación/reconfiguración**, no de reemplazo
-de un placeholder:
-
-1. Confirmar el Bundle ID vigente en Xcode para el entorno que se va a probar.
-2. Confirmar que la configuración Firebase iOS seleccionada para ese entorno
-   tenga el mismo Bundle ID y el proyecto Firebase esperado.
-3. Confirmar que su `REVERSED_CLIENT_ID` coincida con el URL scheme usado por
-   `ios/Runner/Info.plist` / la configuración Xcode vigente.
-4. Si se descarga un nuevo `GoogleService-Info.plist`, reemplazar únicamente la
-   configuración del entorno correspondiente y revisar consistencia cruzada
-   antes de hacer commit.
-5. En Xcode (`open ios/Runner.xcworkspace`), revisar **Runner → Signing &
-   Capabilities** antes de una validación real.
-
-**Límite de evidencia de PR #12:** la consistencia estática quedó integrada y
-el CI general pasó, pero PR #12 no ejecutó `flutter build ios`, CocoaPods ni
-una prueba de `Firebase.initializeApp()`/Google Sign-In en simulador o dispositivo.
+1. Firebase Console → **Tus apps** → **Agregar app → iOS**.
+2. **Bundle ID**: debe coincidir con el de tu proyecto Xcode
+   (`ios/Runner.xcodeproj`, normalmente algo como `com.ridepro.app`).
+3. Descarga el `GoogleService-Info.plist` generado y reemplaza POR
+   COMPLETO el archivo placeholder en `ios/Runner/GoogleService-Info.plist`.
+4. Abre ese archivo (ya con tus datos reales) y copia el valor de la clave
+   **`REVERSED_CLIENT_ID`**.
+5. Pega ese valor en `ios/Runner/Info.plist`, dentro de
+   `CFBundleURLTypes → CFBundleURLSchemes`, reemplazando
+   `com.googleusercontent.apps.YOUR_REVERSED_CLIENT_ID`.
+6. En Xcode (`open ios/Runner.xcworkspace`), verifica en **Runner → Signing
+   & Capabilities** que el Bundle Identifier coincida con el registrado en
+   Firebase.
 
 ---
 
 ## 4. Google Sign-In en Web
 
-1. Firebase Console → Authentication → Sign-in method → Google → desplegar
-   **Web SDK configuration** y obtener el Web client ID.
-2. Verificar que el mismo client ID esperado esté configurado donde lo consuma
-   la aplicación Web (`social_login_config.dart` / `web/index.html`, según la
-   implementación vigente).
-3. En Google Cloud Console → APIs y servicios → Credenciales → OAuth Client ID
-   Web, mantener los **Orígenes de JavaScript autorizados** de Development y
-   Production según corresponda.
+1. Firebase Console → Authentication → Sign-in method → Google → despliega
+   **"Web SDK configuration"** → copia el **Web client ID**
+   (`XXXXXXXXXXXX-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx.apps.googleusercontent.com`).
+2. Pégalo en **dos lugares** (deben ser idénticos):
+   - `lib/core/config/social_login_config.dart` → constante `googleWebClientId`.
+   - `web/index.html` → meta tag `google-signin-client_id`.
+3. En [Google Cloud Console](https://console.cloud.google.com) → APIs y
+   servicios → Credenciales → tu OAuth Client ID de tipo Web → añade en
+   **"Orígenes de JavaScript autorizados"** el dominio donde sirvas la app
+   (p. ej. `http://localhost:PUERTO` en desarrollo, y tu dominio de
+   producción).
 
 ---
 
 ## 5. Apple Sign-In
 
-Solo aplica a iOS en el flujo nativo actual.
+Solo aplica a iOS (el botón ya está condicionado a `TargetPlatform.iOS` en
+`login_page.dart`/`register_page.dart`, no aparece en Android ni Web).
 
-1. En Apple Developer Console → **Certificates, Identifiers & Profiles →
-   Identifiers**, habilitar **Sign In with Apple** para el App ID pertinente.
-2. En Xcode → **Runner → Signing & Capabilities → + Capability**, añadir
-   **Sign in with Apple** cuando corresponda al target/app que se valida.
-3. Firebase Console → Authentication → Sign-in method → Apple → verificar el
-   proveedor.
-4. No se necesita un `REVERSED_CLIENT_ID` adicional para Apple; ese valor es
-   parte del flujo Google OAuth.
+1. En [Apple Developer Console](https://developer.apple.com/account) →
+   **Certificates, Identifiers & Profiles → Identifiers** → selecciona tu
+   App ID → habilita la capability **"Sign In with Apple"** → Guardar.
+2. En Xcode (`ios/Runner.xcworkspace`) → **Runner → Signing & Capabilities**
+   → **+ Capability** → añade **"Sign in with Apple"**.
+3. Firebase Console → Authentication → Sign-in method → Apple → habilita
+   el proveedor (no requiere credenciales adicionales para el flujo básico
+   de iOS nativo que usa este proyecto vía `sign_in_with_apple`).
+4. No se necesita ningún placeholder adicional en `Info.plist` para Apple
+   — la capability del paso 2 es suficiente (ya documentado dentro del
+   propio `Info.plist`).
 
 ---
 
-## 6. Obtener SHA-1 y SHA-256 para Android
+## 6. Obtener el SHA-1 y SHA-256
 
-Ejemplo para debug:
+Necesarios para el paso 2 (Google Sign-In en Android). Genera ambos con un
+solo comando — **debug** (para desarrollo) y **release** (antes de publicar):
 
 ```bash
+# Huella de DEBUG (la que usa `flutter run` normalmente):
 keytool -list -v \
   -keystore ~/.android/debug.keystore \
   -alias androiddebugkey \
   -storepass android -keypass android
 ```
 
-Para release, usar la keystore real de firma y no publicar contraseñas ni
-material privado en el repositorio o logs.
+```bash
+# Huella de RELEASE (usa tu propia keystore de firma de producción):
+keytool -list -v \
+  -keystore /ruta/a/tu/release-keystore.jks \
+  -alias TU_ALIAS
+```
+
+La salida incluye ambas líneas, cópialas tal cual a Firebase Console (paso 2.3):
+```
+SHA1: XX:XX:XX:XX:XX:XX:XX:XX:XX:XX:XX:XX:XX:XX:XX:XX:XX:XX:XX:XX
+SHA256: XX:XX:XX:XX:XX:XX:XX:XX:XX:XX:XX:XX:XX:XX:XX:XX:XX:XX:XX:XX:XX:XX:XX:XX:XX:XX:XX:XX:XX:XX:XX:XX
+```
+
+> Añade **ambas** huellas (debug y release) a la misma app Android en
+> Firebase Console — puedes registrar varias. Sin la de debug, el login
+> con Google falla en desarrollo aunque funcione perfecto en producción
+> (y viceversa).
 
 ---
 
-## 7. Configuración de Android
+## 7. Configuración de `AndroidManifest.xml`
 
-`AndroidManifest.xml` no necesita un placeholder específico de Google Sign-In
-en este flujo. Lo importante es mantener consistencia entre package name,
-`google-services.json`, huellas SHA y la app registrada en Firebase.
+Ya está completo en `android/app/src/main/AndroidManifest.xml` — no
+requiere ningún placeholder para login social (el plugin `google_sign_in`
+se configura solo a partir de `google-services.json`). Ya incluye también
+los permisos de Bluetooth del módulo `device_connection` (ver
+`BLE_PERMISSIONS.md`) y el bloque `<queries>` requerido desde Android 11
+para que el flujo OAuth pueda abrir el navegador del sistema.
+
+Lo único que debes verificar es que `android/app/build.gradle` tenga el
+`applicationId` correcto (paso 2.2) y que el plugin
+`com.google.gms.google-services` esté aplicado (ya lo está por defecto en
+el archivo generado).
 
 ---
 
 ## 8. Configuración de `Info.plist`
 
-El bloque `CFBundleURLTypes` para Google Sign-In **ya no debe documentarse como
-placeholder desde PR #12**. Debe verificarse contra el `REVERSED_CLIENT_ID` de
-la configuración Firebase iOS que corresponda al entorno activo.
+Ya está completo en `ios/Runner/Info.plist`, con:
+- Las claves de Bluetooth (`NSBluetoothAlwaysUsageDescription` y
+  `NSBluetoothPeripheralUsageDescription`).
+- El bloque `CFBundleURLTypes` para Google Sign-In, con el placeholder
+  `YOUR_REVERSED_CLIENT_ID` que debes reemplazar en el paso 3.5.
 
-Las claves/capabilities de otras funciones (Bluetooth, Apple Sign-In, etc.)
-deben validarse por separado según el target y el entorno.
-
----
-
-## 9. Configuración de Firebase iOS
-
-Desde PR #12 existe configuración Firebase iOS real en el repositorio. No se
-debe asumir la ruta o los identificadores históricos de aquel PR como valores
-eternos: las configuraciones de entorno pueden evolucionar posteriormente.
-
-Regla vigente de mantenimiento:
-
-- no editar identificadores a mano sin verificar Firebase/Xcode;
-- mantener Bundle ID, App ID, Project ID, client ID y URL scheme coherentes;
-- si existe separación Development/Production, modificar solo el archivo del
-  entorno correspondiente;
-- no confundir **configuración estática correcta** con **runtime probado**.
+No se requiere ninguna clave adicional para Apple Sign-In (se gestiona vía
+capability de Xcode, no vía plist).
 
 ---
 
-## 10. Configuración Android/Web
+## 9. Configuración de `GoogleService-Info.plist`
 
-La reconciliación de PR #12 no declara cerrados los pendientes de Android o
-Web que no fueron parte de ese PR. Su estado debe verificarse contra los PR
-correspondientes cuando se alcance cada uno en la reconciliación secuencial.
+Este archivo **NO se edita campo por campo** — se reemplaza ENTERO por el
+que descargas de Firebase Console (paso 3.3). El placeholder actual en
+`ios/Runner/GoogleService-Info.plist` tiene la estructura correcta pero
+con valores inventados (`YOUR_IOS_API_KEY`, etc.) para que el proyecto
+compile mientras tanto — Firebase Auth **no funcionará** hasta que lo
+reemplaces por el real.
+
+Tras reemplazarlo, en Xcode verifica que el archivo esté efectivamente
+incluido en el target `Runner` (arrástralo al navegador de proyecto si
+`flutterfire configure` no lo hizo automáticamente, marcando "Copy items
+if needed" y el target `Runner`).
 
 ---
 
-## Checklist antes de validar login social
+## 10. Configuración de `google-services.json`
 
-- [x] Configuración Firebase iOS dejó de ser placeholder desde PR #12.
-- [x] `FirebaseOptions` iOS existe desde PR #12.
-- [x] URL scheme Google iOS quedó configurado estáticamente desde PR #12.
-- [ ] Confirmar que la configuración iOS activa corresponde al entorno/Bundle ID vigentes.
-- [ ] Validar build nativo iOS/CocoaPods en macOS cuando corresponda.
-- [ ] Validar `Firebase.initializeApp()` en runtime iOS.
-- [ ] Validar callback real de Google Sign-In iOS.
-- [ ] Validar capability y flujo real de Apple Sign-In iOS.
-- [ ] Verificar Android y Web contra sus configuraciones vigentes.
+Igual que el anterior: se reemplaza ENTERO, no se edita. El placeholder en
+`android/app/google-services.json` mantiene la estructura real de Firebase
+(con `project_info`, `client`, `oauth_client`, `api_key`) pero con valores
+inventados — suficiente para que Gradle compile, pero Firebase Auth
+lanzará un error de configuración hasta que lo sustituyas por el real
+descargado en el paso 2.4.
 
-**Importante:** CI Flutter/Firestore/Backend en verde no sustituye una prueba
-nativa iOS. La evidencia de build/runtime debe registrarse de forma separada.
+**Verificación rápida de que quedó bien puesto:** el `package_name` dentro
+del JSON debe coincidir exactamente con el `applicationId` de
+`android/app/build.gradle` — si no coinciden, Firebase no encuentra la
+configuración y falla con un error confuso de "no matching client found".
+
+---
+
+## Checklist final antes de probar
+
+- [ ] `flutterfire configure` ejecutado (o pasos 9/10 manuales completados)
+- [ ] `google-services.json` real en `android/app/google-services.json`
+- [ ] `GoogleService-Info.plist` real en `ios/Runner/GoogleService-Info.plist`
+- [ ] `REVERSED_CLIENT_ID` pegado en `ios/Runner/Info.plist`
+- [ ] `googleWebClientId` actualizado en `social_login_config.dart` y en `web/index.html`
+- [ ] SHA-1 y SHA-256 (debug y release) añadidos en Firebase Console
+- [ ] `applicationId` de `android/app/build.gradle` coincide con Firebase Console
+- [ ] Capability "Sign in with Apple" añadida en Xcode
+- [ ] Proveedores Google/Apple/Email habilitados en Firebase Console → Authentication
+
+Con todo lo anterior, `flutter run` (Android/iOS) o `flutter run -d chrome`
+(Web) deberían dejar iniciar sesión con Google/Apple sin tocar ninguna
+línea de código de `features/auth/`.
