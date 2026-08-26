@@ -148,6 +148,11 @@ jobs:
       run:
         working-directory: backend
 
+    # GitHub Actions puede levantar un contenedor de servicio junto al
+    # job — esto es una instancia de Postgres REAL, no un mock, corriendo
+    # en la propia infraestructura de GitHub durante el run. Es
+    # exactamente el mismo Postgres que `VERIFICATION_GUIDE.md` pedía
+    # levantar con Docker localmente, solo que acá lo levanta CI solo.
     services:
       postgres:
         image: postgres:16
@@ -175,22 +180,38 @@ jobs:
     env:
       DATABASE_URL: postgres://ridepro:devpassword@localhost:5432/ridepro_dev
       NODE_ENV: test
+      # T-F0.2 Puerta F: declarado explicitamente — REDIS_URL (abajo) sigue
+      # presente, la suite Redis/multi-instancia sigue corriendo contra
+      # Redis real en este job.
       BACKEND_ENVIRONMENT: development
       REDIS_URL: redis://localhost:6379/15
+      # Par de claves efímero, exclusivo de este job — generado en el paso
+      # de abajo, nunca committeado (ver backend/.gitignore: secrets/).
+      # Mismos nombres/paths que backend/.env.example, para que
+      # TokenService.onModuleInit() (que exige ambas variables o falla al
+      # arrancar) no necesite ninguna rama especial para CI.
       JWT_PRIVATE_KEY_PATH: ./secrets/jwt_private.pem
       JWT_PUBLIC_KEY_PATH: ./secrets/jwt_public.pem
+      # FirebaseAdminModule exige esta variable para arrancar (Bloque 4,
+      # feat/d2-firebase-auth-bridge) — proyecto ficticio, no real: los
+      # tests de este job mockean FirebaseTokenVerifierService, nunca
+      # llaman a la API de Firebase de verdad, así que no hace falta un
+      # proyecto ni credenciales reales, solo que la variable exista.
       FIREBASE_PROJECT_ID: ridepro-ci
       FIREBASE_CHECK_REVOKED: "false"
 
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: '24'
+
       - name: Instalar dependencias (reproducible, engine-strict)
         env:
           NPM_CONFIG_ENGINE_STRICT: "true"
         run: npm ci
+
       - name: Verificar runtime Node 24 (assertion estructurada, no confiar solo en setup-node)
         run: |
           ACTUAL_NODE_VERSION="$(node --version)"
@@ -200,11 +221,13 @@ jobs:
             exit 1
           fi
           echo "NODE24_RUNTIME_ASSERTION=PASS"
+
       - name: Auditoría de seguridad runtime (npm audit --omit=dev, fail-closed en HIGH/CRITICAL)
         run: |
           set +e
           npm audit --omit=dev --json > audit_output.json
           set -e
+
           node -e "
             const fs = require('fs');
             let data;
@@ -214,16 +237,19 @@ jobs:
               console.error('::error::npm audit no devolvió JSON válido: ' + err.message);
               process.exit(1);
             }
+
             const vulns = data && data.metadata && data.metadata.vulnerabilities;
             if (!vulns || typeof vulns.high !== 'number' || typeof vulns.critical !== 'number') {
               console.error('::error::metadata.vulnerabilities ausente o con campos high/critical inválidos');
               process.exit(1);
             }
+
             console.log('RUNTIME_AUDIT_TOTAL=' + vulns.total);
             console.log('RUNTIME_AUDIT_LOW=' + vulns.low);
             console.log('RUNTIME_AUDIT_MODERATE=' + vulns.moderate);
             console.log('RUNTIME_AUDIT_HIGH=' + vulns.high);
             console.log('RUNTIME_AUDIT_CRITICAL=' + vulns.critical);
+
             if (vulns.critical > 0) {
               console.error('::error::RUNTIME_SECURITY_GATE=FAIL — ' + vulns.critical + ' vulnerabilidad(es) CRITICAL en dependencias de producción.');
               process.exit(1);
@@ -232,59 +258,98 @@ jobs:
               console.error('::error::RUNTIME_SECURITY_GATE=FAIL — ' + vulns.high + ' vulnerabilidad(es) HIGH en dependencias de producción.');
               process.exit(1);
             }
+
             console.log('RUNTIME_SECURITY_GATE=PASS');
           "
           rm -f audit_output.json
+
       # T-F1.4: lint y typecheck explícitos, no-mutantes, dentro del required
       # check del backend. Se usan los binarios instalados por `npm ci` desde
       # package-lock; --incremental false evita artefactos .tsbuildinfo.
       - name: Lint backend (read-only)
         run: ./node_modules/.bin/eslint "{src,test}/**/*.ts"
+
       - name: Typecheck backend (tsc --noEmit)
         run: ./node_modules/.bin/tsc --noEmit --incremental false
+
       - name: Generar par de claves JWT (efímero, solo para este job)
         run: |
           mkdir -p secrets
           openssl genrsa -out secrets/jwt_private.pem 2048
           openssl rsa -in secrets/jwt_private.pem -pubout -out secrets/jwt_public.pem
+
+      # T-F1.2 (P2): backend/src/**/*.spec.ts no corría en ningún required
+      # check — jest.config.js (rootDir=src, testRegex=.spec.ts$) es
+      # exclusivamente unitario (pg/firebase-admin mockeados, sin acceso
+      # real a red/DB/Redis/GCP), así que corre antes de tocar Postgres.
       - name: Correr los tests unitarios (backend/src/**/*.spec.ts)
         run: npm test -- --runInBand
+
+      # Hallazgo de auditoría 2026-07-23: este paso solo aplicaba
+      # 0001_init.sql con psql -f directo — desde que 0002-0004 existen
+      # (Bloque C/D), tanto el arranque del servidor como los e2e de
+      # equipment/workouts fallaban por tablas/constraints inexistentes.
+      # `migrate:up` (node-pg-migrate) aplica TODAS las migraciones
+      # pendientes en orden, es el método que los propios archivos de
+      # migración documentan, y es idempotente (seguro reejecutar).
       - name: Aplicar todas las migraciones pendientes
         run: npm run migrate:up
+
       - name: Levantar el servidor y verificar /v1/health
         run: |
           npm run start:dev &
           npx wait-on http://localhost:3000/v1/health --timeout 30000
           curl -sf http://localhost:3000/v1/health | tee health_response.json
           kill %1
+
       - name: Correr los tests e2e
         run: npm run test:e2e
 
+  # =========================================================================
+  # Job 4 — Suite de seguridad del Night Agent (tools/night-agent/**)
+  # =========================================================================
   night-agent-tests:
     name: Night Agent — security + test
     runs-on: ubuntu-latest
     timeout-minutes: 10
+    # actions: read — tools/night-agent/test/ci-evidence-authority.test.mjs's
+    # real, no-override attestor tests make genuine read-only `gh api
+    # repos/.../actions/runs` / `.../jobs` calls against THIS repository (see
+    # that file's own header comment). GH_TOKEN is scoped to the single step
+    # that actually runs the suite, never the whole job -- no other step here
+    # needs GitHub API access.
     permissions:
       contents: read
       actions: read
     steps:
+      # fetch-depth: 0 (full history) — tools/night-agent/test/evidence-policy.test.mjs
+      # clones this checkout's own working tree to build real, identity-verified
+      # fixtures (see that file's own header comment) and needs a genuine
+      # historical commit from this project's actual history to exist as a real
+      # Git object. The default shallow checkout (fetch-depth: 1) doesn't carry
+      # it, which is exactly what made this job fail on its first automatic run.
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
+
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: '24'
+
       - name: Verificar runtime Node 24
         shell: bash
         run: |
           set -euo pipefail
           ACTUAL_NODE_VERSION="$(node --version)"
           echo "ACTUAL_NODE_VERSION=$ACTUAL_NODE_VERSION"
+
           if [[ "$ACTUAL_NODE_VERSION" != v24.* ]]; then
             echo "::error::Runtime Node no es major 24: $ACTUAL_NODE_VERSION"
             exit 1
           fi
+
           echo "NIGHT_AGENT_NODE24_RUNTIME_ASSERTION=PASS"
+
       - name: Correr suite Night Agent
         env:
           GH_TOKEN: ${{ github.token }}
