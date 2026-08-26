@@ -25,6 +25,11 @@ propio para Equipment/Workouts, en paralelo a Firebase — ver
 `backend/README.md` y `docs/TECHNICAL_SPECIFICATION_M0_M1.md` sección 0
 para el porqué de dos fuentes de datos).
 
+> **Estado operativo vigente:** para el corte documental reconciliado hasta
+> PR #95, leer primero `PROJECT_STATUS_CURRENT.md`. `PROJECT_STATUS.md`
+> conserva el historial append-only y puede contener afirmaciones válidas
+> para una fecha anterior que hayan sido superadas por evidencia posterior.
+
 > **Especificación técnica de producción:** antes de seguir extendiendo
 > M0/M1, revisar `docs/TECHNICAL_SPECIFICATION_M0_M1.md` (contratos de
 > API, esquema de datos, seguridad, tiempo real, offline-first,
@@ -75,6 +80,9 @@ flutter test
 
 > **Nota:** este proyecto NO usa `build_runner`/`injectable` para la
 > inyección de dependencias (ver justificación en `core/di/injection.dart`).
+> `T-F2.5` quedó cerrada en PR #92: las 9 dependencias directas formalmente
+> clasificadas como muertas fueron retiradas de `pubspec.yaml` sin cambios
+> de código de aplicación.
 
 ---
 
@@ -235,32 +243,40 @@ Se encontró y corrigió una vulnerabilidad crítica de escalada de
 privilegios en las reglas de Firestore (ver `docs/SECURITY_AUDIT.md`).
 La corrección (`firestore.rules` + `firebase/rules-tests/`) **está
 implementada y validada**: el job `Firestore — reglas de seguridad
-(A3/A5)` de CI corre 28 pruebas contra el emulador en cada PR, todas en
-verde (evidencia directa, run de CI de 2026-07-31 — ver
-`PROJECT_STATUS.md` §3 "Tests"). El backend (`backend/`, NestJS +
-PostgreSQL) tampoco es ya un scaffold sin ejecutar: existe, se prueba en
-CI contra un Postgres 16 real (86/86 pruebas e2e en verde) y tiene una
-imagen Docker de producción validada — ver `backend/README.md` y
-`PROJECT_STATUS.md`. El backend de **Development** ya está realmente
-desplegado en Cloud Run (`ridepro-backend-dev`), con CI/CD autenticado
-operativo vía Workload Identity Federation (sin credenciales de larga
-duración): un `workflow_dispatch` construye la imagen, la publica en
-Artifact Registry y la despliega con validación previa, switch explícito
-de tráfico, health check y rollback automático condicionado — primer
-deploy real completado con éxito. Para **Production**, `T-F1.1` está
-**CERRADA** con Google Cloud Run seleccionado como plataforma; `T-F1.2`
-(pipeline de CD) permanece **EN PROGRESO**. La infraestructura de datos e
-identidad de Production ya está provisionada, y los callers de deploy e
-inspección de base de datos están versionados y endurecidos, pero siguen
-siendo manuales y **no se ha ejecutado un deploy real de Cloud Run de
-Production**. El hardening de workflows quedó fusionado en `main`
-`caf4afbfbf70efc6306ee9bd83ff8f48feb0f599` con CI post-merge 4/4 en
-verde (run `32801653025`). La precondición de migraciones sigue sin prueba
-técnica: `MIGRATION_PRECONDITION_PROVEN=NO`; el siguiente paso es un
-preflight de solo lectura de la inspección de la base de datos y, solo con
-autorización humana separada, su eventual dispatch. `T-F0.2`/`C1`
-**está cerrado**: las 10 puertas de la reconciliación de entornos
-(Documento 15 §12) quedan cumplidas para Development, incluidas la
+(A3/A5)` de CI corre 28 pruebas contra el emulador en cada PR. El backend
+(`backend/`, NestJS + PostgreSQL) tampoco es ya un scaffold sin ejecutar:
+el required check `Backend — migración + e2e (C2)` instala dependencias,
+corre unit tests, aplica todas las migraciones sobre PostgreSQL efímero,
+levanta `/v1/health` y ejecuta la suite e2e. El backend de **Development**
+ya está realmente desplegado en Cloud Run (`ridepro-backend-dev`), con
+CI/CD autenticado operativo vía Workload Identity Federation (sin
+credenciales de larga duración): un `workflow_dispatch` construye la
+imagen, la publica en Artifact Registry y la despliega con validación
+previa, switch explícito de tráfico, health check y rollback automático
+condicionado — primer deploy real completado con éxito.
+
+Para **Production**, `T-F1.1` está **CERRADA** con Google Cloud Run
+seleccionado como plataforma y `T-F1.2` permanece **EN PROGRESO**. Al corte
+PR #95 no se había ejecutado un deploy real del backend de Production ni se
+había probado la precondición de migraciones (`MIGRATION_PRECONDITION_PROVEN=NO`).
+PR #95 sí dejó implementado y protegido el workflow manual-only
+`.github/workflows/production-readonly-preflight.yml`: verifica metadatos de
+Cloud SQL, service account runtime, versiones ENABLED del secreto sin leer
+payload, Artifact Registry y existencia del inspector Job usando solo
+operaciones read/describe/list. El propio PR #95 no despachó ese preflight;
+el siguiente paso al corte #95 era su ejecución live read-only con Human
+Gate separado y, únicamente después, otro gate independiente para la
+inspección DB. Ver `PROJECT_STATUS_CURRENT.md` para la evidencia exacta del
+corte 1→95.
+
+En deuda de calidad, `T-F2.5` quedó **CERRADA** en PR #92 y `T-F2.4` quedó
+**CERRADA** en PR #94 a nivel de código/migración: `0007_drop_unused_ride_sessions.sql`
+elimina la tabla Postgres legado sin `CASCADE`, con rollback definido y
+validación en PostgreSQL efímero de CI. Esa migración no fue ejecutada contra
+Production por esos PRs.
+
+`T-F0.2`/`C1` **está cerrado**: las 10 puertas de la reconciliación de
+entornos (Documento 15 §12) quedan cumplidas para Development, incluidas la
 validación de reglas de Firestore contra el proyecto real, el CI/CD de
 despliegue autenticado y el ensayo real de rollback. Ver
 `PROJECT_STATUS.md`.
@@ -291,9 +307,10 @@ calorías. Accesible desde el botón "Entrenar ahora" en Home.
 ## Modo Demo (`docs/DEMO_MODE.md`)
 
 `flutter run -t lib/main_demo.dart` — recorre la app completa con datos
-simulados, sin Firebase/Postgres/BLE real. Útil mientras A3/C2 siguen
-pendientes de verificación. Incluye catálogo de rutas (`features/routes_catalog`,
-nuevo) y Configuración (`features/settings`, nuevo — tema e idioma).
+simulados, sin Firebase/Postgres/BLE real. Es útil para revisar UI y flujos
+sin servicios externos; A3/C2 ya cuentan con validación automatizada en CI.
+Incluye catálogo de rutas (`features/routes_catalog`, nuevo) y Configuración
+(`features/settings`, nuevo — tema e idioma).
 
 ## Accesibilidad (`docs/ACCESSIBILITY.md`)
 
