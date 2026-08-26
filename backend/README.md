@@ -19,6 +19,9 @@ describía un estado de scaffold temprano ya superado.
 `UsersModule`, `EquipmentModule`, `WorkoutsModule`.
 ✅ CI (`.github/workflows/ci.yml`, job `backend-tests`) aplica las migraciones y corre
 la suite e2e completa contra un Postgres 16 real en cada push/PR.
+✅ **Contenedorización implementada y validada desde PR #3**: `Dockerfile` multi-stage,
+`.dockerignore`, runtime no-root y `HEALTHCHECK` contra `/v1/health`. Esto acredita la
+preparación de la imagen; no equivale por sí solo a un despliegue cloud/Production.
 
 ## Módulos
 
@@ -118,6 +121,8 @@ curl http://localhost:3000/v1/health
 
 ```
 backend/
+├── Dockerfile                        # imagen multi-stage validada desde PR #3
+├── .dockerignore                     # excluye secretos/artefactos del contexto de build
 ├── src/
 │   ├── main.ts                      # bootstrap: helmet, CORS, prefijo /v1, ValidationPipe
 │   ├── app.module.ts                 # módulo raíz
@@ -140,8 +145,8 @@ backend/
 ## Limitaciones actuales (honestas, no ocultarlas)
 
 - ❌ **Sin backend desplegado en ningún entorno cloud real** — solo corre local y en
-  CI (ver Documento 22 para el plan de despliegue de Development, no ejecutado
-  todavía).
+  CI. La **contenedorización ya está cerrada desde PR #3**; el despliegue cloud de
+  Development es una fase distinta (ver Documento 22 como plan histórico).
 - ❌ **Sin puente Firebase↔NestJS** (`T-F1.5`, Documento 15) — este backend usa su
   propio sistema de autenticación JWT, completamente independiente de Firebase Auth.
   Un usuario autenticado con Firebase no tiene, hoy, ninguna forma automática de
@@ -162,8 +167,9 @@ mal elegido en este punto sería más caro de deshacer que no tener ninguno toda
 
 ## Próximos pasos sugeridos
 
-1. Desplegar Development a un entorno cloud real (Documento 22 — auditoría y plan,
-   fases de contenedorización/Cloud Run/Cloud SQL pendientes de autorización).
+1. Desplegar Development a un entorno cloud real: la **contenedorización ya fue
+   completada en PR #3**; quedan como fases separadas la infraestructura Cloud Run /
+   Cloud SQL y el despliegue, sujetas a su propia evidencia/autorización.
 2. Diseñar el puente Firebase↔NestJS (`T-F1.5`) cuando se priorice.
 3. Agregar migraciones `.down.sql` antes de tener datos reales en cualquier entorno
    desplegado.
