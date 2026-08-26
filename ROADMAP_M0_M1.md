@@ -27,9 +27,10 @@ pendientes de commitear (fuera de lo explícitamente diferido:
 `.claude/settings.local.json` ahora ignorado en el `.gitignore` del
 repo).
 
-**D2 se desarrolló en la rama `feature/d2`** (creada desde `main` tras la
-reconstrucción de historial) — **todavía no mergeada a `main`**. Ver
-sesión "Implementación de D2 (Entrenamientos)" abajo.
+**D2 se desarrolló originalmente en la rama `feature/d2`** (creada desde
+`main` tras la reconstrucción de historial) y **fue integrado a `main`
+mediante PR #1** (`c2b2da9d395a5a4f03f821fd2854a032e38c4313`). Ver sesión
+"Implementación de D2 (Entrenamientos)" abajo.
 
 ## Fase de diseño — Bloque D (núcleo funcional del usuario) — 2026-07-22
 
@@ -315,8 +316,8 @@ real:
 - **Suite completa: 125 tests (68 unit + 57 e2e), todos en verde** —
   verificado dos veces: en el working tree y en un `git worktree`
   aislado del commit real. `lint`/`tsc --noEmit`/`build` limpios.
-- **Commit** `feat(backend): implement Workouts module (D2)` en
-  `feature/d2` — **sin mergear a `main` todavía**.
+- **Commit** `feat(backend): implement Workouts module (D2)` creado en
+  `feature/d2` e **integrado posteriormente a `main` mediante PR #1**.
 - **Nota de cobertura documentada, no un gap oculto**: la visibilidad de
   catálogo (`ownerId IS NULL`) no tiene forma de ejercitarse por HTTP
   (`POST /workouts` siempre asigna el dueño autenticado; crear una fila
@@ -1019,15 +1020,16 @@ reordenar sin revisar esa sección primero.*
       de D1 (Equipamiento)" arriba para el detalle completo.
 
 - [x] **D2. Entrenamientos** ✅ Implementado y **verificado**
-      (2026-07-22) contra Postgres real, en la rama `feature/d2`
-      (**sin mergear a `main` todavía**) — modelo de entrenamientos
-      estructurados con intervalos (`workouts`/`workout_intervals`,
-      migración `0004`, sin dependencias). Primer módulo con lectura
-      cross-usuario real (catálogo + workouts públicos), intervalos
-      inmutables tras la creación, `position`/`estimated_duration_seconds`
-      derivados en el servidor. 23 tests unitarios + 16 e2e (125 tests
-      totales en el backend, antes 86). Ver sesión "Implementación de D2
-      (Entrenamientos)" arriba para el detalle completo.
+      (2026-07-22) contra Postgres real. Se desarrolló originalmente en
+      la rama `feature/d2` y **fue integrado a `main` mediante PR #1** —
+      modelo de entrenamientos estructurados con intervalos
+      (`workouts`/`workout_intervals`, migración `0004`, sin dependencias).
+      Primer módulo con lectura cross-usuario real (catálogo + workouts
+      públicos), intervalos inmutables tras la creación,
+      `position`/`estimated_duration_seconds` derivados en el servidor.
+      23 tests unitarios + 16 e2e (125 tests totales en el backend, antes
+      86). Ver sesión "Implementación de D2 (Entrenamientos)" arriba para
+      el detalle completo.
 
 - [ ] **D3. Rutas** — catálogo real en Postgres (`routes`, migración
       `0005`, sin dependencias) que reemplaza el `RoutesMockDataSource`
