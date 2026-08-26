@@ -1,42 +1,115 @@
 # Korixa — Estado Operativo Vigente
 
-> **Fuente operativa de lectura rápida — 2026-08-25.** Este archivo complementa `PROJECT_STATUS.md` sin reescribir su historial append-only. Cuando exista contradicción con una afirmación histórica punto-en-el-tiempo, este snapshot debe leerse junto con la evidencia GitHub exacta indicada aquí. No cambia el estado de ninguna tarea por sí solo.
+> **Snapshot de reconciliación con corte estricto en PR #95 — 2026-08-25.** Este archivo complementa `PROJECT_STATUS.md` sin convertir entradas históricas punto-en-el-tiempo en estado actual. Los hechos posteriores a PR #95 se documentan en un bloque POST-95 separado y no se mezclan retroactivamente en este corte.
 
 ## Identidad del snapshot
 
 ```text
 DATE = 2026-08-25
-MAIN_SHA = 0ac1457ca0d58235f73c4ecd2db37c7058208673
-LAST_MERGED_PR = #90
-POST_MERGE_CI_RUN = 32848827876
+SCOPE = PR #1 -> PR #95
+SCOPE_CUTOFF = PR #95
+MAIN_SHA_AT_CUTOFF = 72b15fe5e4e6dc59be595b4f685cbe75f148eee2
+LAST_MERGED_PR_WITHIN_SCOPE = #95
+POST_MERGE_CI_RUN = 32889573787
 POST_MERGE_CI = 4/4 SUCCESS
 ```
 
-El `main` anterior a PR #90 era `caf4afbfbf70efc6306ee9bd83ff8f48feb0f599` (merge de PR #88). PR #90 fue fusionado de forma ordinaria y avanzó `main` a `0ac1457ca0d58235f73c4ecd2db37c7058208673`.
+El snapshot documental anterior fue PR #91, basado en `main=d6b7d65755bfc6c44d9403e417cad585e13fe4c7` y con estado operativo hasta PR #90. Desde ese punto hasta el corte #95, la cadena real de `main` fue:
+
+```text
+PR #91 -> d6b7d65755bfc6c44d9403e417cad585e13fe4c7
+PR #92 -> a368792ef362b38e5baab62bf1dc2788d0541667
+PR #94 -> 6fefc0f86100767f2cfb7ebc1f529f486fe9510e
+PR #93 -> d01ac282c8b343854f2d7ba07dd2306d832616b5
+PR #95 -> 72b15fe5e4e6dc59be595b4f685cbe75f148eee2
+```
+
+> La numeración de PR no coincide con el orden de merge: #94 fue fusionado antes de #93. La secuencia anterior sigue los padres reales de `main`, no el número del PR.
+
+## Cambios reconciliados después del snapshot de PR #91
+
+### PR #92 — T-F2.5: dependencias muertas
+
+**Estado: `CERRADA`.** Se eliminaron de `pubspec.yaml` las 9 dependencias directas declaradas muertas por el Backlog Maestro:
+
+- `logger`
+- `injectable`
+- `injectable_generator`
+- `riverpod_generator`
+- `riverpod_annotation`
+- `freezed`
+- `freezed_annotation`
+- `json_serializable`
+- `json_annotation`
+
+El diff final quedó limitado a `pubspec.yaml` y `pubspec.lock`. La reconciliación del lockfile evitó downgrades/upgrades no relacionados; `json_annotation` puede permanecer transitivamente cuando otra dependencia la requiera. Merge `a368792ef362b38e5baab62bf1dc2788d0541667`; CI post-merge `32877066872` = SUCCESS.
+
+```text
+T-F2.5 = CERRADA
+DIRECT_DEAD_DEPENDENCIES_REMOVED = 9/9
+PRODUCTION_MUTATIONS = 0
+```
+
+### PR #94 — T-F2.4: eliminar `ride_sessions`
+
+**Estado: `CERRADA` a nivel de código/migración.** Se añadió `backend/migrations/0007_drop_unused_ride_sessions.sql` con `DROP TABLE IF EXISTS ride_sessions;` deliberadamente **sin `CASCADE`**, y un bloque Down que reconstruye el esquema original. El inspector read-only fue actualizado para modelar las 7 migraciones y reconocer que `0007` elimina la tabla, sus columnas y sus índices. Merge `6fefc0f86100767f2cfb7ebc1f529f486fe9510e`; CI post-merge `32881414655` = 4/4 SUCCESS, incluido `Backend — migración + e2e (C2)` contra PostgreSQL efímero.
+
+```text
+T-F2.4 = CERRADA
+MIGRATION_0007_PRESENT = YES
+CASCADE = NO
+PRODUCTION_MIGRATION_EXECUTED = NO
+```
+
+Que `0007` esté en `main` no autoriza ejecutarla contra Production.
+
+### PR #93 — Night Agent: defensa contra `git replace`
+
+**Estado: `CERRADO`.** Se cerró la deuda P3 heredada de PR #88: las 7 invocaciones directas a Git en `tools/night-agent/incremental-audit.mjs` usan `--no-replace-objects`, evitando que un `git replace` local pueda ocultar un cambio real durante una decisión de auditoría incremental. Se añadió una regresión con un repositorio Git desechable y un ataque real de replacement object. Merge `d01ac282c8b343854f2d7ba07dd2306d832616b5`; CI post-merge `32884952568` = 4/4 SUCCESS.
+
+```text
+NIGHT_AGENT_GIT_REPLACE_HARDENING = CLOSED
+DIRECT_GIT_CALLS_GUARDED = 7/7
+PRODUCTION_MUTATIONS = 0
+```
 
 ## T-F1.2 — Production CD
 
-**Estado vigente: `EN PROGRESO`.** El criterio formal de aceptación — que un push a `main` despliegue automáticamente al entorno correspondiente sin pasos manuales — todavía no está cumplido.
+**Estado al corte PR #95: `EN PROGRESO`.** El criterio formal de aceptación — que un push a `main` despliegue automáticamente al entorno correspondiente sin pasos manuales — todavía no está cumplido.
 
-- **PR #85 — fusionado.** Caller manual-only de deploy de Production (`workflow_dispatch`) con cadena `guard → build-production-artifact → verify-build-output → deploy-production-candidate`. No ejecutó un deploy real de Cloud Run Production.
-- **PR #86 — fusionado.** Caller manual-only de inspección read-only de Production DB. No ejecutó la inspección durante el PR.
-- **Incidente posterior a #86.** El primer dispatch autorizado de la inspección fue rechazado por GitHub antes de crear un run porque jobs normales con `steps:` carecían de `runs-on:`. Ningún job corrió; no hubo consulta DB, publicación de artefacto, deploy ni mutación de Production.
-- **PR #87 — abierto/Draft, no fusionado.** Fix inicial acotado. Quedó técnicamente superado por el hardening sistémico de #88; este snapshot no lo cierra.
-- **PR #88 — fusionado.** Endureció validación estructural de workflows/actionlint, evidencia ligada a HEAD y gates B/C/Human. Merge `caf4afbfbf70efc6306ee9bd83ff8f48feb0f599`; CI post-merge `32801653025` = 4/4 SUCCESS; locator `32801868448` = SUCCESS.
+Los callers de Production continúan controlados/manuales. No existe todavía un deploy real del backend de Production a Cloud Run y la precondición de migraciones no está probada.
+
+### PR #95 — Production read-only metadata preflight
+
+PR #95 implementó `.github/workflows/production-readonly-preflight.yml`, un workflow separado, `workflow_dispatch` only, para probar metadatos actuales de Production sin cruzar la frontera de mutación de la inspección DB.
+
+El workflow exige:
+
+- ref exacta `main` y verificación de frescura contra el `main` remoto;
+- confirmación exacta `PREFLIGHT_PRODUCTION_READONLY`;
+- `environment: production`;
+- WIF hacia la identidad `korixa-production-deployer`;
+- únicamente operaciones de lectura/describe/list.
+
+Puede comprobar estado/private-IP de Cloud SQL, presencia de la DB esperada, estado de la service account runtime, números de versiones ENABLED del secreto sin leer payload, ausencia del tag inmutable del SHA en Artifact Registry y existencia del Job inspector. El contrato de regresión falla si se introducen clases de comandos capaces de mutar.
+
+PR #95 **no ejecutó** el workflow contra Production durante el PR. Merge `72b15fe5e4e6dc59be595b4f685cbe75f148eee2`; CI post-merge `32889573787` = 4/4 SUCCESS.
 
 ```text
 T-F1.2 = EN_PROGRESO
+PRODUCTION_READONLY_PREFLIGHT_WORKFLOW = IMPLEMENTED
+LIVE_PRODUCTION_PREFLIGHT_EXECUTED_BY_PR95 = NO
 MIGRATION_PRECONDITION_PROVEN = NO
 REAL_CLOUD_RUN_PRODUCTION_DEPLOY = NO
 PRODUCTION_CALLERS = MANUAL_WORKFLOW_DISPATCH
-NEXT_TECHNICAL_STEP = READ_ONLY_DB_INSPECTION_PREFLIGHT
+NEXT_TECHNICAL_STEP_AT_PR95_CUTOFF = AUTHORIZED_LIVE_READONLY_PREFLIGHT_DISPATCH
 ```
 
-El próximo paso técnico sigue siendo un preflight estrictamente de solo lectura del workflow de inspección de Production DB sobre el `main` vigente. Un dispatch real de ese workflow es una operación de Production y requiere autorización humana separada.
+Un dispatch real del preflight requiere autorización humana separada. La inspección DB real continúa siendo otro gate distinto.
 
 ## Night Agent — roles vigentes
 
-El protocolo de coordinación queda formalmente:
+El protocolo de coordinación permanece:
 
 ```text
 CHATGPT = STRATEGIC_COORDINATOR
@@ -47,9 +120,7 @@ C = VALIDATOR / CERTIFIER
 HUMAN = AUTHORITY_FOR_SENSITIVE_GATES
 ```
 
-### B — Breaker / Red Team Auditor
-
-PR #90 formalizó la misión canónica de B y fue fusionado a `main`.
+La misión canónica de B, formalizada en PR #90, no cambia:
 
 ```text
 B_ROLE = BREAKER / RED TEAM AUDITOR
@@ -58,60 +129,37 @@ REMEDIATION_OWNER = A
 B_CAN_FIX_OWN_FINDINGS = NO
 ```
 
-La política canónica está en `tools/night-agent/BREAKER_POLICY.md` y el contrato machine-readable en `tools/night-agent/role-capabilities.mjs`.
+PR #93 endurece el motor de auditoría incremental, pero no cambia estas responsabilidades.
 
-Regla central: B no intenta confirmar que A hizo un buen trabajo; intenta falsificarlo. Si encuentra un defecto, lo reproduce y documenta con evidencia, clasifica el finding y devuelve el trabajo a A. B no escribe archivos de tarea, no hace commit/push de la remediación y no sustituye a C.
+## CI en el corte #95
 
-Flujo bloqueante:
-
-```text
-A → B
-B encuentra defecto bloqueante
-B → HOLD / HOLD_FOR_REMEDIATION → A
-A corrige sobre nuevo HEAD
-A → B
-B vuelve a atacar
-B PASS → C
-C certifica HEAD exacto
-C → HUMAN_GATE
-```
-
-“Romper” significa falsificación controlada: análisis, pruebas adversariales, fixtures desechables y evidencia. Nunca significa experimentación destructiva contra Production.
-
-### Evidencia PR #90
-
-```text
-PR = #90
-FEATURE_HEAD = c4463ca5672a33b2590ccd1cc501c634b6df2787
-PRE_MERGE_CI_RUN = 32847968486
-PRE_MERGE_CI = 4/4 SUCCESS
-MERGE_COMMIT = 0ac1457ca0d58235f73c4ecd2db37c7058208673
-POST_MERGE_CI_RUN = 32848827876
-POST_MERGE_CI = 4/4 SUCCESS
-```
-
-Los cuatro checks post-merge fueron `SUCCESS`:
+El CI post-merge de PR #95, run `32889573787`, terminó `SUCCESS` en los cuatro checks requeridos:
 
 1. Flutter — analyze + test
 2. Firestore — reglas de seguridad (A3/A5)
 3. Backend — migración + e2e (C2)
 4. Night Agent — security + test
 
-El job de Backend en CI usa entorno de pruebas; no constituye evidencia de que la precondición de migraciones de Production esté probada.
+El job Backend usa PostgreSQL efímero de CI. Su éxito prueba las migraciones en ese entorno de test, **no** la precondición ni el estado de la base de datos real de Production.
 
-## Estado documental
+## Estado documental del corte #95
 
-- `tools/night-agent/BREAKER_POLICY.md` — **VIGENTE** y fusionado en #90.
-- `README.md` — en esta sincronización se corrige el estado de Production para reflejar `T-F1.1=CERRADA`, `T-F1.2=EN PROGRESO` y `MIGRATION_PRECONDITION_PROVEN=NO`.
-- `PROJECT_STATUS.md` — se conserva byte-intacto en esta sincronización para proteger su historial append-only; este archivo registra el snapshot operativo nuevo sin repetir el defecto de reescritura histórica detectado en PR #89.
-- `PR #89` — permanece abierto/Draft y no se fusiona ni se cierra en esta tarea.
-- `PR #81` — permanece como evidencia histórica del primer intento fallido del protocolo y no se modifica en esta tarea.
+```text
+PR_92 = VERIFIED / DOCUMENTED
+PR_93 = VERIFIED / DOCUMENTED
+PR_94 = VERIFIED / DOCUMENTED
+PR_95 = VERIFIED / DOCUMENTED
+RECONCILIATION_1_TO_95 = COMPLETE_IN_THIS_SNAPSHOT
+POST_95_FACTS_INCLUDED = NO
+```
 
-## Seguridad de esta sincronización
+`PROJECT_STATUS.md` conserva su naturaleza histórica append-only. `README.md` debe leerse junto con este snapshot cuando alguna frase operativa anterior a PR #95 haya quedado superada.
+
+## Seguridad de esta reconciliación
 
 ```text
 CODE_CHANGED = NO
-WORKFLOWS_CHANGED = NO
+APPLICATION_LOGIC_CHANGED = NO
 PRODUCTION_MUTATIONS = 0
 IAM_MUTATIONS = 0
 SECRET_MUTATIONS = 0
