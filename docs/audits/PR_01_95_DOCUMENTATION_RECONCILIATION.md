@@ -215,14 +215,98 @@ HISTORICAL_BODY_PRESERVED = YES
 SUPERSESSION_BANNER = YES
 ```
 
+## PR #4 — `feat(auth): add Firebase to NestJS authentication bridge`
+
+### Evidencia GitHub
+
+```text
+PR = #4
+STATE = MERGED
+BASE_SHA = 511a5db50619c0786cd09a9fd1ddc03df42c0590
+HEAD_SHA = 675bf0d82045fd6ea7131e28919d562aad9d0180
+MERGE_SHA = dcc322ea42b1128313fb443fc347c59c32079865
+COMMITS = 4
+CHANGED_FILES = 58
+```
+
+PR #4 incorporó Firebase Admin al backend, la migración `0005_users_firebase_uid.sql`, asociación de identidad por `firebase_uid`, `POST /auth/firebase/exchange`, logout, rate limiting y pruebas de concurrencia. La migración `0005` añade `firebase_uid` nullable y un índice único parcial; al corte PR #95 sigue presente. El controller del corte #95 conserva `POST /auth/firebase/exchange`, que extrae un Bearer ID token Firebase y lo envía a `AuthService.exchangeFirebaseToken`.
+
+### Evidencia de Development y alcance
+
+La documentación integrada por el propio PR conserva evidencia de un despliegue real de **Development**, no Production: una imagen inmutable fue publicada en Artifact Registry y `ridepro-backend-dev` quedó en la revisión `ridepro-backend-dev-00007-llf`, Ready=True, con 100% del tráfico; `/v1/health` respondió 200 contra base conectada. Este hecho no autoriza ni demuestra ningún deploy de Production.
+
+Fase 4.1 también documentó la corrección de la race condition de identidad y validó 8 requests concurrentes, pero 20 concurrentes mostraron agotamiento del pool con default 10. Ese límite quedó explícitamente pendiente para trabajo posterior.
+
+### CI del HEAD final del PR
+
+GitHub conserva un run de CI asociado al HEAD final `675bf0d...`:
+
+```text
+CI_RUN = 30562446745
+FLUTTER = SUCCESS
+FIRESTORE = SUCCESS
+BACKEND = FAILURE
+FAILED_STEP = Correr los tests e2e
+```
+
+El propio cuerpo del PR advertía la limitación del pool PostgreSQL y afirmaba que no debía fusionarse mientras los checks requeridos siguieran rojos. Sin embargo, GitHub registra el PR como `merged=true`. Esta reconciliación **no convierte ese run rojo en PASS** y lo conserva como evidencia histórica de proceso. La persistencia funcional posterior se demuestra por el código y por PRs posteriores, no reescribiendo el resultado de ese CI.
+
+### Drift documental detectado
+
+`backend/README.md`, documentación operativa vigente, seguía afirmando al corte PR #95:
+
+```text
+Sin puente Firebase↔NestJS
+backend JWT completamente independiente de Firebase Auth
+usuario Firebase sin forma automática de autenticarse contra backend
+Sin backend desplegado en ningún entorno cloud real
+4 migraciones
+```
+
+Esas afirmaciones quedaron superadas por PR #4. En cambio, documentos como `19_AUDITORIA_AUTHENTICATION_RIDEPRO_DEVELOPMENT.md` y el cuerpo histórico del Documento 22 describen estados punto-en-el-tiempo previos al PR #4 y se preservan como evidencia histórica; no se reescribe su cuerpo para aparentar que en su fecha el puente ya existía.
+
+`docs/TECHNICAL_SPECIFICATION_M0_M1.md` conserva la separación conceptual “cliente Firebase directo / backend objetivo”. No se reescribe en este cierre porque PR #4 no modificó Flutter: el puente server-side sí existe, pero no constituye por sí solo una migración completa del cliente.
+
+### Corrección aplicada
+
+Se actualizó `backend/README.md` para registrar exclusivamente hechos demostrados por PR #4:
+
+```text
+FIREBASE_NEST_BRIDGE = IMPLEMENTED
+ENDPOINT = POST /v1/auth/firebase/exchange
+MIGRATION_0005 = PRESENT
+FIREBASE_UID_UNIQUE_PARTIAL = YES
+DEVELOPMENT_CLOUD_RUN_DEPLOY = PROVEN
+PRODUCTION_DEPLOY = NOT_PROVEN_BY_PR4
+FLUTTER_FULL_AUTH_MIGRATION = NOT_INFERRED
+POOL_20_CONCURRENT = NOT_APPROVED
+```
+
+También se actualizó el inventario de migraciones y la estructura del backend para incluir `src/firebase/`, el endpoint de exchange y `0005_users_firebase_uid.sql`.
+
+### Resultado PR #4
+
+```text
+PR_4_AUDIT = VERIFIED
+DOCUMENTATION_DRIFT_FOUND = YES
+DOCUMENTATION_CLOSED = YES
+FILES_FIXED = backend/README.md
+HISTORICAL_DOCS_REWRITTEN = NO
+PROJECT_STATUS.md = UNTOUCHED
+PRODUCTION_MUTATIONS = 0
+PROGRESS_DOCUMENTATION_CLOSED = 4/95
+NEXT = PR #5
+```
+
 ### Estado del recorrido
 
 ```text
 PR_1_DOCUMENTATION = CLOSED
 PR_2_DOCUMENTATION = CLOSED
 PR_3_DOCUMENTATION = CLOSED
+PR_4_DOCUMENTATION = CLOSED
 PROJECT_STATUS.md = UNTOUCHED
 PRODUCTION_MUTATIONS = 0
-PROGRESS_DOCUMENTATION_CLOSED = 3/95
-NEXT = PR #4
+PROGRESS_DOCUMENTATION_CLOSED = 4/95
+NEXT = PR #5
 ```
