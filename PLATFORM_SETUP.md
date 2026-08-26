@@ -17,9 +17,14 @@ que todavía dependen del entorno real.
 ## iOS
 
 > **Reconciliación PR #12:** el cliente Firebase iOS y el URL scheme de Google
-> dejaron de ser placeholders en PR #12. El trabajo pendiente desde ese PR era
-> validar build/runtime en macOS/Xcode, no volver a pegar un
-> `REVERSED_CLIENT_ID_AQUI` ficticio.
+> dejaron de ser placeholders en PR #12. Ese PR no probó por sí solo el build
+> nativo ni el runtime.
+>
+> **Reconciliación PR #14:** el deployment target mínimo se elevó de iOS 13.0 a
+> 14.0 y GitHub Actions completó en macOS un `flutter build ios --debug
+> --no-codesign -v`, incluyendo la resolución nativa/CocoaPods y Xcode. Esto
+> acredita un build iOS **sin firma** en CI; no acredita signing/provisioning ni
+> runtime en simulador o dispositivo.
 
 1. Verificar que el Bundle ID del target/esquema activo coincida con la app
    Firebase iOS del entorno que se está validando.
@@ -29,9 +34,10 @@ que todavía dependen del entorno real.
    revisar la consistencia antes del commit.
 4. En Apple Developer Console/Xcode, habilitar **Sign in with Apple** cuando
    corresponda y validar la capability en el target real.
-5. Ejecutar por separado la evidencia nativa que PR #12 no aportó:
-   `flutter build ios --no-codesign`, resolución CocoaPods y prueba en
-   simulador/dispositivo.
+5. La compilación iOS sin firma en CI quedó probada desde PR #14. Antes de una
+   release siguen pendientes las evidencias que ese PR no cubrió: firma y
+   provisioning reales, instalación/ejecución en simulador o dispositivo y
+   validación runtime de Firebase/Google/Apple.
 
 ## Web
 
@@ -54,7 +60,11 @@ IOS_STATIC_FIREBASE_CONFIG_SINCE_PR12 = YES
 IOS_GOOGLE_URL_SCHEME_SINCE_PR12 = YES
 IOS_NATIVE_BUILD_PROVEN_BY_PR12 = NO
 IOS_RUNTIME_PROVEN_BY_PR12 = NO
+IOS_UNSIGNED_NATIVE_BUILD_SINCE_PR14 = YES
+IOS_COCOAPODS_XCODE_BUILD_SINCE_PR14 = YES
+IOS_SIGNING_PROVEN_BY_PR14 = NO
+IOS_SIMULATOR_DEVICE_RUNTIME_PROVEN_BY_PR14 = NO
 ```
 
-Una configuración estática correcta no equivale a una validación funcional de
-Firebase/Google/Apple en un dispositivo real.
+Una configuración estática correcta y un build sin firma exitoso no equivalen a
+una validación funcional de Firebase/Google/Apple en un dispositivo real.
