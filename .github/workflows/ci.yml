@@ -264,13 +264,13 @@ jobs:
           rm -f audit_output.json
 
       # T-F1.4: lint y typecheck explícitos, no-mutantes, dentro del required
-      # check del backend. --no-install impide que npx descargue herramientas
-      # no fijadas por package-lock; --incremental false evita artefactos .tsbuildinfo.
+      # check del backend. Se usan los binarios instalados por `npm ci` desde
+      # package-lock; --incremental false evita artefactos .tsbuildinfo.
       - name: Lint backend (read-only)
-        run: npx --no-install eslint "{src,test}/**/*.ts"
+        run: ./node_modules/.bin/eslint "{src,test}/**/*.ts"
 
       - name: Typecheck backend (tsc --noEmit)
-        run: npx --no-install tsc --noEmit --incremental false
+        run: ./node_modules/.bin/tsc --noEmit --incremental false
 
       - name: Generar par de claves JWT (efímero, solo para este job)
         run: |
