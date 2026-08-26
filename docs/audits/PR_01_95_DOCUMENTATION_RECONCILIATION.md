@@ -343,3 +343,84 @@ PRODUCTION_MUTATIONS = 0
 PROGRESS_DOCUMENTATION_CLOSED = 5/95
 NEXT = PR #6
 ```
+
+## PR #6 — `docs: add changelog for PRs 1-5`
+
+### Evidencia GitHub
+
+```text
+PR = #6
+STATE = MERGED
+BASE_SHA = af1c0ad8a98f13130af4d93368fa894862c9de80
+HEAD_SHA = b84e00e521e75c96c9962a7495dd4fcfdc982e42
+MERGE_SHA = 2e8cf132f0e8aa7219803c4879b1f90e2c188dd3
+COMMITS = 1
+CHANGED_FILES = 1
+FILE = CHANGELOG.md
+CI_RUN = 30587307630
+CI = SUCCESS
+```
+
+PR #6 fue exclusivamente documental: añadió `CHANGELOG.md` para resumir los bloques integrados por PR #1–#5. No incorporó código funcional, configuración, migraciones ni dependencias.
+
+### CI del PR #6
+
+El run `30587307630`, ejecutado sobre el HEAD exacto `b84e00e...`, terminó con los tres jobs en verde:
+
+```text
+Flutter — analyze + test = SUCCESS
+Firestore — reglas de seguridad (A3/A5) = SUCCESS
+Backend — migración + e2e (C2) = SUCCESS
+```
+
+### Drift documental detectado
+
+El changelog afirmaba que los cinco bloques #1–#5 habían sido validados de forma aislada —incluidos e2e— **antes de cada merge**. Esa formulación es demasiado absoluta y contradice la evidencia preservada del PR #4: su HEAD final tuvo Flutter y Firestore en verde, pero Backend e2e en rojo antes del merge. PR #5 sí cerró posteriormente con los tres jobs de CI en verde.
+
+También se aclaró la frase histórica “Imagen Docker de producción” para evitar que se interprete como evidencia de un despliegue real del backend a Production. PR #3 acreditó la preparación/validación del contenedor; un Production deploy requiere evidencia independiente.
+
+### Corrección aplicada
+
+Se actualizó `CHANGELOG.md` sin borrar los hechos históricos de v0.5.0:
+
+```text
+VALIDATION_ALL_1_TO_5_PREMERGE_PASS = REMOVED
+PR4_BACKEND_E2E_PREMERGE = FAILURE_PRESERVED
+PR5_CI_3_OF_3 = SUCCESS_PRESERVED
+PRODUCTION_DOCKER_IMAGE = CONTAINER_RUNTIME_DESCRIPTION
+PRODUCTION_DEPLOY_INFERRED = NO
+```
+
+### Nota de integridad de metadata
+
+Durante esta reconciliación se realizó una actualización no-op sobre el PR #6 con el mismo título/body/estado ya existentes. No cambió el contenido histórico del PR, sus refs, SHAs, estado ni merge; GitHub sí refrescó `updated_at`. Se registra aquí para no presentar ese timestamp posterior como actividad histórica de 2026-07-30.
+
+### Resultado PR #6
+
+```text
+PR_6_AUDIT = VERIFIED
+DOCUMENTATION_DRIFT_FOUND = YES
+DOCUMENTATION_CLOSED = YES
+FILES_FIXED = CHANGELOG.md
+HISTORICAL_PR_CONTENT_CHANGED = NO
+PR_METADATA_NOOP_TOUCH = YES_UPDATED_AT_ONLY
+PROJECT_STATUS.md = UNTOUCHED
+PRODUCTION_MUTATIONS = 0
+PROGRESS_DOCUMENTATION_CLOSED = 6/95
+NEXT = PR #7
+```
+
+## Estado del recorrido
+
+```text
+PR_1_DOCUMENTATION = CLOSED
+PR_2_DOCUMENTATION = CLOSED
+PR_3_DOCUMENTATION = CLOSED
+PR_4_DOCUMENTATION = CLOSED
+PR_5_DOCUMENTATION = CLOSED
+PR_6_DOCUMENTATION = CLOSED
+PROJECT_STATUS.md = UNTOUCHED
+PRODUCTION_MUTATIONS = 0
+PROGRESS_DOCUMENTATION_CLOSED = 6/95
+NEXT = PR #7
+```
