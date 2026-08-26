@@ -117,3 +117,65 @@ PRODUCTION_MUTATIONS = 0
 PROGRESS = 2/95
 NEXT = PR #3
 ```
+
+## PR #3 — `chore(backend): validate production Docker image`
+
+### Evidencia GitHub
+
+```text
+PR = #3
+STATE = MERGED
+BASE_SHA = 5cc684e43fe5ab6dc4a41411e65facc3f4529b9c
+HEAD_SHA = 270546380ee5574b398ee5ff951f5b750377bd76
+MERGE_SHA = 511a5db50619c0786cd09a9fd1ddc03df42c0590
+CHANGED_FILES = 7
+CI_RUN = 30514006988 / SUCCESS
+```
+
+El PR añadió y validó la base de contenedorización del backend. El diff final incluye `backend/Dockerfile`, `backend/.dockerignore`, separación de `tsconfig.build.json`/`tsconfig.eslint.json`, ajustes de `tsconfig.json` y nuevas reglas de `.gitignore` para secretos/artefactos locales. La imagen se diseñó multi-stage, con runtime no-root y `HEALTHCHECK` contra `/v1/health`.
+
+### Persistencia al corte PR #95
+
+La contenedorización no fue temporal. En el árbol exacto del corte PR #95, `backend/Dockerfile` sigue presente y ha evolucionado de Node 20 a Node 24, conserva build/runtime separados, añade una etapa `test`, ejecuta el runtime como usuario `node`, mantiene `HEALTHCHECK /v1/health` y continúa copiando solo el JavaScript compilado a la imagen final.
+
+```text
+DOCKERFILE_PRESENT_AT_PR95 = YES
+MULTI_STAGE = YES
+RUNTIME_NON_ROOT = YES
+HEALTHCHECK = /v1/health
+SOURCE_TS_IN_RUNTIME = NO_BY_DOCKERFILE_DESIGN
+PR3_CHANGE_PRESERVED = YES
+```
+
+### Drift documental detectado al corte PR #95
+
+Se detectan dos piezas que necesitan tratamiento distinto:
+
+1. `backend/README.md` es documentación operativa y, al corte PR #95, todavía termina recomendando como próximo paso ejecutar las **“fases de contenedorización/Cloud Run/Cloud SQL pendientes”**. La parte de Cloud Run/Cloud SQL puede seguir siendo histórica según el punto del roadmap, pero **la contenedorización dejó de estar pendiente desde PR #3**. El mismo README tampoco incluye `Dockerfile`/`.dockerignore` en su árbol resumido, por lo que subrepresenta una capacidad ya integrada.
+2. `docs/audits/AUDITORIA_FINAL/22_AUDITORIA_Y_PLAN_DESPLIEGUE_BACKEND_DEVELOPMENT.md` dice `Dockerfile = No existe` y lo enumera como bloqueante. Esa afirmación era correcta el 2026-07-26 y el propio documento declara que es una auditoría/plan de ese momento. Por tanto **no debe reescribirse como si hubiera estado equivocada**; debe conservarse como evidencia histórica, idealmente con una nota de supersesión indicando que la Fase 2 de contenedorización fue ejecutada posteriormente mediante PR #3.
+
+### Distinción histórica obligatoria
+
+PR #3 valida una **imagen de producción en sentido de configuración del contenedor**, no demuestra por sí solo que el backend se haya desplegado en Production. En esta reconciliación no se debe convertir “production Docker image” en “Production deploy”. Cualquier deploy real se acreditará únicamente al llegar al PR que lo demuestre.
+
+### Acción documental requerida
+
+```text
+backend/README.md = MARCAR_CONTENEDORIZACION_COMO_IMPLEMENTADA_DESDE_PR_3
+backend/README.md = INCLUIR_DOCKERFILE_Y_DOCKERIGNORE_EN_ESTRUCTURA
+DOC_22 = CONSERVAR_COMO_SNAPSHOT_HISTORICO
+DOC_22 = AGREGAR_NOTA_DE_SUPERSESION_PR_3_SIN_REESCRIBIR_EVIDENCIA
+PRODUCTION_DEPLOY = NO_INFERIR_DESDE_PR_3
+PROJECT_STATUS.md = NO_REWRITE
+```
+
+### Resultado PR #3
+
+```text
+PR_3_AUDIT = VERIFIED
+DOCUMENTATION_DRIFT_FOUND = YES
+DRIFT_ITEMS = 1 OPERATIVE_DOC + 1 HISTORICAL_DOC_NEEDS_SUPERSESSION_NOTE
+PRODUCTION_MUTATIONS = 0
+PROGRESS = 3/95
+NEXT = PR #4
+```
