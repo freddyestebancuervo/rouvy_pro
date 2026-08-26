@@ -55,3 +55,65 @@ DRIFT_ITEMS = 3
 PRODUCTION_MUTATIONS = 0
 NEXT = PR #2
 ```
+
+## PR #2 — `feat: integrate Flutter CI security block 2`
+
+### Evidencia GitHub
+
+```text
+PR = #2
+STATE = MERGED
+BASE_SHA = c2b2da9d395a5a4f03f821fd2854a032e38c4313
+HEAD_SHA = 4062595c444ae301164c2f738e94124d1c48905f
+MERGE_SHA = 5cc684e43fe5ab6dc4a41411e65facc3f4529b9c
+CHANGED_FILES = 57
+```
+
+El PR integró el segundo bloque de la historia de `feature/d2` en `main`. Entre los cambios materiales quedaron: configuración Firebase/Crashlytics real, cliente de sesión backend en Flutter, feature Flutter de Workouts, endurecimiento CORS, eliminación de credenciales QA hardcodeadas, mejoras de higiene del repo y corrección del job backend de CI para generar claves JWT efímeras y aplicar todas las migraciones pendientes mediante `npm run migrate:up`.
+
+### Persistencia al corte PR #95
+
+La evidencia del árbol exacto de PR #95 confirma que los cambios estructurales de PR #2 no eran temporales:
+
+- `backend/src/config/cors.config.ts` sigue presente y conserva la política fail-closed: allowlist explícita cuando existe `CORS_ALLOWED_ORIGINS`, localhost únicamente fuera de Production y `origin: false` en Production sin configuración.
+- `.github/workflows/ci.yml` sigue generando el par JWT efímero y ejecutando `npm run migrate:up`; esos mecanismos fueron posteriormente ampliados, pero la corrección base introducida en PR #2 permaneció.
+- La feature Flutter de Workouts integrada por este bloque forma parte de `main`; por tanto las referencias históricas a trabajo exclusivamente local en `feature/d2` ya no describen el estado del repositorio.
+
+### Drift documental detectado al corte PR #95
+
+`docs/AUDITORIA_FINAL.md` fue escrito como fotografía previa al merge y **no volvió a modificarse después de los commits incorporados por PR #2**. Su encabezado todavía afirma:
+
+```text
+Rama = feature/d2
+ningún commit fue publicado (push)
+ninguna rama fue fusionada (merge)
+todo vive en commits locales sin upstream
+```
+
+Esas afirmaciones eran válidas en la sesión de auditoría del 2026-07-23, pero quedaron superadas cuando PR #2 fue fusionado a `main`. Como el archivo se titula `Auditoría final del repositorio` y no contiene un aviso de supersesión, puede interpretarse erróneamente como estado vigente.
+
+### Precisión histórica que debe preservarse
+
+No se debe borrar ni reescribir la evidencia técnica de la auditoría original: los 186 tests Flutter, 73 unit backend, 57 e2e, validaciones CORS y las observaciones de ese momento siguen siendo evidencia histórica. La corrección segura es marcar explícitamente el documento como **snapshot histórico previo a PR #2** y enlazar al estado reconciliado posterior, no convertir retrospectivamente sus resultados de 2026-07-23 en resultados actuales.
+
+También se detecta una inconsistencia dentro de la descripción histórica del propio PR #2: el texto advertía que CI seguía en Flutter 3.24.0 y `firebase-tools` sin fijar, mientras el diff final del PR ya contiene `flutter-version: '3.32.0'` y `firebase-tools@14.27.0`. Para la reconciliación del repositorio se toma el **diff/merge final como evidencia autoritativa**; no se modifica la descripción del PR cerrado.
+
+### Acción documental requerida
+
+```text
+AUDITORIA_FINAL.md = AGREGAR_BANNER_HISTORICO_SUPERADO_POR_PR_2
+AUDITORIA_FINAL.md = CONSERVAR_EVIDENCIA_2026_07_23_SIN_REESCRIBIRLA
+PR_BODY_2 = HISTORICAL_METADATA_NO_EDIT
+PROJECT_STATUS.md = NO_REWRITE
+```
+
+### Resultado PR #2
+
+```text
+PR_2_AUDIT = VERIFIED
+DOCUMENTATION_DRIFT_FOUND = YES
+DRIFT_ITEMS = 1 REPOSITORY_DOC + 1 HISTORICAL_PR_METADATA_INCONSISTENCY
+PRODUCTION_MUTATIONS = 0
+PROGRESS = 2/95
+NEXT = PR #3
+```
