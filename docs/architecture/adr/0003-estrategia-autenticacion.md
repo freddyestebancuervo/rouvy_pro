@@ -1,5 +1,7 @@
 # ADR-0003: Estrategia de autenticación (dos sistemas, plan de convergencia)
 
+> **Nota de reconciliación PR #7 (corte PR #95):** este ADR conserva el diagnóstico y la decisión arquitectónica tomada el 2026-07-24, pero su estado de ejecución quedó superado antes de que PR #7 fuera fusionado. PR #4 implementó el puente Firebase → NestJS mediante `POST /auth/firebase/exchange`, añadió `firebase_uid` con la migración `0005_users_firebase_uid.sql` y validación server-side con Firebase Admin; PR #5 endureció concurrencia/rate limiting del flujo. Por tanto, las frases históricas de abajo que dicen “no hay ningún mecanismo”, “queda pendiente” o “firebase_uid no existe” deben leerse como **estado previo a PR #4**, no como estado vigente. La decisión de convergencia se considera ejecutada en su núcleo desde PR #4.
+
 - **Fecha:** 2026-07-24
 - **Estado:** Aceptado el diagnóstico y el plan de convergencia; la ejecución del puente (T2 en el plan de transición) queda pendiente de priorización — este ADR no la implementa.
 
