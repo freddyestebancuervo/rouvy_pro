@@ -8,7 +8,7 @@
 - Los ADR conservan la decisión tomada y su contexto original. Cuando una decisión fue ejecutada después, debe separarse la **decisión histórica** de su **estado de ejecución vigente**.
 - Para estado operativo vigente se debe consultar `PROJECT_STATUS_CURRENT.md` junto con evidencia GitHub exacta. `PROJECT_STATUS.md` se conserva como historial append-only.
 
-## Supersesiones ya demostradas en el recorrido #1 → #10
+## Supersesiones ya demostradas en el recorrido #1 → #11
 
 ### Autenticación — `ADR-0003`
 
@@ -37,6 +37,16 @@ PR #9 acredita la implementación y el CI automatizado del cambio. No se usa por
 PR #10 (`4feae4e62227eeb25ea22fe1028bc3bc075ee7b3`) añadió cobertura automatizada enfocada en las páginas Flutter de autenticación: Login, Registro y Recuperación de contraseña, más un harness compartido. El diff incorpora 15 `testWidgets` que ejercitan validación de formularios, estados de carga, éxito/error y navegación, incluido Google Sign-In en Login. Los tests usan `MockAuthRepository` y overrides locales; por tanto, **no** prueban una integración real contra Firebase, Google/Apple ni el backend NestJS.
 
 Los cuatro archivos introducidos por PR #10 siguen presentes en el árbol exacto del corte PR #95. Esta mejora de cobertura no convierte los conteos históricos del Documento 2 en actuales; simplemente los supersede donde se intenten leer como inventario vigente.
+
+### Scaffold nativo iOS — PR #11
+
+PR #11 (`16e81cc1dd2c50449de50266c721710b3694b6bf`) integró a `main` el scaffold nativo base de Flutter para iOS: proyecto/workspace Xcode, `Runner`, assets, configuraciones Flutter y `RunnerTests`. En ese PR el bundle identifier era `com.ridepro.app` y el deployment target era iOS 13.0.
+
+El CI de PR #11 fue 3/3 verde para los jobs generales de Flutter, Firestore y Backend, pero **no ejecutó Xcode ni compiló iOS en macOS**. Por tanto, PR #11 prueba la integración del scaffold y su consistencia estática, no una compilación nativa ni un arranque en simulador/dispositivo.
+
+Al corte PR #95, la estructura iOS introducida por PR #11 sigue presente, pero evolucionó por PR posteriores: el bundle identifier vigente es `com.korixa.app` en Production y `com.korixa.app.dev` en Development, y el deployment target es iOS 14.0. Esos cambios no se atribuyen retroactivamente a PR #11; se reconciliarán en sus PR correspondientes.
+
+`docs/audits/AUDITORIA_FINAL/06_MULTIPLATAFORMA.md` se conserva como snapshot histórico de 2026-07-24. Su afirmación de que `ios/` estaba presente corresponde a la rama/HEAD que auditó y no sustituye la evidencia de integración a `main` aportada por PR #11.
 
 ## Documentos preservados sin reescritura
 
