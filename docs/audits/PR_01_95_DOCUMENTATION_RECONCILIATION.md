@@ -424,3 +424,85 @@ PRODUCTION_MUTATIONS = 0
 PROGRESS_DOCUMENTATION_CLOSED = 6/95
 NEXT = PR #7
 ```
+
+## PR #7 — `docs(governance): add post-v0.5.0 project documentation`
+
+### Evidencia GitHub
+
+```text
+PR = #7
+STATE = MERGED
+BASE_SHA = 2e8cf132f0e8aa7219803c4879b1f90e2c188dd3
+HEAD_SHA = b2457a50712c40e4f148f70d7fa5c27f05a33ed2
+MERGE_SHA = b7de233a48147009901b8fe5f7f9f270fe4886dd
+COMMITS = 1
+CHANGED_FILES = 39
+ADDITIONS = 7168
+DELETIONS = 0
+CI_RUN = 30590250912
+CI = SUCCESS
+```
+
+PR #7 fue documental: incorporó el protocolo de desarrollo, el documento de arquitectura general, siete ADR, la colección histórica `docs/audits/AUDITORIA_FINAL/` y el análisis/diseño de T-F0.1. El propio body del PR declara que esos documentos fueron preparados antes de la integración v0.5.0 y que los registros de auditoría se retienen como evidencia punto-en-el-tiempo.
+
+### CI del PR #7
+
+El run `30590250912` ejecutado sobre el HEAD exacto `b2457a5...` terminó con los tres jobs de CI en verde:
+
+```text
+Flutter — analyze + test = SUCCESS
+Firestore — reglas de seguridad (A3/A5) = SUCCESS
+Backend — migración + e2e (C2) = SUCCESS
+```
+
+### Drift documental detectado
+
+PR #7 importó documentación histórica que ya estaba parcialmente superada por PR #3–#5 al momento de fusionarse. El caso más importante es autenticación:
+
+1. `docs/architecture/01_SYSTEM_ARCHITECTURE.md` seguía describiendo Firebase Auth y NestJS/PostgreSQL como dos sistemas completamente independientes, sin puente; también enumeraba solo cuatro migraciones y describía ausencia de backend cloud como estado actual de 2026-07-24.
+2. `docs/architecture/adr/0003-estrategia-autenticacion.md` decía que el intercambio Firebase → backend quedaba pendiente, que no había mecanismo de traducción de sesión y que la columna `firebase_uid` no existía.
+3. Esas afirmaciones fueron correctas como snapshot previo, pero ya estaban superadas por PR #4 — puente `POST /auth/firebase/exchange` + migración `0005_users_firebase_uid.sql` — y por el endurecimiento de PR #5. PR #3 ya había añadido/validado la contenedorización y PR #4 conserva evidencia de un despliegue real de Development.
+
+No se reescribieron las 30+ auditorías históricas para convertirlas artificialmente en documentos actuales. Tampoco se adelantó el estado de decisiones que dependen de PR posteriores todavía no auditados en este recorrido.
+
+### Corrección aplicada
+
+Se aplicaron dos medidas de precisión documental:
+
+- `docs/architecture/adr/0003-estrategia-autenticacion.md` conserva íntegro su contexto/decisión original y ahora lleva una nota explícita de reconciliación: su estado de ejecución quedó superado por PR #4/#5 antes del merge de PR #7.
+- Se creó `docs/architecture/README.md` como guía de vigencia. Clasifica `01_SYSTEM_ARCHITECTURE.md` como snapshot histórico + arquitectura objetivo, explica las supersesiones ya demostradas por PR #1–#6 y establece que conteos/frases “hoy” no son estado operativo vigente.
+
+La guía preserva `docs/audits/AUDITORIA_FINAL/*` y `docs/tasks/TF0_1_ANALISIS_Y_DISENO.md` como evidencia histórica. `RIDEPRO_DEVELOPMENT_PROTOCOL.md` no se reinterpreta todavía contra gobernanza posterior: esa evolución se reconciliará al llegar a los PR correspondientes, manteniendo el orden #1 → #95.
+
+### Resultado PR #7
+
+```text
+PR_7_AUDIT = VERIFIED
+DOCUMENTATION_DRIFT_FOUND = YES
+DOCUMENTATION_CLOSED = YES
+FILES_FIXED = docs/architecture/adr/0003-estrategia-autenticacion.md, docs/architecture/README.md
+HISTORICAL_AUDITS_REWRITTEN = NO
+ARCHITECTURE_SNAPSHOT_CLASSIFIED = HISTORICAL_PLUS_TARGET
+ADR_0003_EXECUTION_STATUS = SUPERSEDED_BY_PR_4_AND_5
+LATER_PR_GOVERNANCE_STATE = DEFERRED_UNTIL_SEQUENTIAL_REVIEW
+PROJECT_STATUS.md = UNTOUCHED
+PRODUCTION_MUTATIONS = 0
+PROGRESS_DOCUMENTATION_CLOSED = 7/95
+NEXT = PR #8
+```
+
+## Estado del recorrido
+
+```text
+PR_1_DOCUMENTATION = CLOSED
+PR_2_DOCUMENTATION = CLOSED
+PR_3_DOCUMENTATION = CLOSED
+PR_4_DOCUMENTATION = CLOSED
+PR_5_DOCUMENTATION = CLOSED
+PR_6_DOCUMENTATION = CLOSED
+PR_7_DOCUMENTATION = CLOSED
+PROJECT_STATUS.md = UNTOUCHED
+PRODUCTION_MUTATIONS = 0
+PROGRESS_DOCUMENTATION_CLOSED = 7/95
+NEXT = PR #8
+```
