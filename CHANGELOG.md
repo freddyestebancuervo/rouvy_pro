@@ -14,9 +14,11 @@
   cuenta de servicio).
 - **Rate limiting híbrido** en `/auth/firebase/exchange`: capa por IP más
   capas por identidad, ajustadas sin debilitar la protección anti-abuso.
-- Imagen Docker de producción para el backend: build multi-stage, usuario
-  no-root, `HEALTHCHECK` contra `/v1/health`, sin código fuente TypeScript ni
-  `devDependencies` en el runtime.
+- Imagen Docker orientada a runtime de producción para el backend: build
+  multi-stage, usuario no-root, `HEALTHCHECK` contra `/v1/health`, sin código
+  fuente TypeScript ni `devDependencies` en el runtime. Esta descripción
+  acredita la configuración del contenedor; **no acredita por sí sola un
+  despliegue real del backend a Production**.
 - Cliente de sesión de backend en Flutter (`backend_auth_service`,
   `backend_dio_client`) para consumir la API de RidePro desde la app.
 
@@ -58,7 +60,9 @@
 
 ### Infrastructure
 - Integración de `feature/d2` en `main` mediante 5 bloques funcionales
-  secuenciales (PRs #1–#5), cada uno validado de forma aislada (build,
-  lint, tests unitarios, e2e, migraciones desde base limpia) antes de su
-  propio merge commit tradicional, preservando los hashes originales de
-  cada commit.
+  secuenciales (PRs #1–#5). La evidencia de validación previa al merge **no
+  fue uniforme entre los cinco PR**: el HEAD final del PR #4 conservó el job
+  Backend e2e en rojo antes de ser fusionado, mientras que el PR #5 cerró
+  con Flutter, Firestore y Backend en verde. La auditoría secuencial conserva
+  el resultado exacto de cada PR en lugar de convertir retrospectivamente
+  todos los merges en PASS.
