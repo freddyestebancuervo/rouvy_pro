@@ -8,7 +8,7 @@
 - Los ADR conservan la decisión tomada y su contexto original. Cuando una decisión fue ejecutada después, debe separarse la **decisión histórica** de su **estado de ejecución vigente**.
 - Para estado operativo vigente se debe consultar `PROJECT_STATUS_CURRENT.md` junto con evidencia GitHub exacta. `PROJECT_STATUS.md` se conserva como historial append-only.
 
-## Supersesiones ya demostradas en el recorrido #1 → #9
+## Supersesiones ya demostradas en el recorrido #1 → #10
 
 ### Autenticación — `ADR-0003`
 
@@ -29,6 +29,14 @@ Los conteos de módulos, tests y migraciones dentro de `01_SYSTEM_ARCHITECTURE.m
 `docs/tasks/TF0_1_ANALISIS_Y_DISENO.md` es un documento histórico de análisis/diseño y por eso termina diciendo que la implementación quedaba a la espera de aprobación. Esa frase describe correctamente el momento en que fue escrito, pero quedó superada por PR #9 (`0582e4933ef9f1e5ab0fce8f18197c6ffb2c7614`): `HealthPlatformGatewayImpl.checkAvailability()` pasó a cortar el flujo Web antes de evaluar `dart:io Platform`, con regresión automatizada para `checkAvailability()`, `requestPermissions()` y `checkPermissionStatus()`.
 
 PR #9 acredita la implementación y el CI automatizado del cambio. No se usa por sí solo como prueba de una interacción manual en navegador real; esa validación es evidencia separada y posterior. El hallazgo adicional documentado en la sección 12 del análisis (`HealthPackageAdapter._isIOS`) tampoco se da por resuelto por PR #9, porque quedó explícitamente fuera de su alcance.
+
+### Cobertura de autenticación Flutter — PR #10
+
+`docs/audits/AUDITORIA_FINAL/02_CALIDAD_DEL_CODIGO.md` conserva una evaluación histórica de cobertura de 2026-07-24 y declara explícitamente que no verificó cobertura real por archivo. Sus conteos de archivos de test no son un inventario vigente.
+
+PR #10 (`4feae4e62227eeb25ea22fe1028bc3bc075ee7b3`) añadió cobertura automatizada enfocada en las páginas Flutter de autenticación: Login, Registro y Recuperación de contraseña, más un harness compartido. El diff incorpora 15 `testWidgets` que ejercitan validación de formularios, estados de carga, éxito/error y navegación, incluido Google Sign-In en Login. Los tests usan `MockAuthRepository` y overrides locales; por tanto, **no** prueban una integración real contra Firebase, Google/Apple ni el backend NestJS.
+
+Los cuatro archivos introducidos por PR #10 siguen presentes en el árbol exacto del corte PR #95. Esta mejora de cobertura no convierte los conteos históricos del Documento 2 en actuales; simplemente los supersede donde se intenten leer como inventario vigente.
 
 ## Documentos preservados sin reescritura
 
