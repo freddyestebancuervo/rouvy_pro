@@ -31,11 +31,11 @@ El PR integró el módulo D2 Workouts al backend junto con `backend/migrations/0
 
 ### Contradicciones documentales detectadas al corte PR #95
 
-1. `ROADMAP_M0_M1.md` todavía dice que D2 vive en `feature/d2` y que está **sin mergear a `main` todavía**. Esto contradice el hecho de que PR #1 fue fusionado.
-2. `VERIFICATION_GUIDE.md` todavía instruye `git checkout feature/d2` porque afirma que Track 4 no está en `main`. Esa instrucción quedó obsoleta al fusionarse PR #1.
-3. `docs/TECHNICAL_SPECIFICATION_BLOQUE_D.md` sección 3.10 sigue describiendo D2 como completo en la rama `feature/d2`, sin registrar que el módulo fue integrado por PR #1.
+1. `ROADMAP_M0_M1.md` todavía decía que D2 vivía en `feature/d2` y estaba **sin mergear a `main` todavía**.
+2. `VERIFICATION_GUIDE.md` todavía instruía `git checkout feature/d2` porque afirmaba que Track 4 no estaba en `main`.
+3. `docs/TECHNICAL_SPECIFICATION_BLOQUE_D.md` sección 3.10 seguía describiendo D2 como completo en la rama `feature/d2`, sin registrar que el módulo fue integrado por PR #1.
 
-### Acción documental requerida
+### Acción documental
 
 ```text
 ROADMAP_M0_M1.md = CORREGIR_ESTADO_DE_MERGE_D2
@@ -44,7 +44,7 @@ TECHNICAL_SPECIFICATION_BLOQUE_D.md = REGISTRAR_D2_MERGED_VIA_PR_1
 PROJECT_STATUS.md = NO_REWRITE
 ```
 
-No se cambian todavía otros estados de D3+ en esta entrada: se reconciliarán al llegar a sus PR correspondientes para evitar adelantar evidencia.
+No se avanzaron estados de D3+ en este cierre; se reconciliarán al llegar a sus PR correspondientes.
 
 ### Resultado PR #1
 
@@ -52,6 +52,8 @@ No se cambian todavía otros estados de D3+ en esta entrada: se reconciliarán a
 PR_1_AUDIT = VERIFIED
 DOCUMENTATION_DRIFT_FOUND = YES
 DRIFT_ITEMS = 3
+DOCUMENTATION_CLOSED = YES
+FILES_FIXED = ROADMAP_M0_M1.md, VERIFICATION_GUIDE.md, docs/TECHNICAL_SPECIFICATION_BLOQUE_D.md
 PRODUCTION_MUTATIONS = 0
 NEXT = PR #2
 ```
@@ -69,52 +71,35 @@ MERGE_SHA = 5cc684e43fe5ab6dc4a41411e65facc3f4529b9c
 CHANGED_FILES = 57
 ```
 
-El PR integró el segundo bloque de la historia de `feature/d2` en `main`. Entre los cambios materiales quedaron: configuración Firebase/Crashlytics real, cliente de sesión backend en Flutter, feature Flutter de Workouts, endurecimiento CORS, eliminación de credenciales QA hardcodeadas, mejoras de higiene del repo y corrección del job backend de CI para generar claves JWT efímeras y aplicar todas las migraciones pendientes mediante `npm run migrate:up`.
+El PR integró el segundo bloque de la historia de `feature/d2` en `main`. Entre los cambios materiales quedaron configuración Firebase/Crashlytics real, cliente de sesión backend en Flutter, feature Flutter de Workouts, endurecimiento CORS, eliminación de credenciales QA hardcodeadas, mejoras de higiene del repo y corrección del job backend de CI para generar claves JWT efímeras y aplicar todas las migraciones pendientes mediante `npm run migrate:up`.
 
 ### Persistencia al corte PR #95
 
 La evidencia del árbol exacto de PR #95 confirma que los cambios estructurales de PR #2 no eran temporales:
 
-- `backend/src/config/cors.config.ts` sigue presente y conserva la política fail-closed: allowlist explícita cuando existe `CORS_ALLOWED_ORIGINS`, localhost únicamente fuera de Production y `origin: false` en Production sin configuración.
-- `.github/workflows/ci.yml` sigue generando el par JWT efímero y ejecutando `npm run migrate:up`; esos mecanismos fueron posteriormente ampliados, pero la corrección base introducida en PR #2 permaneció.
-- La feature Flutter de Workouts integrada por este bloque forma parte de `main`; por tanto las referencias históricas a trabajo exclusivamente local en `feature/d2` ya no describen el estado del repositorio.
+- `backend/src/config/cors.config.ts` sigue presente y conserva la política fail-closed.
+- `.github/workflows/ci.yml` sigue generando el par JWT efímero y ejecutando `npm run migrate:up`.
+- La feature Flutter de Workouts integrada por este bloque forma parte de `main`.
 
-### Drift documental detectado al corte PR #95
+### Drift documental detectado
 
-`docs/AUDITORIA_FINAL.md` fue escrito como fotografía previa al merge y **no volvió a modificarse después de los commits incorporados por PR #2**. Su encabezado todavía afirma:
+`docs/AUDITORIA_FINAL.md` fue escrito como fotografía previa al merge y todavía afirmaba que ningún commit había sido publicado, ninguna rama fusionada y todo vivía en commits locales de `feature/d2`. Esas afirmaciones eran válidas en la sesión original del 2026-07-23, pero quedaron superadas por PR #2.
 
-```text
-Rama = feature/d2
-ningún commit fue publicado (push)
-ninguna rama fue fusionada (merge)
-todo vive en commits locales sin upstream
-```
+No se reescribió la evidencia técnica histórica. Se marcó el documento como **snapshot histórico previo a PR #2** y se enlazó al estado reconciliado posterior.
 
-Esas afirmaciones eran válidas en la sesión de auditoría del 2026-07-23, pero quedaron superadas cuando PR #2 fue fusionado a `main`. Como el archivo se titula `Auditoría final del repositorio` y no contiene un aviso de supersesión, puede interpretarse erróneamente como estado vigente.
-
-### Precisión histórica que debe preservarse
-
-No se debe borrar ni reescribir la evidencia técnica de la auditoría original: los 186 tests Flutter, 73 unit backend, 57 e2e, validaciones CORS y las observaciones de ese momento siguen siendo evidencia histórica. La corrección segura es marcar explícitamente el documento como **snapshot histórico previo a PR #2** y enlazar al estado reconciliado posterior, no convertir retrospectivamente sus resultados de 2026-07-23 en resultados actuales.
-
-También se detecta una inconsistencia dentro de la descripción histórica del propio PR #2: el texto advertía que CI seguía en Flutter 3.24.0 y `firebase-tools` sin fijar, mientras el diff final del PR ya contiene `flutter-version: '3.32.0'` y `firebase-tools@14.27.0`. Para la reconciliación del repositorio se toma el **diff/merge final como evidencia autoritativa**; no se modifica la descripción del PR cerrado.
-
-### Acción documental requerida
-
-```text
-AUDITORIA_FINAL.md = AGREGAR_BANNER_HISTORICO_SUPERADO_POR_PR_2
-AUDITORIA_FINAL.md = CONSERVAR_EVIDENCIA_2026_07_23_SIN_REESCRIBIRLA
-PR_BODY_2 = HISTORICAL_METADATA_NO_EDIT
-PROJECT_STATUS.md = NO_REWRITE
-```
+La inconsistencia del body histórico del propio PR #2 se preserva como metadata histórica; el diff/merge final es la evidencia autoritativa.
 
 ### Resultado PR #2
 
 ```text
 PR_2_AUDIT = VERIFIED
 DOCUMENTATION_DRIFT_FOUND = YES
-DRIFT_ITEMS = 1 REPOSITORY_DOC + 1 HISTORICAL_PR_METADATA_INCONSISTENCY
+DOCUMENTATION_CLOSED = YES
+FILES_FIXED = docs/AUDITORIA_FINAL.md
+HISTORICAL_BODY_PRESERVED = YES
+CLOSED_PR_BODY_REWRITTEN = NO
+PROJECT_STATUS.md = NO_REWRITE
 PRODUCTION_MUTATIONS = 0
-PROGRESS = 2/95
 NEXT = PR #3
 ```
 
@@ -132,87 +117,40 @@ CHANGED_FILES = 7
 CI_RUN = 30514006988 / SUCCESS
 ```
 
-El PR añadió y validó la base de contenedorización del backend. El diff final incluye `backend/Dockerfile`, `backend/.dockerignore`, separación de `tsconfig.build.json`/`tsconfig.eslint.json`, ajustes de `tsconfig.json` y nuevas reglas de `.gitignore` para secretos/artefactos locales. La imagen se diseñó multi-stage, con runtime no-root y `HEALTHCHECK` contra `/v1/health`.
+El PR añadió y validó la base de contenedorización del backend. El diff final incluye `backend/Dockerfile`, `backend/.dockerignore`, separación de `tsconfig.build.json`/`tsconfig.eslint.json`, ajustes de `tsconfig.json` y reglas de `.gitignore` para secretos/artefactos locales. La imagen se diseñó multi-stage, con runtime no-root y `HEALTHCHECK` contra `/v1/health`.
 
 ### Persistencia al corte PR #95
 
-La contenedorización no fue temporal. En el árbol exacto del corte PR #95, `backend/Dockerfile` sigue presente y ha evolucionado de Node 20 a Node 24, conserva build/runtime separados, añade una etapa `test`, ejecuta el runtime como usuario `node`, mantiene `HEALTHCHECK /v1/health` y continúa copiando solo el JavaScript compilado a la imagen final.
+En el árbol exacto del corte PR #95, `backend/Dockerfile` sigue presente y evolucionó manteniendo build/runtime separados, runtime `node` no-root y `HEALTHCHECK /v1/health`.
 
 ```text
 DOCKERFILE_PRESENT_AT_PR95 = YES
 MULTI_STAGE = YES
 RUNTIME_NON_ROOT = YES
 HEALTHCHECK = /v1/health
-SOURCE_TS_IN_RUNTIME = NO_BY_DOCKERFILE_DESIGN
 PR3_CHANGE_PRESERVED = YES
 ```
 
-### Drift documental detectado al corte PR #95
+### Drift documental detectado
 
-Se detectan dos piezas que necesitan tratamiento distinto:
+1. `backend/README.md` todavía trataba la contenedorización como pendiente y no incluía `Dockerfile`/`.dockerignore` en su árbol resumido.
+2. `docs/audits/AUDITORIA_FINAL/22_AUDITORIA_Y_PLAN_DESPLIEGUE_BACKEND_DEVELOPMENT.md` decía `Dockerfile = No existe`. Esa afirmación era correcta el 2026-07-26 y se conservó como evidencia histórica, añadiendo una nota de supersesión por PR #3.
 
-1. `backend/README.md` es documentación operativa y, al corte PR #95, todavía termina recomendando como próximo paso ejecutar las **“fases de contenedorización/Cloud Run/Cloud SQL pendientes”**. La parte de Cloud Run/Cloud SQL puede seguir siendo histórica según el punto del roadmap, pero **la contenedorización dejó de estar pendiente desde PR #3**. El mismo README tampoco incluye `Dockerfile`/`.dockerignore` en su árbol resumido, por lo que subrepresenta una capacidad ya integrada.
-2. `docs/audits/AUDITORIA_FINAL/22_AUDITORIA_Y_PLAN_DESPLIEGUE_BACKEND_DEVELOPMENT.md` dice `Dockerfile = No existe` y lo enumera como bloqueante. Esa afirmación era correcta el 2026-07-26 y el propio documento declara que es una auditoría/plan de ese momento. Por tanto **no debe reescribirse como si hubiera estado equivocada**; debe conservarse como evidencia histórica, idealmente con una nota de supersesión indicando que la Fase 2 de contenedorización fue ejecutada posteriormente mediante PR #3.
-
-### Distinción histórica obligatoria
-
-PR #3 valida una **imagen de producción en sentido de configuración del contenedor**, no demuestra por sí solo que el backend se haya desplegado en Production. En esta reconciliación no se debe convertir “production Docker image” en “Production deploy”. Cualquier deploy real se acreditará únicamente al llegar al PR que lo demuestre.
-
-### Acción documental requerida
-
-```text
-backend/README.md = MARCAR_CONTENEDORIZACION_COMO_IMPLEMENTADA_DESDE_PR_3
-backend/README.md = INCLUIR_DOCKERFILE_Y_DOCKERIGNORE_EN_ESTRUCTURA
-DOC_22 = CONSERVAR_COMO_SNAPSHOT_HISTORICO
-DOC_22 = AGREGAR_NOTA_DE_SUPERSESION_PR_3_SIN_REESCRIBIR_EVIDENCIA
-PRODUCTION_DEPLOY = NO_INFERIR_DESDE_PR_3
-PROJECT_STATUS.md = NO_REWRITE
-```
+PR #3 acredita preparación/validación de imagen, no un deploy real de Production.
 
 ### Resultado PR #3
 
 ```text
 PR_3_AUDIT = VERIFIED
 DOCUMENTATION_DRIFT_FOUND = YES
-DRIFT_ITEMS = 1 OPERATIVE_DOC + 1 HISTORICAL_DOC_NEEDS_SUPERSESSION_NOTE
-PRODUCTION_MUTATIONS = 0
-PROGRESS = 3/95
-NEXT = PR #4
-```
-
-## Cierre documental PR #1 → #3
-
-Las correcciones anteriores ya no quedan solo como hallazgos: fueron aplicadas en la rama de reconciliación y verificadas después de escribirlas.
-
-### PR #1
-
-```text
-DOCUMENTATION_CLOSED = YES
-FILES_FIXED = ROADMAP_M0_M1.md, VERIFICATION_GUIDE.md, docs/TECHNICAL_SPECIFICATION_BLOQUE_D.md
-D2_MERGED_VIA_PR_1 = EXPLICIT
-OBSOLETE_FEATURE_D2_CHECKOUT = REMOVED
-LATER_D3_PLUS_STATUS_ADVANCED = NO
-```
-
-### PR #2
-
-```text
-DOCUMENTATION_CLOSED = YES
-FILES_FIXED = docs/AUDITORIA_FINAL.md
-HISTORICAL_BODY_PRESERVED = YES
-SUPERSESSION_BANNER = YES
-CLOSED_PR_BODY_REWRITTEN = NO
-```
-
-### PR #3
-
-```text
 DOCUMENTATION_CLOSED = YES
 FILES_FIXED = backend/README.md, docs/audits/AUDITORIA_FINAL/22_AUDITORIA_Y_PLAN_DESPLIEGUE_BACKEND_DEVELOPMENT.md
 CONTAINERIZATION_STATUS = IMPLEMENTED_VIA_PR_3
 PRODUCTION_DEPLOY_INFERRED = NO
 HISTORICAL_BODY_PRESERVED = YES
-SUPERSESSION_BANNER = YES
+PROJECT_STATUS.md = NO_REWRITE
+PRODUCTION_MUTATIONS = 0
+NEXT = PR #4
 ```
 
 ## PR #4 — `feat(auth): add Firebase to NestJS authentication bridge`
@@ -229,17 +167,15 @@ COMMITS = 4
 CHANGED_FILES = 58
 ```
 
-PR #4 incorporó Firebase Admin al backend, la migración `0005_users_firebase_uid.sql`, asociación de identidad por `firebase_uid`, `POST /auth/firebase/exchange`, logout, rate limiting y pruebas de concurrencia. La migración `0005` añade `firebase_uid` nullable y un índice único parcial; al corte PR #95 sigue presente. El controller del corte #95 conserva `POST /auth/firebase/exchange`, que extrae un Bearer ID token Firebase y lo envía a `AuthService.exchangeFirebaseToken`.
+PR #4 incorporó Firebase Admin al backend, la migración `0005_users_firebase_uid.sql`, asociación de identidad por `firebase_uid`, `POST /auth/firebase/exchange`, logout, rate limiting y pruebas de concurrencia. La migración `0005` añade `firebase_uid` nullable y un índice único parcial; al corte PR #95 sigue presente. El controller del corte #95 conserva `POST /auth/firebase/exchange`.
 
 ### Evidencia de Development y alcance
 
-La documentación integrada por el propio PR conserva evidencia de un despliegue real de **Development**, no Production: una imagen inmutable fue publicada en Artifact Registry y `ridepro-backend-dev` quedó en la revisión `ridepro-backend-dev-00007-llf`, Ready=True, con 100% del tráfico; `/v1/health` respondió 200 contra base conectada. Este hecho no autoriza ni demuestra ningún deploy de Production.
+La documentación integrada por el propio PR conserva evidencia de un despliegue real de **Development**, no Production: una imagen inmutable fue publicada en Artifact Registry y `ridepro-backend-dev` quedó en la revisión `ridepro-backend-dev-00007-llf`, Ready=True, con 100% del tráfico; `/v1/health` respondió 200 contra base conectada.
 
-Fase 4.1 también documentó la corrección de la race condition de identidad y validó 8 requests concurrentes, pero 20 concurrentes mostraron agotamiento del pool con default 10. Ese límite quedó explícitamente pendiente para trabajo posterior.
+Fase 4.1 documentó además una race condition de identidad y un límite aparente del pool bajo concurrencia alta. Parte de ese diagnóstico fue posteriormente refinado y corregido en PR #5.
 
 ### CI del HEAD final del PR
-
-GitHub conserva un run de CI asociado al HEAD final `675bf0d...`:
 
 ```text
 CI_RUN = 30562446745
@@ -249,40 +185,13 @@ BACKEND = FAILURE
 FAILED_STEP = Correr los tests e2e
 ```
 
-El propio cuerpo del PR advertía la limitación del pool PostgreSQL y afirmaba que no debía fusionarse mientras los checks requeridos siguieran rojos. Sin embargo, GitHub registra el PR como `merged=true`. Esta reconciliación **no convierte ese run rojo en PASS** y lo conserva como evidencia histórica de proceso. La persistencia funcional posterior se demuestra por el código y por PRs posteriores, no reescribiendo el resultado de ese CI.
+El propio cuerpo del PR advertía que no debía fusionarse mientras los checks requeridos siguieran rojos; GitHub registra, sin embargo, `merged=true`. Esta reconciliación conserva el run rojo como evidencia histórica y no lo convierte retrospectivamente en PASS.
 
 ### Drift documental detectado
 
-`backend/README.md`, documentación operativa vigente, seguía afirmando al corte PR #95:
+`backend/README.md` seguía afirmando al corte PR #95 que no existía puente Firebase↔NestJS, que el backend JWT era completamente independiente de Firebase Auth, que no había backend desplegado en ningún entorno cloud real y que había solo cuatro migraciones.
 
-```text
-Sin puente Firebase↔NestJS
-backend JWT completamente independiente de Firebase Auth
-usuario Firebase sin forma automática de autenticarse contra backend
-Sin backend desplegado en ningún entorno cloud real
-4 migraciones
-```
-
-Esas afirmaciones quedaron superadas por PR #4. En cambio, documentos como `19_AUDITORIA_AUTHENTICATION_RIDEPRO_DEVELOPMENT.md` y el cuerpo histórico del Documento 22 describen estados punto-en-el-tiempo previos al PR #4 y se preservan como evidencia histórica; no se reescribe su cuerpo para aparentar que en su fecha el puente ya existía.
-
-`docs/TECHNICAL_SPECIFICATION_M0_M1.md` conserva la separación conceptual “cliente Firebase directo / backend objetivo”. No se reescribe en este cierre porque PR #4 no modificó Flutter: el puente server-side sí existe, pero no constituye por sí solo una migración completa del cliente.
-
-### Corrección aplicada
-
-Se actualizó `backend/README.md` para registrar exclusivamente hechos demostrados por PR #4:
-
-```text
-FIREBASE_NEST_BRIDGE = IMPLEMENTED
-ENDPOINT = POST /v1/auth/firebase/exchange
-MIGRATION_0005 = PRESENT
-FIREBASE_UID_UNIQUE_PARTIAL = YES
-DEVELOPMENT_CLOUD_RUN_DEPLOY = PROVEN
-PRODUCTION_DEPLOY = NOT_PROVEN_BY_PR4
-FLUTTER_FULL_AUTH_MIGRATION = NOT_INFERRED
-POOL_20_CONCURRENT = NOT_APPROVED
-```
-
-También se actualizó el inventario de migraciones y la estructura del backend para incluir `src/firebase/`, el endpoint de exchange y `0005_users_firebase_uid.sql`.
+Los documentos históricos previos al PR #4 se preservaron como snapshots punto-en-el-tiempo. `docs/TECHNICAL_SPECIFICATION_M0_M1.md` no se reescribió como una migración completa del cliente porque PR #4 no modificó Flutter.
 
 ### Resultado PR #4
 
@@ -291,22 +200,146 @@ PR_4_AUDIT = VERIFIED
 DOCUMENTATION_DRIFT_FOUND = YES
 DOCUMENTATION_CLOSED = YES
 FILES_FIXED = backend/README.md
+FIREBASE_NEST_BRIDGE = IMPLEMENTED
+ENDPOINT = POST /v1/auth/firebase/exchange
+MIGRATION_0005 = PRESENT
+DEVELOPMENT_CLOUD_RUN_DEPLOY = PROVEN
+PRODUCTION_DEPLOY = NOT_PROVEN_BY_PR4
+FLUTTER_FULL_AUTH_MIGRATION = NOT_INFERRED
 HISTORICAL_DOCS_REWRITTEN = NO
 PROJECT_STATUS.md = UNTOUCHED
 PRODUCTION_MUTATIONS = 0
-PROGRESS_DOCUMENTATION_CLOSED = 4/95
 NEXT = PR #5
 ```
 
-### Estado del recorrido
+## PR #5 — `fix(backend): prevent PostgreSQL pool self-deadlock`
+
+### Evidencia GitHub
+
+```text
+PR = #5
+STATE = MERGED
+BASE_SHA = dcc322ea42b1128313fb443fc347c59c32079865
+HEAD_SHA = 2d7c5a43129669d098dd40bd7039b9436b8db760
+MERGE_SHA = af1c0ad8a98f13130af4d93368fa894862c9de80
+COMMITS = 6
+CHANGED_FILES = 25
+CI_RUN = 30585106473
+CI = SUCCESS
+```
+
+PR #5 no añadió migraciones ni dependencias nuevas. Su núcleo fue corregir la concurrencia del puente Firebase→NestJS/PostgreSQL sin aumentar el tamaño del pool ni esconder el defecto con retries indiscriminados.
+
+### Causa raíz y corrección
+
+La investigación de Fase 4.2.1 demostró que los timeouts observados en las ráfagas sobre la misma identidad no eran simplemente “Postgres lento” ni una necesidad automática de aumentar `DATABASE_POOL_MAX`. El camino de recuperación tras una colisión `23505` retenía un `client` obtenido con `pool.connect()` y, antes de liberarlo, llamaba a `findByFirebaseUid`, que intentaba adquirir **otra** conexión del mismo pool. Con suficientes perdedores concurrentes, todas las conexiones podían quedar retenidas esperando una conexión adicional imposible: un self-deadlock del lado de Node/`pg-pool`.
+
+La corrección reutiliza el mismo `client` ya retenido para consultar al ganador tras el `ROLLBACK`. El árbol exacto del PR #95 conserva ese patrón: `winnerResult = await client.query(...)` y el `client.release()` ocurre en `finally`.
+
+También se unificó la búsqueda inicial de candidatos por `firebase_uid`/email en una sola consulta parametrizada para reducir ventanas entre snapshots.
+
+### Rate limit híbrido y saturación temporal
+
+PR #5 cambió el exchange de un único bucket de 20/15min por IP a un esquema por capas:
+
+```text
+CAPA_1_PUBLIC_IP = 60 / 15 min
+CAPA_2_VERIFIED_UID = 20 / 15 min (UID hasheado SHA-256)
+CAPA_3_VERIFIED_IP = 100 / 15 min
+```
+
+La capa por identidad se aplica únicamente después de verificar el ID token. El `firebase_uid` completo no se usa como clave ni se registra en claro.
+
+Los timeouts temporales de adquisición del pool se reconocen de forma estrecha y se traducen a:
+
+```text
+HTTP = 503
+CODE = DATABASE_TEMPORARILY_UNAVAILABLE
+RETRY_AFTER = 2
+```
+
+Los errores SQL reales que traen `.code` no se clasifican como ese timeout de `pg-pool`.
+
+### Estabilización E2E final
+
+El último commit del PR resolvió un problema separado: `auth-firebase-exchange-concurrency-existing-user.e2e-spec.ts` podía producir `read ECONNRESET` porque el harness hacía `app.init()` pero no dejaba un listener estable. `createTestApp()` pasó a ejecutar `await app.listen(0)`, usando un puerto efímero una sola vez para evitar carreras de listeners implícitos de `supertest`.
+
+El fix no redujo concurrencia, no añadió sleeps/retries ni saltó tests.
+
+### CI final
+
+GitHub Actions conserva el run `30585106473` sobre el HEAD final exacto `2d7c5a4...` con los tres jobs en verde:
+
+```text
+Flutter — analyze + test = SUCCESS
+Firestore — reglas de seguridad (A3/A5) = SUCCESS
+Backend — migración + e2e (C2) = SUCCESS
+```
+
+El job Backend aplicó todas las migraciones, levantó `/v1/health` y terminó los e2e con éxito.
+
+### Persistencia al corte PR #95
+
+Los cambios estructurales de PR #5 siguen presentes en el árbol exacto del corte #95:
+
+- `UsersRepository.upsertByFirebaseUid` conserva `findIdentityCandidates()` en una consulta y la reconsulta del ganador mediante el mismo `client` ya adquirido.
+- `AuthService.exchangeFirebaseToken` conserva los buckets por UID hasheado y por IP verificada.
+- `ApiExceptionFilter` conserva la traducción del timeout temporal del pool a `503` con `Retry-After`.
+- `backend/test/utils/test-app.ts` conserva `await app.listen(0)`.
+
+### Deuda explícita preservada
+
+La revisión independiente de los commits de PR #5 dejó dos gaps no bloqueantes que **no se maquillan como resueltos**:
+
+1. Una carrera muy específica en el `UPDATE` de una identidad Firebase ya existente puede propagar un `23505` como `500` en lugar de traducirlo a `409 FIREBASE_EMAIL_CONFLICT`.
+2. El almacenamiento del rate limiter sigue siendo en memoria por instancia y la cardinalidad de claves por UID puede crecer en una instancia de vida larga; un storage distribuido quedó diferido hasta que el volumen real lo justifique.
+
+Además, aunque el self-deadlock fue corregido, la topología medida seguía con margen estrecho: Cloud SQL 25 conexiones máximas / 22 usables y Cloud Run hasta 2 instancias × pool 10. PR #5 deliberadamente no aumentó conexiones sin una decisión de capacidad separada.
+
+### Drift documental detectado y corrección aplicada
+
+Tras cerrar PR #4, nuestro `backend/README.md` todavía describía el agotamiento con 20 concurrentes como un “límite del pool pendiente” y proponía “resolver el límite del pool” como siguiente paso. PR #5 demostró que una parte crítica del síntoma era un self-deadlock de código y lo corrigió; mantener el texto anterior habría dejado una causa raíz equivocada como estado vigente.
+
+Se actualizó `backend/README.md` para registrar:
+
+```text
+SELF_DEADLOCK = FIXED_VIA_PR_5
+HYBRID_RATE_LIMIT = IMPLEMENTED
+POOL_TIMEOUT_503 = IMPLEMENTED
+E2E_STABLE_LISTENER = IMPLEMENTED
+POOL_SIZE_INCREASE = NO
+CI_HEAD_3_OF_3 = SUCCESS
+CAPACITY_MARGIN_NARROW = STILL_TRUE
+H1_UPDATE_23505 = OPEN_NONBLOCKING_DEBT
+H2_RATE_LIMIT_CARDINALITY = OPEN_NONBLOCKING_DEBT
+```
+
+Los documentos `docs/audits/AUDITORIA_FINAL/fase_4_2/*` se conservan como evidencia histórica detallada. No se borraron sus hipótesis iniciales: el propio documento 08 contiene la corrección de registro y remite al documento 10 como referencia autoritativa para la causa raíz.
+
+### Resultado PR #5
+
+```text
+PR_5_AUDIT = VERIFIED
+DOCUMENTATION_DRIFT_FOUND = YES
+DOCUMENTATION_CLOSED = YES
+FILES_FIXED = backend/README.md
+HISTORICAL_DOCS_REWRITTEN = NO
+PROJECT_STATUS.md = UNTOUCHED
+PRODUCTION_MUTATIONS = 0
+PROGRESS_DOCUMENTATION_CLOSED = 5/95
+NEXT = PR #6
+```
+
+## Estado del recorrido
 
 ```text
 PR_1_DOCUMENTATION = CLOSED
 PR_2_DOCUMENTATION = CLOSED
 PR_3_DOCUMENTATION = CLOSED
 PR_4_DOCUMENTATION = CLOSED
+PR_5_DOCUMENTATION = CLOSED
 PROJECT_STATUS.md = UNTOUCHED
 PRODUCTION_MUTATIONS = 0
-PROGRESS_DOCUMENTATION_CLOSED = 4/95
-NEXT = PR #5
+PROGRESS_DOCUMENTATION_CLOSED = 5/95
+NEXT = PR #6
 ```
