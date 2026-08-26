@@ -43,9 +43,9 @@ No se eliminó código funcional, no se rompió la arquitectura modular existent
 ### 2.2 Eliminación de credenciales QA hardcodeadas
 
 **Problema:** 3 archivos tenían un email/password reales como literales en el código fuente:
-- `lib/core/config/dev_backend_test_user.dart` (`static const String password = 'QaWorkouts#2026'`)
-- `backend/scripts/seed_qa_workouts.js` (`const QA_PASSWORD = 'QaWorkouts#2026'`)
-- `firebase/seed/seed_emulator.js` (`const QA_PASSWORD = 'QaEmulator#2026'`)
+- `lib/core/config/dev_backend_test_user.dart` (`static const String password = '[REDACTED_HISTORICAL_QA_BACKEND_PASSWORD]'`)
+- `backend/scripts/seed_qa_workouts.js` (`const QA_PASSWORD = '[REDACTED_HISTORICAL_QA_BACKEND_PASSWORD]'`)
+- `firebase/seed/seed_emulator.js` (`const QA_PASSWORD = '[REDACTED_HISTORICAL_QA_EMULATOR_PASSWORD]'`)
 
 Ninguna daba acceso a un sistema de producción real, pero quedaban en texto plano en el historial de git, sin forma de rotarlas sin un cambio de código.
 
@@ -118,7 +118,7 @@ Durante la verificación de infraestructura se encontró que `.github/workflows/
 | Riesgo | Mitigación |
 |---|---|
 | `firebase/seed/node_modules` y `.playwright-mcp/` podían commitearse por accidente | Eliminados del working tree + reglas `.gitignore` genéricas que cubren cualquier profundidad |
-| Credenciales QA en texto plano en el historial de git, sin forma de rotarlas | Reemplazadas por variables de entorno/dart-define; **nota**: los valores viejos (`QaWorkouts#2026`, `QaEmulator#2026`) siguen en commits anteriores del historial de git — rotarlos del historial (`git filter-repo`/BFG) es una operación destructiva que requiere autorización explícita aparte, no incluida en esta sesión. Como son cuentas que solo existen en un backend local/emulador de desarrollo (nunca un sistema real alcanzable), el riesgo residual es bajo, pero se documenta para que quede a tu criterio. |
+| Credenciales QA históricas en texto plano en Git | Los valores fueron retirados del árbol actual en T-TRANS.1 B1, pero permanecen recuperables en commits históricos. La rotación/revocación de la credencial backend QA permanece **UNPROVEN** y la eliminación de los valores del historial requiere un tratamiento separado y autorización explícita. |
 | CORS abierto a cualquier origen | Allowlist por variable de entorno, fail-closed en producción sin configurar |
 | CI del backend probablemente roto en cada push (hallazgo adicional) | Corregido y validado con evidencia real (Docker + 57/57 e2e) |
 | `dotenv` usado en `backend/scripts/seed_qa_workouts.js` sin ser una dependencia directa declarada en `package.json` | Es una dependencia transitiva garantizada mientras `@nestjs/config` siga siendo una dependencia — riesgo bajo, pero si se elimina `@nestjs/config` en el futuro este script dejaría de funcionar silenciosamente hasta notarlo. Documentado en un comentario en el propio script. |

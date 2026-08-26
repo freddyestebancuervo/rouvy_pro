@@ -176,7 +176,6 @@ async function main() {
 
   console.log('\nSeed completo.');
   console.log(`  Email:    ${QA_EMAIL}`);
-  console.log(`  Password: ${QA_PASSWORD}`);
   console.log(`  UID:      ${uid}`);
   process.exit(0);
 }
