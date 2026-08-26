@@ -11,9 +11,9 @@ misma base de Postgres del Track 2 — ninguno lo repite desde cero. Track
 1 y Track 2 son independientes entre sí (podés correrlos en cualquier
 orden, o en paralelo en dos terminales); Tracks 3 y 4 dependen de que el
 Track 2 ya se haya corrido al menos una vez (mismo contenedor y `.env`).
-**Track 4 vive en la rama `feature/d2`**, no en `main` — hacé
-`git checkout feature/d2` antes de correrlo si estás verificando desde
-`main`.
+**Track 4 se desarrolló originalmente en `feature/d2`, pero D2 fue
+integrado a `main` mediante PR #1 (`c2b2da9d395a5a4f03f821fd2854a032e38c4313`).**
+Por tanto, desde `main` ya no hace falta cambiar de rama para verificarlo.
 
 ---
 
@@ -270,19 +270,18 @@ npm run test:e2e
 
 ---
 
-## Track 4 — Backend Entrenamientos (D2, Bloque D, rama `feature/d2`)
+## Track 4 — Backend Entrenamientos (D2, Bloque D)
 
-> Este track vive en la rama `feature/d2`, todavía sin mergear a `main`.
-> `git checkout feature/d2` primero si venís de `main`. Asume que ya
-> corriste el Track 2 (mismo contenedor `ridepro-postgres`, mismo
-> `.env`) — Track 3 (migración `0003`) no es un prerrequisito estricto
-> para este track (`workouts` no depende de `equipment`), pero si ya la
-> corriste no hace falta deshacerla.
+> Este track se desarrolló originalmente en `feature/d2`, pero quedó
+> integrado a `main` mediante PR #1. Ya no requiere `git checkout
+> feature/d2`. Asume que ya corriste el Track 2 (mismo contenedor
+> `ridepro-postgres`, mismo `.env`) — Track 3 (migración `0003`) no es un
+> prerrequisito estricto para este track (`workouts` no depende de
+> `equipment`), pero si ya la corriste no hace falta deshacerla.
 
 ### Comandos exactos
 
 ```bash
-git checkout feature/d2
 cd backend
 docker exec -i ridepro-postgres psql -U ridepro -d ridepro_dev < migrations/0004_workouts.sql
 ```
