@@ -129,7 +129,6 @@ async function main() {
 
   console.log('\nSeed de Workouts completo.');
   console.log(`  Email:    ${QA_EMAIL}`);
-  console.log(`  Password: ${QA_PASSWORD}`);
 }
 
 main().catch((err) => {

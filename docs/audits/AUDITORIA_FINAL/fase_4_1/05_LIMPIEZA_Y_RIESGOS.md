@@ -12,7 +12,7 @@
     borradas por UUID exacto.
 - **Verificado explícitamente, no asumido**: la tabla `users` volvió a
   exactamente **4 filas** (los usuarios originales del entorno), y la
-  cuenta QA compartida (`qa.workouts@ridepro.local`) sigue presente con
+  cuenta QA compartida (`[REDACTED_HISTORICAL_QA_BACKEND_EMAIL]`) sigue presente con
   `firebase_uid IS NULL` — sin tocar.
 - **Temporales locales**: todos los archivos con tokens, emails, UIDs,
   contraseñas de prueba y la connection string de la base fueron

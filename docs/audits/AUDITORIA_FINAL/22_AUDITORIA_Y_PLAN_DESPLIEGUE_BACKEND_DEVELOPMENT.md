@@ -47,7 +47,7 @@ Módulos reales, con lógica, DTOs, guards y specs: `AuthModule` (login/registro
 
 | Aspecto | Estado |
 |---|---|
-| Variables de entorno | `.env`/`.env.example` con convención clara; **confirmado con `git ls-files` y `git check-ignore` que `.env` y `secrets/` NUNCA se han commiteado** — cero secretos en el historial de git |
+| Variables de entorno | `.env`/`.env.example` con convención clara; `git ls-files` y `git check-ignore` confirman que `.env` y `secrets/` no están tracked. **CURRENT TRACKED TREE:** las cuatro huellas históricas exactas verificadas tienen 0 coincidencias. Esto no demuestra que el historial Git esté saneado. **HISTORY_SANITIZATION = NOT_PERFORMED. BACKEND_QA_ROTATION_REVOCATION = UNPROVEN.** La eventual sanitización del historial requiere una tarea separada y autorización explícita. |
 | Secretos | Par de claves RS256 (`jwt_private.pem`/`jwt_public.pem`) generadas localmente, fuera de git. JWT firmado con clave privada, verificado con la pública — nunca un secreto simétrico compartido |
 | CORS | `resolveCorsOptions()`: allowlist explícita si `CORS_ALLOWED_ORIGINS` está definida; si no, fallback de conveniencia SOLO-localhost fuera de producción; en producción sin configurar → **cierre total** (`origin: false`), nunca abierto. Ya auditado y corregido (commit `4caea56`, referenciado en memoria de esta sesión) |
 | Autenticación | **Sistema JWT propio (RS256), completamente independiente de Firebase Auth** — no existe ningún puente Firebase↔NestJS (`T-F1.5`, Documento 15, sigue sin construirse). Refresh tokens hasheados (SHA-256, nunca texto plano), con detección de reuso (revoca todos los tokens activos si detecta un refresh ya usado — mitigación real de robo de token, verificado en el log de test: *"Refresh token reuse detectado... todos sus refresh tokens activos fueron revocados"*) |
@@ -238,7 +238,7 @@ Módulos reales, con lógica, DTOs, guards y specs: `AuthModule` (login/registro
 ## 11. Criterios de aceptación globales
 
 1. `/v1/health` responde `200` desde la URL pública real, no solo local.
-2. Cero secretos en archivos versionados (ya cumplido hoy, debe seguir cumpliéndose).
+2. Cero coincidencias de las cuatro huellas históricas exactas de T-TRANS.1 en el árbol tracked actual; esta verificación no implica que el historial Git esté saneado.
 3. `flutter build web --release --target lib/main_development.dart` + Workouts cargando contra el backend real, sin `localhost`.
 4. `productionEnvironment.backendBaseUrl` sigue siendo el placeholder — no se toca hasta que exista una decisión y fase explícitas para Producción.
 5. Rollback de código verificado (desplegar una revisión rota a propósito en un ensayo y confirmar que revertir a la anterior funciona) antes de considerar Development "en producción de pruebas" real.
