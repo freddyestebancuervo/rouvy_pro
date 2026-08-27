@@ -47,7 +47,7 @@ No se eliminó código funcional, no se rompió la arquitectura modular existent
 - `backend/scripts/seed_qa_workouts.js` (`const QA_PASSWORD = '[REDACTED_HISTORICAL_QA_BACKEND_PASSWORD]'`)
 - `firebase/seed/seed_emulator.js` (`const QA_PASSWORD = '[REDACTED_HISTORICAL_QA_EMULATOR_PASSWORD]'`)
 
-Ninguna daba acceso a un sistema de producción real, pero quedaban en texto plano en el historial de git, sin forma de rotarlas sin un cambio de código.
+Los valores históricos quedaron expuestos en commits anteriores. Las cuatro huellas históricas exactas verificadas tienen 0 coincidencias en el árbol tracked actual; esto no demuestra que el historial Git esté saneado. BACKEND_QA_ROTATION_REVOCATION = UNPROVEN. HISTORY_SANITIZATION = NOT_PERFORMED. Cualquier saneamiento del historial es una tarea separada que requiere autorización explícita.
 
 **Corrección — mecanismo por capa:**
 
