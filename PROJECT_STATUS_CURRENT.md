@@ -153,7 +153,7 @@ RECONCILIATION_1_TO_95 = COMPLETE_IN_THIS_SNAPSHOT
 POST_95_FACTS_INCLUDED = NO
 ```
 
-`PROJECT_STATUS.md` conserva su naturaleza histórica append-only. `README.md` debe leerse junto con este snapshot cuando alguna frase operativa anterior a PR #95 haya quedado superada.
+`PROJECT_STATUS.md` conserva su naturaleza histórica append-only. `README.md` debe leerse junto con este snapshot cuando alguna frase operativa anterior a PR #95 haya quedado superada. Hechos posteriores a este corte se documentan en archivos sucesores separados, nunca reescritos aquí: `PROJECT_STATUS_POST95.md` (PR #96 + evidencia live posterior) y `PROJECT_STATUS_POST98.md` (PR #97 → #102, incluye la corrección sobre checks requeridos de PR #102 y la revalidación pendiente del hallazgo de privilegios de rol de base de datos). El contrato portable de base de datos de `T-F1.2` está documentado en `docs/T-F1.2_PORTABLE_PRODUCTION_CD.md`.
 
 ## Seguridad de esta reconciliación
 

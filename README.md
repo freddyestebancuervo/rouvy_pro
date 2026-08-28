@@ -269,6 +269,18 @@ Gate separado y, únicamente después, otro gate independiente para la
 inspección DB. Ver `PROJECT_STATUS_CURRENT.md` para la evidencia exacta del
 corte 1→95.
 
+Después de ese corte (PR #96→#102, ver `PROJECT_STATUS_POST95.md` y
+`PROJECT_STATUS_POST98.md` para la evidencia exacta), el preflight live de
+metadatos y la inspección read-only real de la base de datos de Production
+sí se ejecutaron: la inspección confirmó 0 de 7 migraciones aplicadas y un
+esquema físico limpio, pero terminó en `HOLD_ROLE_PRIVILEGE_ESCALATION`
+(rol de migración con privilegios inesperados) — hallazgo que requiere una
+nueva inspección live antes de tratarse como vigente o resuelto. PR #102
+completó por separado el contrato portable de base de datos (separación
+runtime/migración por variable, validación en CI, decisión de proveedor
+diferida — ver `docs/T-F1.2_PORTABLE_PRODUCTION_CD.md`). `T-F1.2` sigue
+**EN PROGRESO**: sin migración real ni deploy real de Production todavía.
+
 En deuda de calidad, `T-F2.5` quedó **CERRADA** en PR #92 y `T-F2.4` quedó
 **CERRADA** en PR #94 a nivel de código/migración: `0007_drop_unused_ride_sessions.sql`
 elimina la tabla Postgres legado sin `CASCADE`, con rollback definido y
