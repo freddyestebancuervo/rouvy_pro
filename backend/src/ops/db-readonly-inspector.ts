@@ -354,7 +354,10 @@ function cols(table: string, columns: string[]): { table: string; column: string
 
 export const EXPECTED_MIGRATION_OBJECTS: Record<ExpectedMigrationName, MigrationObjectDelta> = {
   '0001_init': {
-    extensions: ['pgcrypto'],
+    // pgcrypto removed from this migration (gen_random_uuid() is core in
+    // PostgreSQL 13+, this project targets 16) -- it is never installed by
+    // a fresh migration run, so it must never be part of the expected set.
+    extensions: [],
     tables: ['users', 'roles', 'user_roles', 'refresh_tokens', 'ride_sessions', 'audit_log'],
     indexes: [
       // explícitos

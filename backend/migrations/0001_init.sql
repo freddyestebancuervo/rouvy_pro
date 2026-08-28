@@ -4,7 +4,10 @@
 -- Aplicar con: npm run migrate:up (node-pg-migrate) o psql -f directo
 -- en un entorno de desarrollo.
 
-CREATE EXTENSION IF NOT EXISTS pgcrypto; -- para gen_random_uuid()
+-- gen_random_uuid() below is PostgreSQL's own core function since v13
+-- (this project targets v16) -- pgcrypto is not installed because nothing
+-- else in the codebase uses any of its other functions, and Cloud SQL
+-- requires cloudsqlsuperuser membership to run CREATE EXTENSION at all.
 
 CREATE TABLE users (
     id              UUID PRIMARY KEY DEFAULT gen_random_uuid(),
