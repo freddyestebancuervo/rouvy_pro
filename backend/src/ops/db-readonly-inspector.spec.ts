@@ -488,14 +488,15 @@ describe('db-readonly-inspector', () => {
       expect(result.physical_schema.expected_missing).toContain('sequence:audit_log_id_seq');
     });
 
-    it('3. extensión pgcrypto faltante (0001 aplicada) -> HOLD_TRACKING_WITH_MISSING_OBJECTS', async () => {
+    it('3. extensión pgcrypto ausente (0001 aplicada) ya NO produce HOLD -- pgcrypto salió del conjunto esperado (gen_random_uuid() es core en PG16)', async () => {
       setEnv(baseEnv());
       installFullyHealthyMock({ pgcryptoPresent: false });
 
       const result = await runInspection();
 
-      expect(result.final_disposition).toBe('HOLD_TRACKING_WITH_MISSING_OBJECTS');
-      expect(result.physical_schema.expected_missing).toContain('extension:pgcrypto');
+      expect(result.final_disposition).toBe('TRACKED_AND_CONSISTENT');
+      expect(result.physical_schema.classification).toBe('MATCHES_APPLIED');
+      expect(result.physical_schema.expected_missing).not.toContain('extension:pgcrypto');
     });
 
     it('4. columna users.firebase_uid faltante (0005 aplicada) -> HOLD_TRACKING_WITH_MISSING_OBJECTS (el bug original: la query se ejecutaba pero su resultado se descartaba)', async () => {
