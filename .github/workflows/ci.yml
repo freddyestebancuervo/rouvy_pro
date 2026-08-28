@@ -285,6 +285,9 @@ jobs:
       - name: Correr los tests unitarios (backend/src/**/*.spec.ts)
         run: npm test -- --runInBand
 
+      - name: Validar contrato portable de Production (sin secretos ni cloud)
+        run: npm run test:production-contract
+
       # Hallazgo de auditoría 2026-07-23: este paso solo aplicaba
       # 0001_init.sql con psql -f directo — desde que 0002-0004 existen
       # (Bloque C/D), tanto el arranque del servidor como los e2e de
