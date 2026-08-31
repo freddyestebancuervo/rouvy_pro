@@ -38,6 +38,23 @@ separate migration job that binds distinct runtime and migration identities,
 proves its exact target and source SHA, and uses an externally enforced Human
 Gate. This document does not authorize that work.
 
+## Status update (2026-08-31, PR #103-106 — see `PROJECT_STATUS_POST106.md`)
+
+The `MIGRATION_DATABASE_URL`/`DATABASE_URL` contract described above is now
+enforced by `backend/src/ops/privilege-reconciler.ts` itself, not just by
+`production-contract.js` — it aborts before connecting if `DATABASE_URL` is
+present in its own process. The privilege-reconciler and read-only inspector
+were also hardened with an explicit, deny-by-default runtime privilege
+matrix, a fail-closed pre/post-grant drift gate, and automatic HOLD for
+`cloudsqlsuperuser` membership (direct or transitive) and any privilege the
+matrix does not authorize — all proven against ephemeral/local PostgreSQL 16,
+never against Development or Production.
+
+This is still tooling, not an applied remediation: the separate migration job
+described in "Gates not executed" above **remains undesigned as a workflow**,
+`korixa_app`'s real Cloud Sql privileges remain unrevalidated since
+`PROJECT_STATUS_POST95.md`, and no Production migration has been executed.
+
 ## Local verification
 
 From `backend/`:
