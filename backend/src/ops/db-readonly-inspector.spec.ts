@@ -138,6 +138,11 @@ function installHappyPathMock(options: {
   dbOwnerRows?: { datname: string; owner: string }[];
   schemaOwnerRows?: { nspname: string; owner: string }[];
   membershipRows?: RoleMembershipRow[];
+  /** Cierre TRANSITIVO de membresías (P1-3) — por defecto igual a
+   * `membershipRows` (caso común: sin intermediarios, directo ==
+   * transitivo). Los tests de cloudsqlsuperuser indirecto lo
+   * sobreescriben explícitamente. */
+  transitiveMembershipRows?: RoleMembershipRow[];
   tablePrivilegeRows?: TablePrivilegeRow[];
   sequencePrivilegeRows?: SequencePrivilegeRow[];
   dbPrivilegeRows?: { rolname: string; can_connect: boolean; can_schema_usage: boolean; can_schema_create: boolean }[];
@@ -156,6 +161,7 @@ function installHappyPathMock(options: {
     dbOwnerRows = [{ datname: 'korixa_production', owner: 'korixa_app' }],
     schemaOwnerRows = [{ nspname: 'public', owner: 'korixa_app' }],
     membershipRows = [],
+    transitiveMembershipRows = membershipRows,
     tablePrivilegeRows = healthyRuntimeTablePrivilegeRows(),
     sequencePrivilegeRows = healthyRuntimeSequencePrivilegeRows(),
     dbPrivilegeRows = [
@@ -184,6 +190,9 @@ function installHappyPathMock(options: {
     }
     if (sql === INSPECTION_QUERIES.roleMemberships) {
       return Promise.resolve({ rows: membershipRows });
+    }
+    if (sql === INSPECTION_QUERIES.roleMembershipTransitiveClosure) {
+      return Promise.resolve({ rows: transitiveMembershipRows });
     }
     if (sql === INSPECTION_QUERIES.databaseOwnership) {
       return Promise.resolve({ rows: dbOwnerRows });

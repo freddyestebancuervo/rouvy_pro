@@ -81,6 +81,14 @@ import {
   RUNTIME_SEQUENCE_PRIVILEGE_MATRIX,
   type TablePrivilegeVerb,
 } from './runtime-privilege-matrix';
+import {
+  auditRuntimeSafety,
+  TRANSITIVE_ROLE_MEMBERSHIP_CTE,
+  type TablePrivilegeRow,
+  type SequencePrivilegeRow,
+  type RoleMembershipRow,
+  type SchemaCreatePrivilegeRow,
+} from './runtime-privilege-audit';
 
 // =============================================================================
 // Contrato de entorno — únicas dos env vars leídas. Ninguna otra.
@@ -106,6 +114,8 @@ export type ReconcilerErrorCode =
   | 'RUNTIME_ROLE_NOT_FOUND'
   | 'EXPECTED_SCHEMA_OBJECT_MISSING'
   | 'PGMIGRATIONS_PRIVILEGE_DETECTED'
+  | 'RUNTIME_PRIVILEGE_DRIFT_DETECTED'
+  | 'POST_GRANT_STATE_MISMATCH'
   | 'DB_CONNECTION_FAILED'
   | 'GRANT_STATEMENT_FAILED'
   | 'PARTIAL_GRANT_WARNING'
@@ -291,35 +301,153 @@ function sanitizeUnexpectedError(code: ReconcilerErrorCode, context: string): Re
   return new ReconcilerError(code, `${context} — nunca se propaga DSN, password ni el objeto crudo de \`pg\`.`);
 }
 
-const PGMIGRATIONS_PRIVILEGE_CHECK = `
-  SELECT
-    has_table_privilege($1, 'public.pgmigrations', 'SELECT')     AS can_select,
-    has_table_privilege($1, 'public.pgmigrations', 'INSERT')     AS can_insert,
-    has_table_privilege($1, 'public.pgmigrations', 'UPDATE')     AS can_update,
-    has_table_privilege($1, 'public.pgmigrations', 'DELETE')     AS can_delete,
-    has_table_privilege($1, 'public.pgmigrations', 'TRUNCATE')   AS can_truncate,
-    has_table_privilege($1, 'public.pgmigrations', 'TRIGGER')    AS can_trigger,
-    has_table_privilege($1, 'public.pgmigrations', 'REFERENCES') AS can_references;
+// =============================================================================
+// REMEDIACIÓN P1-1/P1-1A/P1-2/P1-3 (auditoría independiente de PR #106)
+// =============================================================================
+//
+// El reconciliador anterior solo verificaba `pgmigrations` (tabla) y
+// asumía que ejecutar los GRANT de la matriz sin que ningún statement
+// lanzara una excepción era suficiente para declarar `RECONCILED`. Eso
+// permitía un FALSO RECONCILED: un `DELETE ON users` u otro privilegio
+// previo, ajeno a este reconciliador, podía coexistir sin que nada lo
+// detectara.
+//
+// Ahora el reconciliador ejecuta el MISMO diff (`auditRuntimeSafety`,
+// compartido con el inspector) DOS VECES:
+//
+//   PRE-GRANT  (antes de BEGIN): cualquier privilegio EXCEDENTE ya
+//              presente (drift `unexpected`, pgmigrations/
+//              pgmigrations_id_seq, CREATE en schema, membresías
+//              inseguras/inesperadas) aborta con
+//              `RUNTIME_PRIVILEGE_DRIFT_DETECTED` (o
+//              `PGMIGRATIONS_PRIVILEGE_DETECTED` si la causa es
+//              específicamente pgmigrations/su secuencia). Un
+//              privilegio FALTANTE (`missing`) es normal acá — es
+//              justamente lo que este reconciliador está por otorgar
+//              — y NO bloquea.
+//   POST-GRANT (después de ejecutar todos los GRANT, todavía dentro de
+//              la misma transacción, ANTES de COMMIT): se exige estado
+//              EXACTO — `missing` Y `unexpected` deben ser CERO. Si no,
+//              ROLLBACK completo y fail-closed
+//              (`POST_GRANT_STATE_MISMATCH`/`PGMIGRATIONS_PRIVILEGE_DETECTED`).
+//              Solo entonces se permite `outcome = RECONCILED`.
+//
+// `treatMissingAsBlocking` es el único parámetro que distingue ambas
+// fases — el resto de la lógica de auditoría es idéntica.
+// =============================================================================
+
+export const RUNTIME_TABLE_PRIVILEGES_QUERY = `
+  SELECT $1::text AS rolname, c.relname AS table_name,
+         has_table_privilege($1, c.oid, 'SELECT')     AS can_select,
+         has_table_privilege($1, c.oid, 'INSERT')     AS can_insert,
+         has_table_privilege($1, c.oid, 'UPDATE')     AS can_update,
+         has_table_privilege($1, c.oid, 'DELETE')     AS can_delete,
+         has_table_privilege($1, c.oid, 'TRUNCATE')   AS can_truncate,
+         has_table_privilege($1, c.oid, 'REFERENCES') AS can_references,
+         has_table_privilege($1, c.oid, 'TRIGGER')    AS can_trigger
+  FROM pg_class c
+  JOIN pg_namespace n ON n.oid = c.relnamespace
+  WHERE n.nspname = 'public' AND c.relkind = 'r';
 `;
 
-async function assertRuntimeHasNoPgmigrationsPrivilege(client: Client, runtimeRole: string): Promise<void> {
-  const existsResult = await client.query(`SELECT to_regclass('public.pgmigrations') IS NOT NULL AS exists;`);
-  if (!existsResult.rows[0]?.exists) return; // nada que verificar todavía — pgmigrations no existe.
+export const RUNTIME_SEQUENCE_PRIVILEGES_QUERY = `
+  SELECT $1::text AS rolname, c.relname AS sequence_name,
+         has_sequence_privilege($1, c.oid, 'USAGE')  AS can_usage,
+         has_sequence_privilege($1, c.oid, 'SELECT') AS can_select,
+         has_sequence_privilege($1, c.oid, 'UPDATE') AS can_update
+  FROM pg_class c
+  JOIN pg_namespace n ON n.oid = c.relnamespace
+  WHERE n.nspname = 'public' AND c.relkind = 'S';
+`;
 
-  const result = await client.query(PGMIGRATIONS_PRIVILEGE_CHECK, [runtimeRole]);
-  const row = result.rows[0] as Record<string, boolean> | undefined;
-  const found = row
-    ? (['can_select', 'can_insert', 'can_update', 'can_delete', 'can_truncate', 'can_trigger', 'can_references'] as const).filter(
-        (key) => row[key],
-      )
-    : [];
-  if (found.length > 0) {
+export const RUNTIME_SCHEMA_CREATE_QUERY = `SELECT $1::text AS rolname, has_schema_privilege($1, 'public', 'CREATE') AS can_schema_create;`;
+
+export const RUNTIME_DIRECT_MEMBERSHIPS_QUERY = `
+  SELECT m.rolname AS member_role, r.rolname AS granted_role
+  FROM pg_auth_members am
+  JOIN pg_roles m ON m.oid = am.member
+  JOIN pg_roles r ON r.oid = am.roleid
+  WHERE m.rolname = $1;
+`;
+
+interface RuntimeSafetyFacts {
+  tableRows: TablePrivilegeRow[];
+  sequenceRows: SequencePrivilegeRow[];
+  schemaCreateRow: SchemaCreatePrivilegeRow;
+  directMembershipRows: RoleMembershipRow[];
+  transitiveMembershipRows: RoleMembershipRow[];
+}
+
+/** Secuencial a propósito — `client` es un `pg.Client` único (no un
+ * `Pool`), que solo puede ejecutar UN statement a la vez. Emitir estas
+ * 5 consultas vía `Promise.all` sobre el mismo `Client` no las paraleliza
+ * de verdad y dispara el propio `DeprecationWarning` de `pg` ("Calling
+ * client.query() when the client is already executing a query"),
+ * ensuciando stderr con texto no-JSON — descubierto al correr esto
+ * contra PostgreSQL 16 real, no solo contra el mock. */
+async function queryRuntimeSafetyFacts(client: Client, runtimeRole: string): Promise<RuntimeSafetyFacts> {
+  const tableResult = await client.query(RUNTIME_TABLE_PRIVILEGES_QUERY, [runtimeRole]);
+  const sequenceResult = await client.query(RUNTIME_SEQUENCE_PRIVILEGES_QUERY, [runtimeRole]);
+  const schemaCreateResult = await client.query(RUNTIME_SCHEMA_CREATE_QUERY, [runtimeRole]);
+  const directMembershipResult = await client.query(RUNTIME_DIRECT_MEMBERSHIPS_QUERY, [runtimeRole]);
+  const transitiveMembershipResult = await client.query(TRANSITIVE_ROLE_MEMBERSHIP_CTE, [[runtimeRole]]);
+  return {
+    tableRows: tableResult.rows as TablePrivilegeRow[],
+    sequenceRows: sequenceResult.rows as SequencePrivilegeRow[],
+    schemaCreateRow: schemaCreateResult.rows[0] as SchemaCreatePrivilegeRow,
+    directMembershipRows: directMembershipResult.rows as RoleMembershipRow[],
+    transitiveMembershipRows: transitiveMembershipResult.rows as RoleMembershipRow[],
+  };
+}
+
+/** Falla cerrado si `auditRuntimeSafety` encuentra cualquier hallazgo
+ * bloqueante. Prioriza un código de error específico
+ * (`PGMIGRATIONS_PRIVILEGE_DETECTED`) cuando la causa es
+ * inequívocamente pgmigrations/su secuencia — el resto de causas usa
+ * `RUNTIME_PRIVILEGE_DRIFT_DETECTED`/`POST_GRANT_STATE_MISMATCH` según
+ * la fase. Nunca imprime valores de fila crudos más allá de los
+ * nombres de privilegio/objeto ya saneados que las propias funciones
+ * de `runtime-privilege-audit.ts` producen. */
+function assertRuntimeSafetyOrFailClosed(
+  facts: RuntimeSafetyFacts,
+  runtimeRole: string,
+  phase: 'pre_grant' | 'post_grant',
+): void {
+  const audit = auditRuntimeSafety({
+    tableRows: facts.tableRows,
+    sequenceRows: facts.sequenceRows,
+    schemaCreateRow: facts.schemaCreateRow,
+    transitiveMembershipRows: facts.transitiveMembershipRows,
+    directMembershipRows: facts.directMembershipRows,
+    runtimeRoleName: runtimeRole,
+    treatMissingAsBlocking: phase === 'post_grant',
+  });
+
+  if (audit.blockingFindings.length === 0) return;
+
+  const pgmigrationsRelated = [...audit.pgmigrationsViolations, ...audit.pgmigrationsIdSeqViolations];
+  if (pgmigrationsRelated.length > 0) {
     throw new ReconcilerError(
       'PGMIGRATIONS_PRIVILEGE_DETECTED',
-      'El runtime role ya tiene al menos un privilegio sobre public.pgmigrations (tabla de tracking de node-pg-migrate) — el reconciliador nunca otorga nada sobre esta tabla y se niega a proceder mientras exista cualquier privilegio previo, sin importar su origen.',
-      { detected_privileges: found.join(',') },
+      `El runtime role tiene privilegio(s) sobre public.pgmigrations y/o public.pgmigrations_id_seq (fase: ${phase}) — el reconciliador nunca otorga nada sobre ninguno de los dos y se niega a proceder/completar mientras exista cualquier privilegio, sin importar su origen.`,
+      { phase, pgmigrations_related: pgmigrationsRelated.join(',') },
     );
   }
+
+  const code: ReconcilerErrorCode = phase === 'pre_grant' ? 'RUNTIME_PRIVILEGE_DRIFT_DETECTED' : 'POST_GRANT_STATE_MISMATCH';
+  const message =
+    phase === 'pre_grant'
+      ? 'El runtime role ya tiene privilegios que la matriz nunca autoriza (drift/CREATE en schema/membresía insegura o inesperada), detectados ANTES de otorgar nada — el reconciliador se niega a proceder mientras exista cualquier exceso previo. Un privilegio de la matriz que todavía falte no es, por sí solo, motivo de bloqueo en esta fase.'
+      : 'Tras ejecutar todos los GRANT, el estado real del runtime no coincide EXACTAMENTE con la matriz (falta algo requerido y/o sobra algo no autorizado) — se revierte la transacción completa; nunca se declara RECONCILED sobre un estado post-grant no probado.';
+
+  throw new ReconcilerError(code, message, {
+    phase,
+    missing_count: audit.matrixDrift.missing.length,
+    unexpected_count: audit.matrixDrift.unexpected.length,
+    unsafe_memberships_count: audit.unsafeMemberships.length,
+    unexpected_memberships_count: audit.unexpectedMemberships.length,
+    blocking_findings: audit.blockingFindings.join(','),
+  });
 }
 
 export interface ReconciliationResult {
@@ -327,7 +455,8 @@ export interface ReconciliationResult {
   migration_context_valid: true;
   runtime_role_existed: true;
   expected_schema_objects_present: true;
-  pgmigrations_privilege_absent_before: true;
+  pre_grant_drift_absent: true;
+  post_grant_exact_state_proven: true;
   statements_executed: number;
   outcome: 'RECONCILED';
 }
@@ -402,11 +531,15 @@ export async function reconcilePrivileges(): Promise<ReconciliationResult> {
       );
     }
 
-    // Verificación PREVIA (antes de otorgar nada): si el runtime role ya
-    // tiene cualquier privilegio sobre pgmigrations por cualquier motivo
-    // ajeno a este reconciliador (nunca lo otorga él mismo), se niega a
-    // proceder — ver `PGMIGRATIONS_PRIVILEGE_DETECTED`.
-    await assertRuntimeHasNoPgmigrationsPrivilege(client, env.RUNTIME_DB_ROLE);
+    // PRE-GRANT (P1-1): cualquier privilegio EXCEDENTE que el runtime
+    // ya tenga por cualquier motivo ajeno a este reconciliador — drift
+    // vs. la matriz, pgmigrations/su secuencia, CREATE en schema,
+    // membresía insegura/inesperada — aborta ANTES de otorgar nada. Un
+    // privilegio que la matriz exige pero todavía falta es normal acá
+    // (`treatMissingAsBlocking: false` dentro de la función) — es
+    // justamente lo que este reconciliador está por otorgar.
+    const preGrantFacts = await queryRuntimeSafetyFacts(client, env.RUNTIME_DB_ROLE);
+    assertRuntimeSafetyOrFailClosed(preGrantFacts, env.RUNTIME_DB_ROLE, 'pre_grant');
 
     const statements = buildReconciliationStatements(quotedRuntimeRole);
 
@@ -434,12 +567,14 @@ export async function reconcilePrivileges(): Promise<ReconciliationResult> {
       );
     }
 
-    // Verificación POSTERIOR, todavía dentro de la misma transacción: los
-    // GRANT que se acaban de ejecutar están scopeados exclusivamente a
-    // la matriz (pgmigrations no aparece en ninguna), así que esta
-    // segunda comprobación debería ser idéntica a la previa — se repite
-    // de todas formas como cierre del invariante, nunca asumido.
-    await assertRuntimeHasNoPgmigrationsPrivilege(client, env.RUNTIME_DB_ROLE);
+    // POST-GRANT (P1-1), todavía dentro de la misma transacción, ANTES
+    // de COMMIT: se exige estado EXACTO — ni falta nada que la matriz
+    // requiera, ni sobra nada que no autorice (`treatMissingAsBlocking:
+    // true`). Sin esta prueba, `RECONCILED` sería solo "ningún GRANT
+    // lanzó una excepción" — nunca de por sí una prueba de que el
+    // estado final es el correcto.
+    const postGrantFacts = await queryRuntimeSafetyFacts(client, env.RUNTIME_DB_ROLE);
+    assertRuntimeSafetyOrFailClosed(postGrantFacts, env.RUNTIME_DB_ROLE, 'post_grant');
 
     await client.query('COMMIT;');
     inTransaction = false;
@@ -449,7 +584,8 @@ export async function reconcilePrivileges(): Promise<ReconciliationResult> {
       migration_context_valid: true,
       runtime_role_existed: true,
       expected_schema_objects_present: true,
-      pgmigrations_privilege_absent_before: true,
+      pre_grant_drift_absent: true,
+      post_grant_exact_state_proven: true,
       statements_executed: statements.length,
       outcome: 'RECONCILED',
     };

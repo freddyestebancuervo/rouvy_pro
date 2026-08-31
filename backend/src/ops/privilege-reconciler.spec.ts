@@ -6,8 +6,13 @@ import {
   findMissingExpectedSchemaObjects,
   reconcilePrivileges,
   ReconcilerError,
+  RUNTIME_TABLE_PRIVILEGES_QUERY,
+  RUNTIME_SEQUENCE_PRIVILEGES_QUERY,
+  RUNTIME_SCHEMA_CREATE_QUERY,
+  RUNTIME_DIRECT_MEMBERSHIPS_QUERY,
 } from './privilege-reconciler';
 import { RUNTIME_TABLE_PRIVILEGE_MATRIX, RUNTIME_SEQUENCE_PRIVILEGE_MATRIX } from './runtime-privilege-matrix';
+import { TRANSITIVE_ROLE_MEMBERSHIP_CTE, type TablePrivilegeRow, type SequencePrivilegeRow, type RoleMembershipRow } from './runtime-privilege-audit';
 
 // `pg.Client` se mockea por completo — ningún test de este archivo toca
 // una base de datos real (misma disciplina que db-readonly-inspector.spec.ts).
@@ -41,9 +46,67 @@ const ALL_MATRIX_SEQUENCES = Object.entries(RUNTIME_SEQUENCE_PRIVILEGE_MATRIX)
   .filter(([, entry]) => entry.usage)
   .map(([name]) => name);
 
+/** Filas de privilegio de tabla/secuencia que reflejan EXACTAMENTE el
+ * modelo mínimo de la matriz para `runtimeRole` — el punto de partida
+ * "sano" (post-grant esperado) de todos los fixtures de este archivo. */
+function healthyTablePrivilegeRows(runtimeRole: string): TablePrivilegeRow[] {
+  return Object.entries(RUNTIME_TABLE_PRIVILEGE_MATRIX).map(([table_name, entry]) => ({
+    rolname: runtimeRole,
+    table_name,
+    can_select: entry.select,
+    can_insert: entry.insert,
+    can_update: entry.update,
+    can_delete: entry.delete,
+    can_truncate: false,
+    can_references: false,
+    can_trigger: false,
+  }));
+}
+
+function healthySequencePrivilegeRows(runtimeRole: string): SequencePrivilegeRow[] {
+  return Object.entries(RUNTIME_SEQUENCE_PRIVILEGE_MATRIX).map(([sequence_name, entry]) => ({
+    rolname: runtimeRole,
+    sequence_name,
+    can_usage: entry.usage,
+    can_select: false,
+    can_update: false,
+  }));
+}
+
+/** Filas VACÍAS de tabla/secuencia — el estado PRE-GRANT esperado
+ * (ningún privilegio otorgado todavía). */
+function emptyTablePrivilegeRows(): TablePrivilegeRow[] {
+  return Object.keys(RUNTIME_TABLE_PRIVILEGE_MATRIX).map((table_name) => ({
+    rolname: '__unused__',
+    table_name,
+    can_select: false,
+    can_insert: false,
+    can_update: false,
+    can_delete: false,
+    can_truncate: false,
+    can_references: false,
+    can_trigger: false,
+  }));
+}
+
+function emptySequencePrivilegeRows(): SequencePrivilegeRow[] {
+  return Object.keys(RUNTIME_SEQUENCE_PRIVILEGE_MATRIX).map((sequence_name) => ({
+    rolname: '__unused__',
+    sequence_name,
+    can_usage: false,
+    can_select: false,
+    can_update: false,
+  }));
+}
+
 /**
  * Despachador de queries por texto/prefijo — refleja el orden real de
- * `reconcilePrivileges` sin acoplar los tests al índice exacto de llamada.
+ * `reconcilePrivileges` sin acoplar los tests al índice exacto de
+ * llamada. `preGrant*`/`postGrant*` permiten simular estados DISTINTOS
+ * antes y después de los GRANT — por defecto PRE-GRANT es "vacío"
+ * (nada otorgado todavía, normal) y POST-GRANT es "exactamente sano"
+ * (la matriz, ni más ni menos) — el shape que un reconcile exitoso real
+ * produciría.
  */
 function installQueryMock(
   options: {
@@ -52,8 +115,17 @@ function installQueryMock(
     roleExists?: boolean;
     presentTables?: string[];
     presentSequences?: string[];
-    pgmigrationsExists?: boolean;
-    pgmigrationsPrivileges?: Partial<Record<'can_select' | 'can_insert' | 'can_update' | 'can_delete' | 'can_truncate' | 'can_trigger' | 'can_references', boolean>>;
+    runtimeRole?: string;
+    preGrantTableRows?: TablePrivilegeRow[];
+    preGrantSequenceRows?: SequencePrivilegeRow[];
+    preGrantSchemaCreate?: boolean;
+    preGrantDirectMemberships?: RoleMembershipRow[];
+    preGrantTransitiveMemberships?: RoleMembershipRow[];
+    postGrantTableRows?: TablePrivilegeRow[];
+    postGrantSequenceRows?: SequencePrivilegeRow[];
+    postGrantSchemaCreate?: boolean;
+    postGrantDirectMemberships?: RoleMembershipRow[];
+    postGrantTransitiveMemberships?: RoleMembershipRow[];
     failOnStatementSubstring?: string;
   } = {},
 ) {
@@ -63,10 +135,21 @@ function installQueryMock(
     roleExists = true,
     presentTables = ALL_MATRIX_TABLES,
     presentSequences = ALL_MATRIX_SEQUENCES,
-    pgmigrationsExists = true,
-    pgmigrationsPrivileges = {},
+    runtimeRole = 'runtime_test',
+    preGrantTableRows = emptyTablePrivilegeRows(),
+    preGrantSequenceRows = emptySequencePrivilegeRows(),
+    preGrantSchemaCreate = false,
+    preGrantDirectMemberships = [],
+    preGrantTransitiveMemberships = [],
+    postGrantTableRows = healthyTablePrivilegeRows(runtimeRole),
+    postGrantSequenceRows = healthySequencePrivilegeRows(runtimeRole),
+    postGrantSchemaCreate = false,
+    postGrantDirectMemberships = [],
+    postGrantTransitiveMemberships = [],
     failOnStatementSubstring,
   } = options;
+
+  let grantsExecuted = false;
 
   mockConnect.mockReset().mockResolvedValue(undefined);
   mockEnd.mockReset().mockResolvedValue(undefined);
@@ -77,7 +160,7 @@ function installQueryMock(
     if (sql.startsWith('SELECT current_user')) {
       return Promise.resolve({ rows: [{ current_user: currentUser }], rowCount: 1 });
     }
-    if (sql.includes('has_schema_privilege')) {
+    if (sql.includes('has_schema_privilege(current_user')) {
       return Promise.resolve({ rows: [{ can_create: canCreateInSchema }], rowCount: 1 });
     }
     if (sql.startsWith('SELECT 1 FROM pg_roles')) {
@@ -86,36 +169,39 @@ function installQueryMock(
     if (sql.includes('FROM pg_tables')) {
       return Promise.resolve({ rows: presentTables.map((tablename) => ({ tablename })), rowCount: presentTables.length });
     }
-    if (sql.includes("c.relkind = 'S'")) {
+    if (sql.includes("c.relkind = 'S'") && !sql.includes('has_sequence_privilege')) {
       return Promise.resolve({ rows: presentSequences.map((relname) => ({ relname })), rowCount: presentSequences.length });
     }
-    if (sql.includes("to_regclass('public.pgmigrations')")) {
-      return Promise.resolve({ rows: [{ exists: pgmigrationsExists }], rowCount: 1 });
+    if (sql === RUNTIME_TABLE_PRIVILEGES_QUERY) {
+      return Promise.resolve({ rows: grantsExecuted ? postGrantTableRows : preGrantTableRows });
     }
-    if (sql.includes('has_table_privilege') && sql.includes('pgmigrations')) {
+    if (sql === RUNTIME_SEQUENCE_PRIVILEGES_QUERY) {
+      return Promise.resolve({ rows: grantsExecuted ? postGrantSequenceRows : preGrantSequenceRows });
+    }
+    if (sql === RUNTIME_SCHEMA_CREATE_QUERY) {
       return Promise.resolve({
-        rows: [
-          {
-            can_select: false,
-            can_insert: false,
-            can_update: false,
-            can_delete: false,
-            can_truncate: false,
-            can_trigger: false,
-            can_references: false,
-            ...pgmigrationsPrivileges,
-          },
-        ],
-        rowCount: 1,
+        rows: [{ rolname: runtimeRole, can_schema_create: grantsExecuted ? postGrantSchemaCreate : preGrantSchemaCreate }],
       });
     }
-    if (sql === 'BEGIN;' || sql === 'COMMIT;' || sql === 'ROLLBACK;') {
+    if (sql === RUNTIME_DIRECT_MEMBERSHIPS_QUERY) {
+      return Promise.resolve({ rows: grantsExecuted ? postGrantDirectMemberships : preGrantDirectMemberships });
+    }
+    if (sql === TRANSITIVE_ROLE_MEMBERSHIP_CTE) {
+      return Promise.resolve({ rows: grantsExecuted ? postGrantTransitiveMemberships : preGrantTransitiveMemberships });
+    }
+    if (sql === 'BEGIN;') {
+      return Promise.resolve({ rows: [], rowCount: 0 });
+    }
+    if (sql === 'COMMIT;' || sql === 'ROLLBACK;') {
       return Promise.resolve({ rows: [], rowCount: 0 });
     }
     if (failOnStatementSubstring && sql.includes(failOnStatementSubstring)) {
       return Promise.reject(new Error('simulated grant failure — must never leak this raw pg error'));
     }
-    // Cualquiera de los GRANT reales derivados de la matriz.
+    if (sql.startsWith('GRANT')) {
+      grantsExecuted = true;
+      return Promise.resolve({ rows: [], rowCount: 0 });
+    }
     return Promise.resolve({ rows: [], rowCount: 0 });
   });
 }
@@ -368,20 +454,156 @@ describe('privilege-reconciler', () => {
       expect(mockQuery).not.toHaveBeenCalledWith('BEGIN;');
     });
 
-    it('aborts with PGMIGRATIONS_PRIVILEGE_DETECTED (pre-check) and never issues BEGIN/GRANT if the runtime role already has any pgmigrations privilege', async () => {
-      setEnv({ MIGRATION_DATABASE_URL: 'postgres://migration_test:pw@localhost:5432/korixa_test', RUNTIME_DB_ROLE: 'runtime_test' });
-      installQueryMock({ currentUser: 'migration_test', pgmigrationsPrivileges: { can_select: true } });
+    // =========================================================================
+    // P1-1 — PRE-GRANT fail-closed. Un privilegio EXCEDENTE ya presente
+    // (nunca uno faltante) aborta ANTES de BEGIN.
+    // =========================================================================
+    describe('PRE-GRANT fail-closed (P1-1)', () => {
+      it('pre-existing DELETE ON users => NO RECONCILED (RUNTIME_PRIVILEGE_DRIFT_DETECTED), never BEGIN', async () => {
+        setEnv({ MIGRATION_DATABASE_URL: 'postgres://migration_test:pw@localhost:5432/korixa_test', RUNTIME_DB_ROLE: 'runtime_test' });
+        const preGrantTableRows = emptyTablePrivilegeRows().map((r) =>
+          r.table_name === 'users' ? { ...r, rolname: 'runtime_test', can_delete: true } : r,
+        );
+        installQueryMock({ currentUser: 'migration_test', preGrantTableRows });
 
-      await expect(reconcilePrivileges()).rejects.toMatchObject({ code: 'PGMIGRATIONS_PRIVILEGE_DETECTED' });
-      expect(mockQuery).not.toHaveBeenCalledWith('BEGIN;');
+        await expect(reconcilePrivileges()).rejects.toMatchObject({ code: 'RUNTIME_PRIVILEGE_DRIFT_DETECTED' });
+        expect(mockQuery).not.toHaveBeenCalledWith('BEGIN;');
+      });
+
+      it('pre-existing UPDATE ON audit_log => NO RECONCILED, never BEGIN', async () => {
+        setEnv({ MIGRATION_DATABASE_URL: 'postgres://migration_test:pw@localhost:5432/korixa_test', RUNTIME_DB_ROLE: 'runtime_test' });
+        const preGrantTableRows = emptyTablePrivilegeRows().map((r) =>
+          r.table_name === 'audit_log' ? { ...r, rolname: 'runtime_test', can_update: true } : r,
+        );
+        installQueryMock({ currentUser: 'migration_test', preGrantTableRows });
+
+        await expect(reconcilePrivileges()).rejects.toMatchObject({ code: 'RUNTIME_PRIVILEGE_DRIFT_DETECTED' });
+        expect(mockQuery).not.toHaveBeenCalledWith('BEGIN;');
+      });
+
+      it('pre-existing CREATE ON SCHEMA public => NO RECONCILED, never BEGIN', async () => {
+        setEnv({ MIGRATION_DATABASE_URL: 'postgres://migration_test:pw@localhost:5432/korixa_test', RUNTIME_DB_ROLE: 'runtime_test' });
+        installQueryMock({ currentUser: 'migration_test', preGrantSchemaCreate: true });
+
+        await expect(reconcilePrivileges()).rejects.toMatchObject({ code: 'RUNTIME_PRIVILEGE_DRIFT_DETECTED' });
+        expect(mockQuery).not.toHaveBeenCalledWith('BEGIN;');
+      });
+
+      it('pre-existing UPDATE ON audit_log_id_seq => NO RECONCILED, never BEGIN', async () => {
+        setEnv({ MIGRATION_DATABASE_URL: 'postgres://migration_test:pw@localhost:5432/korixa_test', RUNTIME_DB_ROLE: 'runtime_test' });
+        const preGrantSequenceRows = emptySequencePrivilegeRows().map((r) =>
+          r.sequence_name === 'audit_log_id_seq' ? { ...r, rolname: 'runtime_test', can_update: true } : r,
+        );
+        installQueryMock({ currentUser: 'migration_test', preGrantSequenceRows });
+
+        await expect(reconcilePrivileges()).rejects.toMatchObject({ code: 'RUNTIME_PRIVILEGE_DRIFT_DETECTED' });
+        expect(mockQuery).not.toHaveBeenCalledWith('BEGIN;');
+      });
+
+      it('pre-existing privilege on pgmigrations => PGMIGRATIONS_PRIVILEGE_DETECTED specifically (not the generic drift code), never BEGIN', async () => {
+        setEnv({ MIGRATION_DATABASE_URL: 'postgres://migration_test:pw@localhost:5432/korixa_test', RUNTIME_DB_ROLE: 'runtime_test' });
+        const preGrantTableRows = [
+          ...emptyTablePrivilegeRows(),
+          { rolname: 'runtime_test', table_name: 'pgmigrations', can_select: true, can_insert: false, can_update: false, can_delete: false, can_truncate: false, can_references: false, can_trigger: false },
+        ];
+        installQueryMock({ currentUser: 'migration_test', preGrantTableRows });
+
+        await expect(reconcilePrivileges()).rejects.toMatchObject({ code: 'PGMIGRATIONS_PRIVILEGE_DETECTED' });
+        expect(mockQuery).not.toHaveBeenCalledWith('BEGIN;');
+      });
+
+      it('pre-existing privilege on pgmigrations_id_seq => PGMIGRATIONS_PRIVILEGE_DETECTED, never BEGIN', async () => {
+        setEnv({ MIGRATION_DATABASE_URL: 'postgres://migration_test:pw@localhost:5432/korixa_test', RUNTIME_DB_ROLE: 'runtime_test' });
+        const preGrantSequenceRows = [
+          ...emptySequencePrivilegeRows(),
+          { rolname: 'runtime_test', sequence_name: 'pgmigrations_id_seq', can_usage: true, can_select: false, can_update: false },
+        ];
+        installQueryMock({ currentUser: 'migration_test', preGrantSequenceRows });
+
+        await expect(reconcilePrivileges()).rejects.toMatchObject({ code: 'PGMIGRATIONS_PRIVILEGE_DETECTED' });
+        expect(mockQuery).not.toHaveBeenCalledWith('BEGIN;');
+      });
+
+      it('a missing (not-yet-granted) matrix privilege does NOT block PRE-GRANT — clean state + missing expected grants => GRANT + exact postcheck + RECONCILED', async () => {
+        setEnv({ MIGRATION_DATABASE_URL: 'postgres://migration_test:pw@localhost:5432/korixa_test', RUNTIME_DB_ROLE: 'runtime_test' });
+        installQueryMock({ currentUser: 'migration_test' }); // defaults: pre-grant empty, post-grant healthy
+
+        const result = await reconcilePrivileges();
+        expect(result.outcome).toBe('RECONCILED');
+        expect(mockQuery).toHaveBeenCalledWith('BEGIN;');
+      });
+
+      it('pre-existing runtime -> cloudsqlsuperuser membership (direct) => RUNTIME_PRIVILEGE_DRIFT_DETECTED via unsafe membership, never BEGIN', async () => {
+        setEnv({ MIGRATION_DATABASE_URL: 'postgres://migration_test:pw@localhost:5432/korixa_test', RUNTIME_DB_ROLE: 'runtime_test' });
+        installQueryMock({
+          currentUser: 'migration_test',
+          preGrantTransitiveMemberships: [{ member_role: 'runtime_test', granted_role: 'cloudsqlsuperuser' }],
+        });
+
+        await expect(reconcilePrivileges()).rejects.toMatchObject({ code: 'RUNTIME_PRIVILEGE_DRIFT_DETECTED' });
+        expect(mockQuery).not.toHaveBeenCalledWith('BEGIN;');
+      });
+
+      it('pre-existing runtime -> unexpected_role membership (not cloudsqlsuperuser, not in the empty allowlist) => blocks too', async () => {
+        setEnv({ MIGRATION_DATABASE_URL: 'postgres://migration_test:pw@localhost:5432/korixa_test', RUNTIME_DB_ROLE: 'runtime_test' });
+        installQueryMock({
+          currentUser: 'migration_test',
+          preGrantDirectMemberships: [{ member_role: 'runtime_test', granted_role: 'some_other_role' }],
+        });
+
+        await expect(reconcilePrivileges()).rejects.toMatchObject({ code: 'RUNTIME_PRIVILEGE_DRIFT_DETECTED' });
+        expect(mockQuery).not.toHaveBeenCalledWith('BEGIN;');
+      });
     });
 
-    it('skips the pgmigrations privilege check gracefully when pgmigrations does not exist yet', async () => {
-      setEnv({ MIGRATION_DATABASE_URL: 'postgres://migration_test:pw@localhost:5432/korixa_test', RUNTIME_DB_ROLE: 'runtime_test' });
-      installQueryMock({ currentUser: 'migration_test', pgmigrationsExists: false });
+    // =========================================================================
+    // P1-1 — POST-GRANT exact-state proof.
+    // =========================================================================
+    describe('POST-GRANT exact-state proof (P1-1)', () => {
+      it('if the post-grant state still has an unexpected privilege, ROLLBACK and POST_GRANT_STATE_MISMATCH (never RECONCILED)', async () => {
+        setEnv({ MIGRATION_DATABASE_URL: 'postgres://migration_test:pw@localhost:5432/korixa_test', RUNTIME_DB_ROLE: 'runtime_test' });
+        const postGrantTableRows = healthyTablePrivilegeRows('runtime_test').map((r) => (r.table_name === 'users' ? { ...r, can_delete: true } : r));
+        installQueryMock({ currentUser: 'migration_test', postGrantTableRows });
 
-      const result = await reconcilePrivileges();
-      expect(result.outcome).toBe('RECONCILED');
+        await expect(reconcilePrivileges()).rejects.toMatchObject({ code: 'POST_GRANT_STATE_MISMATCH' });
+        const calledSql = mockQuery.mock.calls.map((c) => c[0] as string);
+        expect(calledSql).toContain('BEGIN;');
+        expect(calledSql).toContain('ROLLBACK;');
+        expect(calledSql).not.toContain('COMMIT;');
+      });
+
+      it('if the post-grant state is still missing a required matrix privilege, ROLLBACK and POST_GRANT_STATE_MISMATCH', async () => {
+        setEnv({ MIGRATION_DATABASE_URL: 'postgres://migration_test:pw@localhost:5432/korixa_test', RUNTIME_DB_ROLE: 'runtime_test' });
+        const postGrantTableRows = healthyTablePrivilegeRows('runtime_test').map((r) => (r.table_name === 'audit_log' ? { ...r, can_insert: false } : r));
+        installQueryMock({ currentUser: 'migration_test', postGrantTableRows });
+
+        await expect(reconcilePrivileges()).rejects.toMatchObject({ code: 'POST_GRANT_STATE_MISMATCH' });
+        const calledSql = mockQuery.mock.calls.map((c) => c[0] as string);
+        expect(calledSql).toContain('ROLLBACK;');
+        expect(calledSql).not.toContain('COMMIT;');
+      });
+
+      it('clean state + missing expected grants => GRANT + exact postcheck + RECONCILED', async () => {
+        setEnv({ MIGRATION_DATABASE_URL: 'postgres://migration_test:pw@localhost:5432/korixa_test', RUNTIME_DB_ROLE: 'runtime_test' });
+        installQueryMock({ currentUser: 'migration_test' });
+
+        const result = await reconcilePrivileges();
+
+        expect(result).toEqual({
+          runtime_role_identifier_valid: true,
+          migration_context_valid: true,
+          runtime_role_existed: true,
+          expected_schema_objects_present: true,
+          pre_grant_drift_absent: true,
+          post_grant_exact_state_proven: true,
+          statements_executed: buildReconciliationStatements('"runtime_test"').length,
+          outcome: 'RECONCILED',
+        });
+        const calledSql = mockQuery.mock.calls.map((c) => c[0] as string);
+        expect(calledSql).toContain('BEGIN;');
+        expect(calledSql).toContain('COMMIT;');
+        expect(calledSql).not.toContain('ROLLBACK;');
+      });
     });
 
     it('reconciles successfully: BEGIN, exactly the matrix-derived statements, COMMIT, then closes the connection', async () => {
@@ -391,15 +613,8 @@ describe('privilege-reconciler', () => {
       const result = await reconcilePrivileges();
 
       const expectedStatementCount = buildReconciliationStatements('"runtime_test"').length;
-      expect(result).toEqual({
-        runtime_role_identifier_valid: true,
-        migration_context_valid: true,
-        runtime_role_existed: true,
-        expected_schema_objects_present: true,
-        pgmigrations_privilege_absent_before: true,
-        statements_executed: expectedStatementCount,
-        outcome: 'RECONCILED',
-      });
+      expect(result.outcome).toBe('RECONCILED');
+      expect(result.statements_executed).toBe(expectedStatementCount);
 
       const calledSql = mockQuery.mock.calls.map((c) => c[0] as string);
       expect(calledSql).toContain('BEGIN;');
@@ -447,6 +662,7 @@ describe('privilege-reconciler', () => {
       installQueryMock({ currentUser: 'migration_test' });
 
       const first = await reconcilePrivileges();
+      installQueryMock({ currentUser: 'migration_test' }); // reset "grantsExecuted" state for a fresh second run
       const second = await reconcilePrivileges();
 
       expect(first.outcome).toBe('RECONCILED');

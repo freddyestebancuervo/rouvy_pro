@@ -81,12 +81,34 @@
  *                                `privilege-reconciler.ts`) — cualquier
  *                                exceso bloquea con
  *                                `HOLD_RUNTIME_PRIVILEGE_DRIFT`.
+ *
+ * REMEDIACIÓN P1-1/P1-2/P1-3 (auditoría independiente de PR #106):
+ *
+ *   P1-2  `diffRuntimePrivilegesAgainstMatrix` (ahora en
+ *         `runtime-privilege-audit.ts`) evalúa los TRES privilegios de
+ *         cada secuencia (USAGE/SELECT/UPDATE), no solo USAGE.
+ *   P1-3  `findCloudSqlSuperuserMemberships` se alimenta del CIERRE
+ *         TRANSITIVO de membresías (`TRANSITIVE_ROLE_MEMBERSHIP_CTE`,
+ *         `roleMembershipTransitiveClosure` más abajo) — detecta
+ *         `runtime -> intermediate -> cloudsqlsuperuser`, no solo la
+ *         arista directa.
+ *   nuevo `findPgmigrationsIdSeqRuntimeAccessViolations` (P1-1A) y
+ *         `findUnexpectedRuntimeRoleMemberships` (deny-by-default,
+ *         `EXPECTED_RUNTIME_ROLE_MEMBERSHIPS = []`) alimentan
+ *         `HOLD_PGMIGRATIONS_RUNTIME_ACCESS`/
+ *         `HOLD_ROLE_PRIVILEGE_ESCALATION` respectivamente.
  */
 
 import { Client } from 'pg';
-import { RUNTIME_TABLE_PRIVILEGE_MATRIX, RUNTIME_SEQUENCE_PRIVILEGE_MATRIX } from './runtime-privilege-matrix';
-
-const CLOUDSQLSUPERUSER_ROLE = 'cloudsqlsuperuser';
+import type { TablePrivilegeRow, SequencePrivilegeRow, RoleMembershipRow, RuntimePrivilegeDrift } from './runtime-privilege-audit';
+import {
+  findCloudSqlSuperuserMemberships,
+  findUnexpectedRuntimeRoleMemberships,
+  findPgmigrationsRuntimeAccessViolations,
+  findPgmigrationsIdSeqRuntimeAccessViolations,
+  diffRuntimePrivilegesAgainstMatrix,
+  TRANSITIVE_ROLE_MEMBERSHIP_CTE,
+} from './runtime-privilege-audit';
 
 // =============================================================================
 // Contrato de entorno — ver PHASE 2. Ninguna otra env var es leída.
@@ -240,6 +262,14 @@ export const INSPECTION_QUERIES = {
     WHERE m.rolname IN ('korixa_app', 'korixa_runtime');
   `,
 
+  /** P1-3 — cierre TRANSITIVO de membresías (no solo la arista
+   * directa), parametrizado por `$1 = TARGET_ROLES` (array). Usada
+   * exclusivamente para alimentar `findCloudSqlSuperuserMemberships` —
+   * `roleMemberships` (arriba) sigue siendo la fuente de las
+   * membresías DIRECTAS reportadas como evidencia cruda y para
+   * `findUnexpectedRuntimeRoleMemberships`. */
+  roleMembershipTransitiveClosure: TRANSITIVE_ROLE_MEMBERSHIP_CTE,
+
   databaseOwnership: `
     SELECT datname, pg_get_userbyid(datdba) AS owner
     FROM pg_database WHERE datname = 'korixa_production';
@@ -319,16 +349,35 @@ export const INSPECTION_QUERIES = {
   columnInventory: `SELECT table_name, column_name FROM information_schema.columns WHERE table_schema = 'public';`,
 } as const;
 
-/** Cada statement ejecutable debe ser BEGIN READ ONLY, SELECT o ROLLBACK
- * (PHASE 24) — verificado por statement, nunca por substring naive
- * (una consulta de privilegios legítima contiene literales como
- * 'DELETE'/'CREATE'). */
+/** Palabras que harían de un CTE (`WITH ... AS (...)`) una CTE que
+ * MODIFICA datos — PostgreSQL permite `WITH x AS (DELETE FROM t
+ * RETURNING *) SELECT * FROM x`, así que un statement que empieza con
+ * `WITH` no es automáticamente de solo lectura solo por terminar en
+ * SELECT. Se buscan como palabra completa (`\b`), nunca substring
+ * naive — a diferencia del caso `SELECT` (que nunca necesitó este
+ * escaneo porque un SELECT llano no puede embeber sintácticamente un
+ * statement de modificación), un `WITH` sí puede, así que acá el
+ * escaneo es una defensa real y proporcional, no cosmética. */
+const CTE_DATA_MODIFYING_KEYWORDS = /\b(INSERT|UPDATE|DELETE|MERGE|TRUNCATE|DROP|ALTER|CREATE|GRANT|REVOKE)\b/i;
+
+/** Cada statement ejecutable debe ser BEGIN READ ONLY, SELECT, ROLLBACK
+ * o una CTE de solo lectura (`WITH [RECURSIVE] ... SELECT`) (PHASE 24;
+ * `WITH` agregado en la remediación P1-3) — verificado por statement,
+ * nunca por substring naive (una consulta de privilegios legítima
+ * contiene literales como 'DELETE'/'CREATE', p. ej.
+ * `has_table_privilege(..., 'DELETE')` dentro de un SELECT — por eso
+ * el caso SELECT nunca escanea su contenido). El caso `WITH` SÍ escanea
+ * (ver `CTE_DATA_MODIFYING_KEYWORDS`) porque, a diferencia de SELECT,
+ * PostgreSQL permite que una CTE modifique datos. */
 export function topLevelStatementForm(sql: string): 'BEGIN_READ_ONLY' | 'SELECT' | 'ROLLBACK' | 'OTHER' {
   const trimmed = sql.trim().replace(/;$/, '').trim();
   const upper = trimmed.toUpperCase();
   if (upper === 'BEGIN READ ONLY') return 'BEGIN_READ_ONLY';
   if (upper === 'ROLLBACK') return 'ROLLBACK';
   if (upper.startsWith('SELECT')) return 'SELECT';
+  if (upper.startsWith('WITH')) {
+    return CTE_DATA_MODIFYING_KEYWORDS.test(trimmed) ? 'OTHER' : 'SELECT';
+  }
   return 'OTHER';
 }
 
@@ -785,150 +834,35 @@ export function findMissingExpectedRoles(rows: RoleCapabilityRow[]): string[] {
 }
 
 // =============================================================================
-// REMEDIACIÓN — membresía en `cloudsqlsuperuser` (7.1). Se alimenta al
-// MISMO array que `findPrivilegeEscalations` (nunca una disposición
-// separada silenciosa) para que `HOLD_ROLE_PRIVILEGE_ESCALATION` la
-// cubra automáticamente — el literal "cloudsqlsuperuser" en el mensaje
-// es lo que hace la semántica inequívoca y testeable, no una disposición
-// nueva.
+// REMEDIACIÓN (P1-1/P1-2/P1-3, auditoría independiente de PR #106) — la
+// lógica de diff/invariantes ahora vive en `runtime-privilege-audit.ts`,
+// compartida bit-a-bit con `privilege-reconciler.ts` (que la usa para
+// su propio gate PRE-GRANT/POST-GRANT fail-closed, no solo el
+// inspector). Se re-exportan los tipos/funciones acá para no romper
+// ningún import existente de este módulo.
 // =============================================================================
 
-export interface RoleMembershipRow {
-  member_role: string;
-  granted_role: string;
-}
-
-export function findCloudSqlSuperuserMemberships(rows: RoleMembershipRow[]): string[] {
-  return rows.filter((r) => r.granted_role === CLOUDSQLSUPERUSER_ROLE).map((r) => `${r.member_role}: membresía insegura en cloudsqlsuperuser`);
-}
-
-// =============================================================================
-// REMEDIACIÓN — acceso runtime a `pgmigrations` (7.2). Violación
-// automática, nunca `UNPROVEN_REQUIRES_REVIEW`: cualquier privilegio del
-// runtime (SELECT incluido) sobre la tabla de tracking del motor de
-// migración es HOLD. Reusa las filas YA recolectadas por
-// `tablePrivileges` (cross-join sin filtro de nombre de tabla) — no
-// requiere ninguna consulta nueva.
-// =============================================================================
-
-export function findPgmigrationsRuntimeAccessViolations(tableRows: TablePrivilegeRow[], runtimeRoleName: string): string[] {
-  const violations: string[] = [];
-  for (const row of tableRows) {
-    if (row.table_name !== 'pgmigrations' || row.rolname !== runtimeRoleName) continue;
-    if (row.can_select) violations.push(`${runtimeRoleName}: SELECT inesperado en pgmigrations`);
-    if (row.can_insert) violations.push(`${runtimeRoleName}: INSERT inesperado en pgmigrations`);
-    if (row.can_update) violations.push(`${runtimeRoleName}: UPDATE inesperado en pgmigrations`);
-    if (row.can_delete) violations.push(`${runtimeRoleName}: DELETE inesperado en pgmigrations`);
-    if (row.can_truncate) violations.push(`${runtimeRoleName}: TRUNCATE inesperado en pgmigrations`);
-    if (row.can_trigger) violations.push(`${runtimeRoleName}: TRIGGER inesperado en pgmigrations`);
-    if (row.can_references) violations.push(`${runtimeRoleName}: REFERENCES inesperado en pgmigrations`);
-  }
-  return violations;
-}
-
-// =============================================================================
-// REMEDIACIÓN — drift de privilegios runtime vs. la matriz mínima
-// (7.3). Única fuente de verdad compartida con `privilege-reconciler.ts`
-// (`runtime-privilege-matrix.ts`) — evita que inspector y reconciliador
-// diverjan silenciosamente. Cubre en ambas direcciones: privilegio
-// requerido por la matriz pero ausente (`missing`), y privilegio real
-// que la matriz nunca autorizó (`unexpected`) — incluye CREATE en schema
-// public y TRUNCATE/TRIGGER/REFERENCES en cualquier tabla (la matriz
-// nunca los autoriza para ninguna). Cualquier tabla/secuencia con
-// privilegio real que ni siquiera aparece en la matriz (p. ej.
-// `pgmigrations`, o una tabla futura sin entrada todavía) también cuenta
-// como `unexpected` acá — redundante a propósito con
-// `findPgmigrationsRuntimeAccessViolations`, que ya la cubre por
-// separado con un mensaje específico.
-// =============================================================================
-
-export interface RuntimePrivilegeDrift {
-  missing: string[];
-  unexpected: string[];
-}
-
-export function diffRuntimePrivilegesAgainstMatrix(
-  tableRows: TablePrivilegeRow[],
-  sequenceRows: SequencePrivilegeRow[],
-  schemaCreateRow: { rolname: string; can_schema_create: boolean } | undefined,
-  runtimeRoleName: string,
-): RuntimePrivilegeDrift {
-  const missing: string[] = [];
-  const unexpected: string[] = [];
-
-  const runtimeTableRows = tableRows.filter((r) => r.rolname === runtimeRoleName);
-  const matrixTableNames = new Set(Object.keys(RUNTIME_TABLE_PRIVILEGE_MATRIX));
-
-  for (const [table, entry] of Object.entries(RUNTIME_TABLE_PRIVILEGE_MATRIX)) {
-    const row = runtimeTableRows.find((r) => r.table_name === table);
-    const actual = {
-      select: row?.can_select ?? false,
-      insert: row?.can_insert ?? false,
-      update: row?.can_update ?? false,
-      delete: row?.can_delete ?? false,
-    };
-    (['select', 'insert', 'update', 'delete'] as const).forEach((verb) => {
-      if (entry[verb] && !actual[verb]) missing.push(`table:${table}:${verb}`);
-      if (!entry[verb] && actual[verb]) unexpected.push(`table:${table}:${verb}`);
-    });
-    if (row?.can_truncate) unexpected.push(`table:${table}:truncate`);
-    if (row?.can_trigger) unexpected.push(`table:${table}:trigger`);
-    if (row?.can_references) unexpected.push(`table:${table}:references`);
-  }
-
-  for (const row of runtimeTableRows) {
-    if (matrixTableNames.has(row.table_name)) continue;
-    if (row.can_select || row.can_insert || row.can_update || row.can_delete || row.can_truncate || row.can_trigger || row.can_references) {
-      unexpected.push(`table:${row.table_name}:unexpected_access`);
-    }
-  }
-
-  const runtimeSequenceRows = sequenceRows.filter((r) => r.rolname === runtimeRoleName);
-  const matrixSequenceNames = new Set(Object.keys(RUNTIME_SEQUENCE_PRIVILEGE_MATRIX));
-
-  for (const [sequence, entry] of Object.entries(RUNTIME_SEQUENCE_PRIVILEGE_MATRIX)) {
-    const row = runtimeSequenceRows.find((r) => r.sequence_name === sequence);
-    const hasUsage = row?.can_usage ?? false;
-    if (entry.usage && !hasUsage) missing.push(`sequence:${sequence}:usage`);
-    if (!entry.usage && hasUsage) unexpected.push(`sequence:${sequence}:usage`);
-  }
-
-  for (const row of runtimeSequenceRows) {
-    if (matrixSequenceNames.has(row.sequence_name)) continue;
-    if (row.can_usage || row.can_select || row.can_update) unexpected.push(`sequence:${row.sequence_name}:unexpected_access`);
-  }
-
-  if (schemaCreateRow?.can_schema_create) {
-    unexpected.push('schema:public:create');
-  }
-
-  return { missing, unexpected };
-}
+export type {
+  TablePrivilegeRow,
+  SequencePrivilegeRow,
+  RoleMembershipRow,
+  RuntimePrivilegeDrift,
+} from './runtime-privilege-audit';
+export {
+  findCloudSqlSuperuserMemberships,
+  findUnexpectedRuntimeRoleMemberships,
+  findPgmigrationsRuntimeAccessViolations,
+  findPgmigrationsIdSeqRuntimeAccessViolations,
+  findAuditLogHardcodedShapeViolations,
+  diffRuntimePrivilegesAgainstMatrix,
+  EXPECTED_RUNTIME_ROLE_MEMBERSHIPS,
+  TRANSITIVE_ROLE_MEMBERSHIP_CTE,
+} from './runtime-privilege-audit';
 
 // =============================================================================
 // PHASE 21 — esquema de resultado. Solo estos campos; nunca DATABASE_URL,
 // password, ni ningún dato de una tabla de aplicación.
 // =============================================================================
-
-export interface TablePrivilegeRow {
-  rolname: string;
-  table_name: string;
-  can_select: boolean;
-  can_insert: boolean;
-  can_update: boolean;
-  can_delete: boolean;
-  can_truncate: boolean;
-  can_references: boolean;
-  can_trigger: boolean;
-}
-
-export interface SequencePrivilegeRow {
-  rolname: string;
-  sequence_name: string;
-  can_usage: boolean;
-  can_select: boolean;
-  can_update: boolean;
-}
 
 export interface InspectionResult {
   inspection_version: string;
@@ -958,6 +892,9 @@ export interface InspectionResult {
     /** Cualquier privilegio del runtime (SELECT incluido) sobre esta
      * tabla — violación automática, nunca `UNPROVEN_REQUIRES_REVIEW`. */
     runtime_access_violations: string[];
+    /** P1-1A — mismo invariante para `pgmigrations_id_seq`
+     * (USAGE/SELECT/UPDATE deben ser todos `false`). */
+    runtime_id_seq_access_violations: string[];
   };
   physical_schema: PhysicalSchemaSummary;
   /** Comparación del runtime real contra `runtime-privilege-matrix.ts`
@@ -1098,6 +1035,7 @@ export async function runInspection(): Promise<InspectionResult> {
     const [
       roleCapsResult,
       membershipsResult,
+      transitiveMembershipsResult,
       dbOwnerResult,
       schemaOwnerResult,
       objectOwnersResult,
@@ -1113,6 +1051,9 @@ export async function runInspection(): Promise<InspectionResult> {
       }),
       client.query(INSPECTION_QUERIES.roleMemberships).catch(() => {
         throw sanitizeUnexpectedError('ROLE_QUERY_FAILED', 'Falló la consulta de membresías de rol');
+      }),
+      client.query(INSPECTION_QUERIES.roleMembershipTransitiveClosure, [[...TARGET_ROLES]]).catch(() => {
+        throw sanitizeUnexpectedError('ROLE_QUERY_FAILED', 'Falló la consulta de cierre transitivo de membresías de rol (P1-3)');
       }),
       client.query(INSPECTION_QUERIES.databaseOwnership).catch(() => {
         throw sanitizeUnexpectedError('OWNERSHIP_QUERY_FAILED', 'Falló la consulta de ownership de base de datos');
@@ -1144,15 +1085,30 @@ export async function runInspection(): Promise<InspectionResult> {
     ]);
 
     const roleCapabilities = roleCapsResult.rows as RoleCapabilityRow[];
-    const cloudSqlSuperuserFindings = findCloudSqlSuperuserMemberships(membershipsResult.rows as RoleMembershipRow[]);
+    // P1-3: alimentado por el CIERRE TRANSITIVO (no la arista directa)
+    // — detecta runtime -> intermediate_role -> cloudsqlsuperuser igual
+    // que runtime -> cloudsqlsuperuser.
+    const cloudSqlSuperuserFindings = findCloudSqlSuperuserMemberships(transitiveMembershipsResult.rows as RoleMembershipRow[]);
+    // Deny-by-default: cualquier membresía DIRECTA de korixa_runtime que
+    // no esté en EXPECTED_RUNTIME_ROLE_MEMBERSHIPS (= [] hoy) también
+    // es escalamiento de privilegio.
+    const unexpectedMembershipFindings = findUnexpectedRuntimeRoleMemberships(membershipsResult.rows as RoleMembershipRow[], EXPECTED_DB_USER);
     // Mismo array/disposition que el resto de privilege escalation
     // findings (7.1) — nunca una rama separada silenciosa.
-    const privilegeEscalationFindings = [...findPrivilegeEscalations(roleCapabilities), ...cloudSqlSuperuserFindings];
+    const privilegeEscalationFindings = [...findPrivilegeEscalations(roleCapabilities), ...cloudSqlSuperuserFindings, ...unexpectedMembershipFindings];
     const missingExpectedRoles = findMissingExpectedRoles(roleCapabilities);
     const pgmigrationsAccessViolations = findPgmigrationsRuntimeAccessViolations(tablePrivilegesResult.rows as TablePrivilegeRow[], EXPECTED_DB_USER);
+    // P1-1A: mismo invariante que la tabla, para pgmigrations_id_seq.
+    const pgmigrationsIdSeqAccessViolations = findPgmigrationsIdSeqRuntimeAccessViolations(
+      sequencePrivilegesResult.rows as SequencePrivilegeRow[],
+      EXPECTED_DB_USER,
+    );
     const runtimeSchemaCreateRow = (dbPrivilegesResult.rows as { rolname: string; can_schema_create: boolean }[]).find(
       (r) => r.rolname === EXPECTED_DB_USER,
     );
+    // P1-2: diffRuntimePrivilegesAgainstMatrix ahora evalúa los TRES
+    // privilegios de cada secuencia (USAGE/SELECT/UPDATE) — ver
+    // runtime-privilege-audit.ts.
     const runtimePrivilegeDrift = diffRuntimePrivilegesAgainstMatrix(
       tablePrivilegesResult.rows as TablePrivilegeRow[],
       sequencePrivilegesResult.rows as SequencePrivilegeRow[],
@@ -1234,8 +1190,9 @@ export async function runInspection(): Promise<InspectionResult> {
       finalDisposition = 'HOLD_EXPECTED_ROLE_MISSING';
     } else if (ownerUnresolved) {
       finalDisposition = 'HOLD_OWNER_UNRESOLVED';
-    } else if (pgmigrationsAccessViolations.length > 0) {
-      // 7.2 — violación automática, nunca UNPROVEN_REQUIRES_REVIEW.
+    } else if (pgmigrationsAccessViolations.length > 0 || pgmigrationsIdSeqAccessViolations.length > 0) {
+      // 7.2 / P1-1A — violación automática, nunca UNPROVEN_REQUIRES_REVIEW.
+      // Cubre tanto la tabla pgmigrations como su secuencia de tracking.
       finalDisposition = 'HOLD_PGMIGRATIONS_RUNTIME_ACCESS';
     } else if (runtimePrivilegeDrift.unexpected.length > 0 || runtimePrivilegeDrift.missing.length > 0) {
       // 7.3 — cualquier exceso ('unexpected') bloquea; un privilegio
@@ -1273,6 +1230,7 @@ export async function runInspection(): Promise<InspectionResult> {
       ownerModel === 'CASE_C_RUNTIME_OWNER_VIOLATION' ||
       privilegeEscalationFindings.length > 0 ||
       pgmigrationsAccessViolations.length > 0 ||
+      pgmigrationsIdSeqAccessViolations.length > 0 ||
       runtimePrivilegeDrift.unexpected.length > 0
         ? 'OBVIOUS_VIOLATION'
         : 'UNPROVEN_REQUIRES_REVIEW';
@@ -1297,7 +1255,12 @@ export async function runInspection(): Promise<InspectionResult> {
         sequences: sequencePrivilegesResult.rows,
       },
       object_owners: objectOwners,
-      pgmigrations: { exists: pgmigrationsExists, classification: migrationClassification, runtime_access_violations: pgmigrationsAccessViolations },
+      pgmigrations: {
+        exists: pgmigrationsExists,
+        classification: migrationClassification,
+        runtime_access_violations: pgmigrationsAccessViolations,
+        runtime_id_seq_access_violations: pgmigrationsIdSeqAccessViolations,
+      },
       runtime_privilege_drift: runtimePrivilegeDrift,
       physical_schema: physicalSchema,
       pgcrypto_present: pgcryptoPresent,

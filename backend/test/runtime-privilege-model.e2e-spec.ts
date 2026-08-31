@@ -4,11 +4,13 @@ import {
   EXPECTED_MIGRATION_NAMES,
   classifyMigrationPrefix,
   findPgmigrationsRuntimeAccessViolations,
+  findPgmigrationsIdSeqRuntimeAccessViolations,
   diffRuntimePrivilegesAgainstMatrix,
   findCloudSqlSuperuserMemberships,
   type TablePrivilegeRow,
   type SequencePrivilegeRow,
 } from '../src/ops/db-readonly-inspector';
+import { TRANSITIVE_ROLE_MEMBERSHIP_CTE, type RoleMembershipRow } from '../src/ops/runtime-privilege-audit';
 
 /**
  * T-F1.2 — KORIXA_TF12_PRIVILEGE_MODEL_REMEDIATION, evidencia contra
@@ -112,6 +114,12 @@ const MEMBERSHIP_QUERY = `
   JOIN pg_roles r ON r.oid = am.roleid
   WHERE m.rolname = $1;
 `;
+
+/** P1-3 — cierre TRANSITIVO real, vía la MISMA CTE recursiva que usan
+ * el reconciliador y el inspector (`$1` es un array de nombres de rol). */
+async function queryTransitiveMemberships(connectionString: string, roleNames: string[]): Promise<RoleMembershipRow[]> {
+  return withClient(connectionString, (c) => c.query(TRANSITIVE_ROLE_MEMBERSHIP_CTE, [roleNames]).then((r) => r.rows as RoleMembershipRow[]));
+}
 
 async function withClient<T>(connectionString: string, fn: (client: Client) => Promise<T>): Promise<T> {
   const client = new Client({ connectionString });
@@ -553,6 +561,94 @@ describe('Runtime privilege model — real PostgreSQL 16 (T-F1.2 privilege model
         expect(ownerRow.owner).toBe(RUNTIME_ROLE);
       } finally {
         await adminTestDbClient.query(`ALTER TABLE public.roles OWNER TO ${MIGRATION_ROLE};`);
+      }
+    });
+
+    it('F — falso RECONCILED: tras un GRANT DELETE manual sobre users, el reconciliador se niega en vez de reportar RECONCILED (P1-1)', async () => {
+      await withClient(migrationDatabaseUrl, (c) => c.query(`GRANT DELETE ON TABLE users TO ${RUNTIME_ROLE};`));
+      try {
+        const result = runReconciler(migrationDatabaseUrl, RUNTIME_ROLE);
+        expect(result.exitCode).not.toBe(0);
+        const parsed = JSON.parse(result.stderr);
+        expect(parsed.error_code).toBe('RUNTIME_PRIVILEGE_DRIFT_DETECTED');
+        expect(result.stdout).toBe(''); // nunca se imprime un resultado RECONCILED en stdout
+      } finally {
+        // migration_test es owner de `users` (la creó), así que puede
+        // revocar lo que él mismo otorgó sin necesitar la identidad admin.
+        await withClient(migrationDatabaseUrl, (c) => c.query(`REVOKE DELETE ON TABLE users FROM ${RUNTIME_ROLE};`));
+      }
+    });
+
+    it('G — secuencia extra: SELECT en audit_log_id_seq -> inspector HOLD_RUNTIME_PRIVILEGE_DRIFT con el tag específico, reconciler NO RECONCILED', async () => {
+      await withClient(migrationDatabaseUrl, (c) => c.query(`GRANT SELECT ON SEQUENCE audit_log_id_seq TO ${RUNTIME_ROLE};`));
+      try {
+        const sequenceRows = await withClient(migrationDatabaseUrl, (c) => c.query(SEQUENCE_PRIVILEGE_QUERY, [RUNTIME_ROLE]).then((r) => r.rows as SequencePrivilegeRow[]));
+        const drift = diffRuntimePrivilegesAgainstMatrix([], sequenceRows, undefined, RUNTIME_ROLE);
+        expect(drift.unexpected).toContain('sequence:audit_log_id_seq:select');
+
+        const result = runReconciler(migrationDatabaseUrl, RUNTIME_ROLE);
+        expect(result.exitCode).not.toBe(0);
+        expect(JSON.parse(result.stderr).error_code).toBe('RUNTIME_PRIVILEGE_DRIFT_DETECTED');
+      } finally {
+        await withClient(migrationDatabaseUrl, (c) => c.query(`REVOKE SELECT ON SEQUENCE audit_log_id_seq FROM ${RUNTIME_ROLE};`));
+      }
+    });
+
+    it('G — secuencia extra: UPDATE en audit_log_id_seq -> mismo resultado', async () => {
+      await withClient(migrationDatabaseUrl, (c) => c.query(`GRANT UPDATE ON SEQUENCE audit_log_id_seq TO ${RUNTIME_ROLE};`));
+      try {
+        const sequenceRows = await withClient(migrationDatabaseUrl, (c) => c.query(SEQUENCE_PRIVILEGE_QUERY, [RUNTIME_ROLE]).then((r) => r.rows as SequencePrivilegeRow[]));
+        const drift = diffRuntimePrivilegesAgainstMatrix([], sequenceRows, undefined, RUNTIME_ROLE);
+        expect(drift.unexpected).toContain('sequence:audit_log_id_seq:update');
+
+        const result = runReconciler(migrationDatabaseUrl, RUNTIME_ROLE);
+        expect(result.exitCode).not.toBe(0);
+        expect(JSON.parse(result.stderr).error_code).toBe('RUNTIME_PRIVILEGE_DRIFT_DETECTED');
+      } finally {
+        await withClient(migrationDatabaseUrl, (c) => c.query(`REVOKE UPDATE ON SEQUENCE audit_log_id_seq FROM ${RUNTIME_ROLE};`));
+      }
+    });
+
+    it.each(['USAGE', 'SELECT', 'UPDATE'])('H — tracking sequence: GRANT %s ON pgmigrations_id_seq -> reconciler NO RECONCILED, inspector HOLD (P1-1A)', async (verb) => {
+      await withClient(migrationDatabaseUrl, (c) => c.query(`GRANT ${verb} ON SEQUENCE pgmigrations_id_seq TO ${RUNTIME_ROLE};`));
+      try {
+        const sequenceRows = await withClient(migrationDatabaseUrl, (c) => c.query(SEQUENCE_PRIVILEGE_QUERY, [RUNTIME_ROLE]).then((r) => r.rows as SequencePrivilegeRow[]));
+        const violations = findPgmigrationsIdSeqRuntimeAccessViolations(sequenceRows, RUNTIME_ROLE);
+        expect(violations.length).toBeGreaterThan(0);
+
+        const result = runReconciler(migrationDatabaseUrl, RUNTIME_ROLE);
+        expect(result.exitCode).not.toBe(0);
+        expect(JSON.parse(result.stderr).error_code).toBe('PGMIGRATIONS_PRIVILEGE_DETECTED');
+      } finally {
+        await withClient(migrationDatabaseUrl, (c) => c.query(`REVOKE ${verb} ON SEQUENCE pgmigrations_id_seq FROM ${RUNTIME_ROLE};`));
+      }
+    });
+
+    it('I — cloudsqlsuperuser INDIRECTO (vía intermediate_role) -> cierre transitivo lo detecta, arista directa no existe (P1-3)', async () => {
+      await adminClient.query(`DROP ROLE IF EXISTS intermediate_role;`).catch(() => {});
+      await adminClient.query(`CREATE ROLE cloudsqlsuperuser;`).catch(() => {});
+      await adminClient.query(`CREATE ROLE intermediate_role;`);
+      await adminClient.query(`GRANT cloudsqlsuperuser TO intermediate_role;`);
+      await adminClient.query(`GRANT intermediate_role TO ${RUNTIME_ROLE};`);
+      try {
+        const directRows = await withClient(migrationDatabaseUrl, (c) => c.query(MEMBERSHIP_QUERY, [RUNTIME_ROLE]).then((r) => r.rows as RoleMembershipRow[]));
+        const directToCloudSqlSuperuser = directRows.some((r) => r.granted_role === 'cloudsqlsuperuser');
+        expect(directToCloudSqlSuperuser).toBe(false); // DIRECT_RUNTIME_TO_CLOUDSQLSUPERUSER = FALSE
+
+        const transitiveRows = await queryTransitiveMemberships(migrationDatabaseUrl, [RUNTIME_ROLE]);
+        const findings = findCloudSqlSuperuserMemberships(transitiveRows);
+        expect(findings.length).toBeGreaterThan(0); // EFFECTIVE_MEMBERSHIP_DETECTED = TRUE
+        expect(findings[0]).toContain('cloudsqlsuperuser');
+
+        // FINAL_DISPOSITION = HOLD_ROLE_PRIVILEGE_ESCALATION: probado a
+        // nivel de función de clasificación pura (mismo mecanismo que
+        // runInspection usa) — el HOLD real de extremo a extremo contra
+        // korixa_app/korixa_runtime específicos vive en
+        // db-readonly-inspector.spec.ts (roles distintos a los de este
+        // Postgres NONPROD efímero).
+      } finally {
+        await adminClient.query(`REVOKE intermediate_role FROM ${RUNTIME_ROLE};`).catch(() => {});
+        await adminClient.query(`DROP ROLE IF EXISTS intermediate_role;`).catch(() => {});
       }
     });
 
