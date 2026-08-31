@@ -12,6 +12,7 @@ import {
   HardenerError,
   APPLY_MUTATION_STATEMENTS,
   APPLY_CONFIRMATION_TOKEN,
+  PREFLIGHT_ADMIN_SENTINEL,
   TARGET_ROLE,
   RUNTIME_ROLE,
   TARGET_SCHEMA,
@@ -257,6 +258,67 @@ describe('readRequiredEnv', () => {
     } catch (e) {
       expect((e as HardenerError).code).toBe('MISSING_HARDENER_MODE');
     }
+  });
+
+  it('8. el sentinel de preflight (UNPROVEN_PREFLIGHT_ONLY) NUNCA puede autorizar apply', () => {
+    try {
+      readRequiredEnv({
+        MIGRATION_DATABASE_URL: VALID_DSN,
+        HARDENER_MODE: 'apply',
+        EXPECTED_ADMIN_DB_USER: PREFLIGHT_ADMIN_SENTINEL,
+        EXPECTED_DATABASE: TARGET_DATABASE,
+        EXPECTED_DB_HOST: 'h',
+        EXPECTED_SOURCE_SHA: 'sha',
+        HARDEN_CONFIRMATION: APPLY_CONFIRMATION_TOKEN,
+      });
+      fail('debía lanzar');
+    } catch (e) {
+      expect((e as HardenerError).code).toBe('APPLY_SENTINEL_REJECTED');
+    }
+  });
+
+  it('el sentinel de preflight es aceptado sin problema para HARDENER_MODE=preflight', () => {
+    const env = readRequiredEnv({
+      MIGRATION_DATABASE_URL: VALID_DSN,
+      HARDENER_MODE: 'preflight',
+      EXPECTED_ADMIN_DB_USER: PREFLIGHT_ADMIN_SENTINEL,
+      EXPECTED_DATABASE: TARGET_DATABASE,
+      EXPECTED_DB_HOST: 'h',
+      EXPECTED_SOURCE_SHA: 'sha',
+    });
+    expect(env.EXPECTED_ADMIN_DB_USER).toBe(PREFLIGHT_ADMIN_SENTINEL);
+  });
+
+  it('el sentinel de preflight es aceptado sin problema para HARDENER_MODE=verify (nunca se usa como autorización ahí tampoco)', () => {
+    const env = readRequiredEnv({
+      MIGRATION_DATABASE_URL: VALID_DSN,
+      HARDENER_MODE: 'verify',
+      EXPECTED_ADMIN_DB_USER: PREFLIGHT_ADMIN_SENTINEL,
+      EXPECTED_DATABASE: TARGET_DATABASE,
+      EXPECTED_DB_HOST: 'h',
+      EXPECTED_SOURCE_SHA: 'sha',
+    });
+    expect(env.EXPECTED_ADMIN_DB_USER).toBe(PREFLIGHT_ADMIN_SENTINEL);
+  });
+
+  it('9. apply, incluso con el sentinel forzado como current_user simulado, sigue exigiendo la identidad EXACTA real (no un bypass mágico)', async () => {
+    installMockQuery({ currentUser: ADMIN_ROLE_STATE.rolname, sessionUser: ADMIN_ROLE_STATE.rolname });
+    // Un operador que (incorrectamente) intentara reusar el sentinel como
+    // EXPECTED_ADMIN_DB_USER para apply nunca llega aquí — readRequiredEnv ya
+    // lo rechaza (ver test 8). Este test prueba la segunda capa, redundante a
+    // propósito: aun si algo bypasseara ese chequeo y runApply recibiera el
+    // sentinel como EXPECTED_ADMIN_DB_USER directamente, la identidad
+    // conectada real (que nunca podría llamarse literalmente
+    // 'UNPROVEN_PREFLIGHT_ONLY' en Postgres) jamás coincidiría por accidente.
+    await expect(
+      runApply(
+        baseEnv({
+          HARDENER_MODE: 'apply',
+          HARDEN_CONFIRMATION: APPLY_CONFIRMATION_TOKEN,
+          EXPECTED_ADMIN_DB_USER: PREFLIGHT_ADMIN_SENTINEL,
+        }),
+      ),
+    ).rejects.toMatchObject({ code: 'UNEXPECTED_ADMIN_IDENTITY' });
   });
 
   it('rechaza EXPECTED_DATABASE distinta de korixa_production', () => {

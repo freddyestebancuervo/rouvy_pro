@@ -52,6 +52,13 @@
  * PROHIBIDA: `DATABASE_URL` — su sola presencia aborta antes de leer
  * cualquier otra cosa, igual disciplina que `privilege-reconciler.ts`.
  *
+ * `EXPECTED_ADMIN_DB_USER` en `preflight` puede ser el sentinel
+ * `PREFLIGHT_ADMIN_SENTINEL` (`'UNPROVEN_PREFLIGHT_ONLY'`) — `runPreflight`
+ * descubre la identidad real por sí mismo y nunca la usa como condición de
+ * autorización. Ese sentinel es EXPLÍCITAMENTE rechazado si `HARDENER_MODE`
+ * es `apply` (`readRequiredEnv` lanza `APPLY_SENTINEL_REJECTED`) — `apply`
+ * exige la identidad exacta que `preflight` ya probó, nunca el placeholder.
+ *
  * `TARGET_ROLE`, `RUNTIME_ROLE`, `TARGET_SCHEMA` y `TARGET_DATABASE` son
  * constantes hardcodeadas — ningún identificador SQL de este archivo se
  * deriva jamás de una variable de entorno o de un argumento. `EXPECTED_*`
@@ -94,6 +101,20 @@ export const APPLY_MUTATION_STATEMENTS = [
   'GRANT USAGE, CREATE ON SCHEMA public TO korixa_app;',
 ] as const;
 
+/**
+ * Sentinel documentado para `EXPECTED_ADMIN_DB_USER` en `preflight` —
+ * `runPreflight` descubre `current_user` por sí mismo y NUNCA lo usa como
+ * condición de autorización (solo `runApply` lo hace, vía
+ * `assertExpectedAdminIdentity`). Este valor existe para que un operador
+ * pueda ejecutar `preflight` sin conocer todavía la identidad administradora
+ * real — es exactamente lo que `preflight` sirve para descubrir y probar.
+ * NUNCA es válido para `apply`: `readRequiredEnv` lo rechaza explícitamente
+ * (defensa en profundidad además del guard del workflow) para que la
+ * identidad probada por `preflight` deba trasladarse verbatim a `apply`,
+ * nunca este placeholder.
+ */
+export const PREFLIGHT_ADMIN_SENTINEL = 'UNPROVEN_PREFLIGHT_ONLY' as const;
+
 // =============================================================================
 // Contrato de entorno
 // =============================================================================
@@ -121,6 +142,7 @@ export type HardenerErrorCode =
   | 'MISSING_HARDENER_MODE'
   | 'INVALID_HARDENER_MODE'
   | 'MISSING_EXPECTED_ADMIN_DB_USER'
+  | 'APPLY_SENTINEL_REJECTED'
   | 'MISSING_EXPECTED_DATABASE'
   | 'UNEXPECTED_TARGET_DATABASE_CONFIGURED'
   | 'MISSING_EXPECTED_DB_HOST'
@@ -201,6 +223,12 @@ export function readRequiredEnv(env: NodeJS.ProcessEnv = process.env): HardenerE
     throw new HardenerError(
       'MISSING_EXPECTED_ADMIN_DB_USER',
       'EXPECTED_ADMIN_DB_USER no está definida — nunca se infiere la identidad administradora esperada.',
+    );
+  }
+  if (HARDENER_MODE === 'apply' && EXPECTED_ADMIN_DB_USER === PREFLIGHT_ADMIN_SENTINEL) {
+    throw new HardenerError(
+      'APPLY_SENTINEL_REJECTED',
+      `EXPECTED_ADMIN_DB_USER no puede ser el sentinel '${PREFLIGHT_ADMIN_SENTINEL}' cuando HARDENER_MODE='apply' — ese valor solo es válido para preflight (que descubre la identidad real por sí mismo); apply exige la identidad EXACTA que preflight ya probó.`,
     );
   }
 
