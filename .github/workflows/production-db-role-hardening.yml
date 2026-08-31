@@ -24,14 +24,36 @@ name: Backend — Production DB role hardening (manual dispatch only)
 # matter what a human dispatches. This file does not create the service
 # account, does not grant IAM, and does not change Secret Manager policy.
 #
-# WHAT A FUTURE REAL DISPATCH WOULD DO, once prerequisites exist: (A) build
-# and publish a real Production artifact for the exact dispatched commit
-# (same reusable already used by the DB inspection workflow); (B) create/
-# update and execute, exactly once, a narrowly-scoped Cloud Run Job running
-# ONLY `node dist/ops/db-role-hardener.js` in the requested mode
-# (preflight/apply/verify) — never a shell, never an arbitrary command.
-# `apply` additionally requires the exact confirmation token the hardener
-# itself re-validates independently of this workflow.
+# WHAT A FUTURE REAL DISPATCH WOULD DO, once prerequisites exist: (A) resolve
+# a Production artifact for the exact dispatched commit — building/publishing
+# it if absent, or safely REUSING the already-published immutable artifact if
+# a prior dispatch (e.g. an earlier `preflight` at the same commit) already
+# built it, since `_backend-build-publish-production.yml` intentionally fails
+# closed on a duplicate SHA tag and must never be asked to push twice for the
+# same commit (see `check-artifact-existence`/`reuse-existing-artifact`
+# below); (B) create/update and execute, exactly once, a narrowly-scoped
+# Cloud Run Job running ONLY `node dist/ops/db-role-hardener.js` in the
+# requested mode (preflight/apply/verify) — never a shell, never an arbitrary
+# command. `apply` additionally requires the exact confirmation token the
+# hardener itself re-validates independently of this workflow.
+#
+# PREFLIGHT ADMIN INPUT SENTINEL: `runPreflight` (backend/src/ops/
+# db-role-hardener.ts) discovers the connected `current_user` itself and
+# never reads `EXPECTED_ADMIN_DB_USER` as an authorization condition — only
+# `runApply` does, via `assertExpectedAdminIdentity`. For `mode=preflight`
+# the operator MAY supply the sentinel `UNPROVEN_PREFLIGHT_ONLY` for
+# `expected_admin_db_user` when the real admin identity isn't known yet
+# (that's exactly what preflight is for: discovering it, and proving its
+# PostgreSQL 16 admin capability, before anyone commits to an `apply` run).
+# preflight still independently rejects `korixa_app`/`korixa_runtime` as the
+# connected identity, requires `current_user == session_user`, and requires
+# proven admin capability (superuser, or CREATEROLE + ADMIN OPTION on the
+# target role) — the sentinel changes none of that. `runVerify` also never
+# reads `EXPECTED_ADMIN_DB_USER`, so the sentinel is harmless there too. The
+# `guard` job below explicitly REJECTS the sentinel only for `mode=apply`
+# (the one mode that actually authorizes anything from this value): the
+# identity `preflight` proved must be carried forward verbatim into
+# `apply`'s `expected_admin_db_user`, never the placeholder.
 
 on:
   workflow_dispatch:
@@ -49,7 +71,7 @@ on:
         required: true
         type: string
       expected_admin_db_user:
-        description: "Explicit expected admin DB identity (current_user) the hardener must connect as. Never inferred. Only enforced by apply; preflight/verify still record it for the run."
+        description: "Explicit expected admin DB identity (current_user) the hardener must connect as. Never inferred. Only enforced by apply. For mode=preflight, the sentinel UNPROVEN_PREFLIGHT_ONLY may be used — preflight discovers the real identity itself and never authorizes anything from this value. apply MUST use the exact identity preflight proved; the guard rejects the sentinel for mode=apply."
         required: true
         type: string
       confirmation:
@@ -119,6 +141,10 @@ jobs:
           [[ "$SECRET_VERSION" =~ ^[1-9][0-9]*$ ]] || fail "migration_secret_version debe ser un entero positivo, nunca 'latest' ni cero: '$SECRET_VERSION'"
           [ -n "$ADMIN_DB_USER" ] || fail "expected_admin_db_user no puede estar vacío."
 
+          if [ "$MODE" = "apply" ] && [ "$ADMIN_DB_USER" = "UNPROVEN_PREFLIGHT_ONLY" ]; then
+            fail "expected_admin_db_user='UNPROVEN_PREFLIGHT_ONLY' no puede usarse con mode=apply — ese sentinel solo es válido para preflight (que descubre la identidad real por sí mismo). apply exige la identidad EXACTA que preflight ya probó."
+          fi
+
           echo "guard_pass=YES" >> "$GITHUB_OUTPUT"
 
   # ===========================================================================
@@ -149,13 +175,111 @@ jobs:
           echo "source_sha=${{ github.sha }}" >> "$GITHUB_OUTPUT"
 
   # ===========================================================================
-  # Job 3 — build & publish del artefacto real de Production (contiene
-  # dist/ops/db-role-hardener.js) para el mismo source_sha ya validado.
+  # Job 3 — decide BUILD vs REUSE, read-only. `_backend-build-publish-
+  # production.yml` intentionally fails closed (TAG_ALREADY_EXISTS) if the
+  # deterministic SHA tag already exists — calling it unconditionally on
+  # every dispatch means a second dispatch at the SAME audited commit (e.g.
+  # `apply` right after a `preflight` that already built it) would always
+  # fail. This job runs the EXACT SAME list+count algorithm the reusable's
+  # own precheck uses (copied verbatim, never reimplemented divergently) to
+  # decide, BEFORE calling anything, whether the reusable should run at all.
+  # Read-only: `artifactregistry.reader` only, same identity already used by
+  # `verify-prerequisites` below — never the publisher SA, since this job
+  # never pushes.
   # ===========================================================================
-  build-production-artifact:
-    name: Build & publish Production artifact
+  check-artifact-existence:
+    name: Check whether the exact SHA artifact already exists (read-only)
     needs: [guard, prepare-inputs]
     if: needs.guard.outputs.guard_pass == 'YES'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      id-token: write
+    outputs:
+      artifact_exists: ${{ steps.check.outputs.artifact_exists }}
+    steps:
+      - name: Google Auth — WIF to Production deployer SA (read-only)
+        uses: google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093 # v3
+        with:
+          project_id: ${{ env.PRODUCTION_PROJECT }}
+          workload_identity_provider: projects/731660820861/locations/global/workloadIdentityPools/github-actions-pool/providers/github-production-deployer
+          service_account: ${{ env.DEPLOYER_SA }}
+
+      - name: Setup gcloud
+        uses: google-github-actions/setup-gcloud@aa5489c8933f4cc7a4f7d45035b3b1440c9c10db # v3
+
+      - name: Contar tags exactos == SOURCE_SHA (mismo algoritmo que el precheck del reusable, solo lectura)
+        id: check
+        shell: bash
+        env:
+          SOURCE_SHA: ${{ needs.prepare-inputs.outputs.source_sha }}
+        run: |
+          set -euo pipefail
+          fail() { echo "::error::$1"; exit 1; }
+
+          command -v python3 >/dev/null 2>&1 || fail "ARTIFACT_EXISTENCE_CHECK=PARSER_UNAVAILABLE — python3 no disponible. FAIL_CLOSED."
+
+          LIST_STDOUT="$(mktemp)"
+          trap 'rm -f "$LIST_STDOUT"' EXIT
+
+          set +e
+          gcloud artifacts docker images list "${{ env.ARTIFACT_IMAGE }}" \
+            --include-tags \
+            --project="${{ env.PRODUCTION_PROJECT }}" \
+            --format=json >"$LIST_STDOUT" 2>&1
+          LIST_EXIT=$?
+          set -e
+          [ "$LIST_EXIT" -eq 0 ] || fail "ARTIFACT_EXISTENCE_CHECK=LOOKUP_ERROR — docker images list terminó con exit=$LIST_EXIT. FAIL_CLOSED."
+
+          set +e
+          MATCH_COUNT="$(python3 - "$SOURCE_SHA" "$LIST_STDOUT" <<'PY'
+          import json
+          import sys
+
+          source_sha, json_path = sys.argv[1], sys.argv[2]
+          try:
+              with open(json_path, "r", encoding="utf-8") as handle:
+                  payload = json.load(handle)
+          except (OSError, json.JSONDecodeError):
+              sys.exit(20)
+          if not isinstance(payload, list):
+              sys.exit(21)
+          match_count = 0
+          for image in payload:
+              if not isinstance(image, dict):
+                  sys.exit(22)
+              tags = image.get("tags") or []
+              if not isinstance(tags, list):
+                  sys.exit(23)
+              for tag in tags:
+                  if not isinstance(tag, str):
+                      sys.exit(24)
+                  if tag == source_sha:
+                      match_count += 1
+          print(match_count)
+          PY
+          )"
+          PARSE_EXIT=$?
+          set -e
+          [ "$PARSE_EXIT" -eq 0 ] || fail "ARTIFACT_EXISTENCE_CHECK=LOOKUP_ERROR — parser_exit=$PARSE_EXIT. FAIL_CLOSED."
+          [[ "$MATCH_COUNT" =~ ^[0-9]+$ ]] || fail "ARTIFACT_EXISTENCE_CHECK=LOOKUP_ERROR — match_count inválido: '$MATCH_COUNT'."
+
+          case "$MATCH_COUNT" in
+            0) echo "artifact_exists=NO" >> "$GITHUB_OUTPUT" ;;
+            1) echo "artifact_exists=YES" >> "$GITHUB_OUTPUT" ;;
+            *) fail "ARTIFACT_EXISTENCE_CHECK=INVARIANT_VIOLATION — el tag exacto $SOURCE_SHA aparece $MATCH_COUNT veces (se esperaba 0 o 1). FAIL_CLOSED." ;;
+          esac
+
+  # ===========================================================================
+  # Job 4a — SOLO si el artefacto está ausente: build & publish real (mismo
+  # reusable ya usado por production-db-readonly-inspection.yml, sin
+  # modificar su contrato de seguridad).
+  # ===========================================================================
+  build-production-artifact:
+    name: Build & publish Production artifact (artifact absent)
+    needs: [guard, prepare-inputs, check-artifact-existence]
+    if: needs.check-artifact-existence.outputs.artifact_exists == 'NO'
     permissions:
       contents: read
       id-token: write
@@ -165,13 +289,128 @@ jobs:
       source_sha: ${{ github.sha }}
 
   # ===========================================================================
-  # Job 4 — puente permission-less: revuelve a probar, sin cloud, que
-  # source_sha/immutable_ref coinciden con lo esperado antes de que cualquier
-  # job posterior los reciba. Mismo patrón que production-db-readonly-inspection.yml.
+  # Job 4b — SOLO si el artefacto ya existe: REUTILIZA la imagen inmutable ya
+  # publicada. NUNCA hace `docker push`, NUNCA sobrescribe el tag exacto —
+  # solo resuelve su digest y prueba, leyendo la propia imagen ya publicada
+  # (`docker pull` + `docker image inspect`, ambas de solo lectura), que
+  # corresponde exactamente a SOURCE_SHA vía su label OCI
+  # `org.opencontainers.image.revision` (la misma prueba que el build
+  # original ya hace ANTES de publicar — acá se repite DESPUÉS, sobre el
+  # artefacto remoto, en vez de asumir que el tag por sí solo basta).
   # ===========================================================================
-  verify-build-output:
-    name: Verify build output identity (sin cloud)
-    needs: [guard, build-production-artifact]
+  reuse-existing-artifact:
+    name: Reuse existing Production artifact (never pushes)
+    needs: [guard, prepare-inputs, check-artifact-existence]
+    if: needs.check-artifact-existence.outputs.artifact_exists == 'YES'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      id-token: write
+    outputs:
+      source_sha: ${{ steps.revision.outputs.source_sha }}
+      immutable_ref: ${{ steps.revision.outputs.immutable_ref }}
+    steps:
+      - name: Google Auth — WIF to Production deployer SA (read-only)
+        uses: google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093 # v3
+        with:
+          project_id: ${{ env.PRODUCTION_PROJECT }}
+          workload_identity_provider: projects/731660820861/locations/global/workloadIdentityPools/github-actions-pool/providers/github-production-deployer
+          service_account: ${{ env.DEPLOYER_SA }}
+
+      - name: Setup gcloud
+        uses: google-github-actions/setup-gcloud@aa5489c8933f4cc7a4f7d45035b3b1440c9c10db # v3
+
+      - name: Reconfirmar EXACTAMENTE un tag == SOURCE_SHA (nunca confiar ciegamente en el job anterior)
+        id: recheck
+        shell: bash
+        env:
+          SOURCE_SHA: ${{ needs.prepare-inputs.outputs.source_sha }}
+        run: |
+          set -euo pipefail
+          fail() { echo "::error::$1"; exit 1; }
+
+          IMAGE_TAG_REF="${{ env.ARTIFACT_IMAGE }}:${SOURCE_SHA}"
+
+          LIST_STDOUT="$(mktemp)"
+          trap 'rm -f "$LIST_STDOUT"' EXIT
+          set +e
+          gcloud artifacts docker images list "${{ env.ARTIFACT_IMAGE }}" \
+            --include-tags --project="${{ env.PRODUCTION_PROJECT }}" --format=json >"$LIST_STDOUT" 2>&1
+          LIST_EXIT=$?
+          set -e
+          [ "$LIST_EXIT" -eq 0 ] || fail "REUSE_RECHECK=LOOKUP_ERROR — exit=$LIST_EXIT."
+
+          set +e
+          MATCH_COUNT="$(python3 - "$SOURCE_SHA" "$LIST_STDOUT" <<'PY'
+          import json, sys
+          source_sha, json_path = sys.argv[1], sys.argv[2]
+          with open(json_path, "r", encoding="utf-8") as handle:
+              payload = json.load(handle)
+          count = 0
+          for image in payload:
+              for tag in (image.get("tags") or []):
+                  if tag == source_sha:
+                      count += 1
+          print(count)
+          PY
+          )"
+          PARSE_EXIT=$?
+          set -e
+          [ "$PARSE_EXIT" -eq 0 ] || fail "REUSE_RECHECK=LOOKUP_ERROR — parser_exit=$PARSE_EXIT."
+          [ "$MATCH_COUNT" = "1" ] || fail "REUSE_RECHECK=UNEXPECTED_MATCH_COUNT — se esperaba exactamente 1 tag == $SOURCE_SHA, se encontraron $MATCH_COUNT. FAIL_CLOSED, sin reintento."
+
+          echo "image_tag_ref=$IMAGE_TAG_REF" >> "$GITHUB_OUTPUT"
+
+      - name: Resolver digest de la imagen EXISTENTE (nunca push)
+        id: digest
+        shell: bash
+        env:
+          IMAGE_TAG_REF: ${{ steps.recheck.outputs.image_tag_ref }}
+        run: |
+          set -euo pipefail
+          ARTIFACT_DIGEST="$(gcloud artifacts docker images describe "$IMAGE_TAG_REF" --project="${{ env.PRODUCTION_PROJECT }}" --format='value(image_summary.digest)')"
+          [[ "$ARTIFACT_DIGEST" =~ ^sha256:[0-9a-f]{64}$ ]] || { echo "::error::ARTIFACT_DIGEST con formato inválido: '$ARTIFACT_DIGEST'"; exit 1; }
+          echo "immutable_ref=${{ env.ARTIFACT_IMAGE }}@${ARTIFACT_DIGEST}" >> "$GITHUB_OUTPUT"
+
+      - name: Configurar Docker exclusivamente para Artifact Registry southamerica-east1 (solo pull)
+        shell: bash
+        run: gcloud auth configure-docker southamerica-east1-docker.pkg.dev --quiet
+
+      - name: Descargar la imagen inmutable EXISTENTE por digest (solo lectura — nunca push)
+        shell: bash
+        env:
+          IMMUTABLE_REF: ${{ steps.digest.outputs.immutable_ref }}
+        run: docker pull "$IMMUTABLE_REF"
+
+      - name: Verificar que el label OCI de revisión de la imagen EXISTENTE coincide con SOURCE_SHA
+        id: revision
+        shell: bash
+        env:
+          SOURCE_SHA: ${{ needs.prepare-inputs.outputs.source_sha }}
+          IMMUTABLE_REF: ${{ steps.digest.outputs.immutable_ref }}
+        run: |
+          set -euo pipefail
+          ACTUAL_LABEL="$(docker image inspect "$IMMUTABLE_REF" --format '{{ index .Config.Labels "org.opencontainers.image.revision" }}')"
+          if [ "$ACTUAL_LABEL" != "$SOURCE_SHA" ]; then
+            echo "::error::REUSE_REVISION_MISMATCH — org.opencontainers.image.revision de la imagen existente ('$ACTUAL_LABEL') no coincide con SOURCE_SHA ('$SOURCE_SHA'). FAIL_CLOSED — el tag por sí solo no basta como prueba."
+            exit 1
+          fi
+          echo "source_sha=$SOURCE_SHA" >> "$GITHUB_OUTPUT"
+          echo "immutable_ref=$IMMUTABLE_REF" >> "$GITHUB_OUTPUT"
+
+  # ===========================================================================
+  # Job 5 — puente permission-less: normaliza y revuelve a probar, sin cloud,
+  # los outputs de CUALQUIERA de los dos caminos (4a o 4b — exactamente uno
+  # de los dos corre) antes de que cualquier job posterior los reciba.
+  # ===========================================================================
+  resolve-artifact:
+    name: Resolve artifact identity (sin cloud)
+    needs: [guard, build-production-artifact, reuse-existing-artifact]
+    if: |
+      always() &&
+      needs.guard.outputs.guard_pass == 'YES' &&
+      (needs.build-production-artifact.result == 'success' || needs.reuse-existing-artifact.result == 'success')
     runs-on: ubuntu-latest
     permissions: {}
     outputs:
@@ -179,19 +418,32 @@ jobs:
       source_sha: ${{ steps.verify.outputs.source_sha }}
       immutable_ref: ${{ steps.verify.outputs.immutable_ref }}
     steps:
-      - name: Reverificar source_sha e immutable_ref del build (sin efectos, sin cloud)
+      - name: Reverificar source_sha e immutable_ref de cualquiera de los dos caminos (sin efectos, sin cloud)
         id: verify
         shell: bash
         env:
           EXPECTED_SHA: ${{ github.sha }}
           BUILD_SOURCE_SHA: ${{ needs.build-production-artifact.outputs.source_sha }}
-          IMMUTABLE_REF: ${{ needs.build-production-artifact.outputs.immutable_ref }}
+          BUILD_IMMUTABLE_REF: ${{ needs.build-production-artifact.outputs.immutable_ref }}
+          REUSE_SOURCE_SHA: ${{ needs.reuse-existing-artifact.outputs.source_sha }}
+          REUSE_IMMUTABLE_REF: ${{ needs.reuse-existing-artifact.outputs.immutable_ref }}
         run: |
           set -euo pipefail
           fail() { echo "::error::$1"; exit 1; }
 
-          [[ "$BUILD_SOURCE_SHA" =~ ^[0-9a-f]{40}$ ]] || fail "build_source_sha inválido: '$BUILD_SOURCE_SHA'"
-          [ "$BUILD_SOURCE_SHA" = "$EXPECTED_SHA" ] || fail "build_source_sha no coincide con github.sha."
+          if [ -n "$BUILD_SOURCE_SHA" ] && [ -n "$REUSE_SOURCE_SHA" ]; then
+            fail "INVARIANT_VIOLATION — tanto build como reuse produjeron salida; exactamente uno debía correr."
+          fi
+          if [ -n "$BUILD_SOURCE_SHA" ]; then
+            SOURCE_SHA="$BUILD_SOURCE_SHA"; IMMUTABLE_REF="$BUILD_IMMUTABLE_REF"; PATH_TAKEN="build"
+          elif [ -n "$REUSE_SOURCE_SHA" ]; then
+            SOURCE_SHA="$REUSE_SOURCE_SHA"; IMMUTABLE_REF="$REUSE_IMMUTABLE_REF"; PATH_TAKEN="reuse"
+          else
+            fail "Ni build ni reuse produjeron source_sha — no se puede continuar."
+          fi
+
+          [[ "$SOURCE_SHA" =~ ^[0-9a-f]{40}$ ]] || fail "source_sha inválido: '$SOURCE_SHA'"
+          [ "$SOURCE_SHA" = "$EXPECTED_SHA" ] || fail "source_sha no coincide con github.sha."
 
           EXPECTED_PREFIX="southamerica-east1-docker.pkg.dev/ridepro-dbafe/korixa-backend/api@sha256:"
           case "$IMMUTABLE_REF" in
@@ -202,8 +454,9 @@ jobs:
             *) fail "immutable_ref con forma inesperada: '$IMMUTABLE_REF'" ;;
           esac
 
-          echo "source_sha=$BUILD_SOURCE_SHA" >> "$GITHUB_OUTPUT"
+          echo "source_sha=$SOURCE_SHA" >> "$GITHUB_OUTPUT"
           echo "immutable_ref=$IMMUTABLE_REF" >> "$GITHUB_OUTPUT"
+          echo "artifact_path_taken=$PATH_TAKEN"
           echo "verify_pass=YES" >> "$GITHUB_OUTPUT"
 
   # ===========================================================================
@@ -302,19 +555,21 @@ jobs:
         run: echo "prerequisites_met=YES" >> "$GITHUB_OUTPUT"
 
   # ===========================================================================
-  # Job 6 — ejecución real. Solo alcanzable si guard, verify-build-output y
+  # Job 6 — ejecución real. Solo alcanzable si guard, resolve-artifact y
   # verify-prerequisites pasaron los tres. En el estado real de hoy
   # (MIGRATION_EXECUTOR_SA inexistente), verify-prerequisites SIEMPRE falla
   # primero y este job nunca corre — eso es HOLD por diseño, no un bug.
   # Crea/actualiza y ejecuta UNA VEZ un Cloud Run Job cuyo único comando es
   # `node dist/ops/db-role-hardener.js` — nunca un shell, nunca un comando
   # arbitrario. Misma VPC/subred/egress ya probados por el inspector de
-  # solo lectura.
+  # solo lectura. `resolve-artifact` ya probó, sin importar si el artefacto
+  # vino de build o de reuse, que `immutable_ref` corresponde exactamente a
+  # `source_sha` == `github.sha`.
   # ===========================================================================
   run-db-role-hardener:
     name: Run DB role hardener (${{ inputs.mode }})
-    needs: [guard, prepare-inputs, verify-build-output, verify-prerequisites]
-    if: needs.verify-build-output.outputs.verify_pass == 'YES' && needs.verify-prerequisites.outputs.prerequisites_met == 'YES'
+    needs: [guard, prepare-inputs, resolve-artifact, verify-prerequisites]
+    if: needs.resolve-artifact.outputs.verify_pass == 'YES' && needs.verify-prerequisites.outputs.prerequisites_met == 'YES'
     runs-on: ubuntu-latest
     timeout-minutes: 15
     environment: production
@@ -335,8 +590,8 @@ jobs:
       - name: Crear/actualizar el Job del hardener (solo node dist/ops/db-role-hardener.js)
         shell: bash
         env:
-          IMMUTABLE_REF: ${{ needs.verify-build-output.outputs.immutable_ref }}
-          SOURCE_SHA: ${{ needs.verify-build-output.outputs.source_sha }}
+          IMMUTABLE_REF: ${{ needs.resolve-artifact.outputs.immutable_ref }}
+          SOURCE_SHA: ${{ needs.resolve-artifact.outputs.source_sha }}
           DB_HOST: ${{ needs.verify-prerequisites.outputs.db_host }}
         run: |
           set -euo pipefail
@@ -377,7 +632,7 @@ jobs:
           {
             echo "### T-F1.2 Point 8 — Production DB role hardening (${{ inputs.mode }})"
             echo ""
-            echo "- SOURCE_SHA = ${{ needs.verify-build-output.outputs.source_sha }}"
+            echo "- SOURCE_SHA = ${{ needs.resolve-artifact.outputs.source_sha }}"
             echo "- MODE = ${{ inputs.mode }}"
             echo "- MIGRATION_SECRET_VERSION = ${{ inputs.migration_secret_version }}"
             echo "- SECRET_PAYLOAD_ACCESSED = NO"
