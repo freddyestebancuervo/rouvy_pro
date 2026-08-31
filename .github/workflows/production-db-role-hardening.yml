@@ -1,0 +1,385 @@
+name: Backend — Production DB role hardening (manual dispatch only)
+
+# T-F1.2 Point 8B — wires backend/src/ops/db-role-hardener.ts (preflight/apply/
+# verify) so it becomes reachable ONLY through a deliberate, manual
+# workflow_dispatch. Neither the reusable build/publish workflow nor the
+# hardener source is modified by this file.
+#
+# ACTIVATION INTERLOCK (same pattern as production-deploy.yml and
+# production-db-readonly-inspection.yml): `on: workflow_dispatch` ONLY. No
+# `workflow_run`, `push`, `pull_request`, or `schedule`. Nothing in this
+# repository can invoke this workflow except a human explicitly choosing
+# "Run workflow" and typing every value below by hand. Merging this file
+# changes nothing about whether Production is reachable automatically: it
+# still is not.
+#
+# CURRENT REAL-WORLD STATE (as of this PR): the runtime identity this
+# workflow needs, `korixa-production-migration-executor@ridepro-dbafe.iam
+# .gserviceaccount.com`, DOES NOT EXIST YET, and the Production deployer has
+# no IAM binding letting it actAs that identity, and the migration secret has
+# no accessor binding for it either. All three are explicitly OUT OF SCOPE
+# for this PR (separate, future, individually-authorized Human Gates) — see
+# `verify-prerequisites` below. Until every one of those exists, this
+# workflow HOLDS at that job and never reaches `run-db-role-hardener`, no
+# matter what a human dispatches. This file does not create the service
+# account, does not grant IAM, and does not change Secret Manager policy.
+#
+# WHAT A FUTURE REAL DISPATCH WOULD DO, once prerequisites exist: (A) build
+# and publish a real Production artifact for the exact dispatched commit
+# (same reusable already used by the DB inspection workflow); (B) create/
+# update and execute, exactly once, a narrowly-scoped Cloud Run Job running
+# ONLY `node dist/ops/db-role-hardener.js` in the requested mode
+# (preflight/apply/verify) — never a shell, never an arbitrary command.
+# `apply` additionally requires the exact confirmation token the hardener
+# itself re-validates independently of this workflow.
+
+on:
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: "Hardener mode to run."
+        required: true
+        type: choice
+        options:
+          - preflight
+          - apply
+          - verify
+      migration_secret_version:
+        description: "Exact positive integer version of korixa-production-migration-database-url to mount — never 'latest', to avoid racing a concurrent secret rotation. No default — owner must supply the current version explicitly."
+        required: true
+        type: string
+      expected_admin_db_user:
+        description: "Explicit expected admin DB identity (current_user) the hardener must connect as. Never inferred. Only enforced by apply; preflight/verify still record it for the run."
+        required: true
+        type: string
+      confirmation:
+        description: "Must be exactly PREFLIGHT_PRODUCTION_DB_ROLE_HARDENING (preflight), HARDEN_KORIXA_APP_PRODUCTION (apply), or VERIFY_PRODUCTION_DB_ROLE_HARDENING (verify) — must match the chosen mode."
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+env:
+  PRODUCTION_PROJECT: ridepro-dbafe
+  PRODUCTION_REGION: southamerica-east1
+  CLOUD_SQL_INSTANCE: korixa-production-postgres
+  TARGET_DATABASE: korixa_production
+  DEPLOYER_SA: korixa-production-deployer@ridepro-dbafe.iam.gserviceaccount.com
+  # Future identity — does NOT exist yet (see header comment). Never created,
+  # never granted IAM, never bound to the secret by this file.
+  MIGRATION_EXECUTOR_SA: korixa-production-migration-executor@ridepro-dbafe.iam.gserviceaccount.com
+  SECRET_MIGRATION_DATABASE_URL: korixa-production-migration-database-url
+  ARTIFACT_IMAGE: southamerica-east1-docker.pkg.dev/ridepro-dbafe/korixa-backend/api
+  HARDENER_JOB: korixa-production-db-role-hardener
+
+jobs:
+  # ===========================================================================
+  # Job 1 — permission-less guard. No checkout, no OIDC, no gcloud. Exact
+  # repo/ref/SHA/mode/confirmation/secret-version-format checks — the same
+  # discipline as production-db-readonly-inspection.yml's guard.
+  # ===========================================================================
+  guard:
+    name: Guard — manual-dispatch-only, sin acceso cloud
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions: {}
+    outputs:
+      guard_pass: ${{ steps.checks.outputs.guard_pass }}
+    steps:
+      - name: Validar origen, ref, SHA, modo, confirmación y formato de versión de secreto (sin efectos, sin cloud)
+        id: checks
+        shell: bash
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          REPOSITORY: ${{ github.repository }}
+          REF: ${{ github.ref }}
+          SHA: ${{ github.sha }}
+          MODE: ${{ inputs.mode }}
+          CONFIRMATION: ${{ inputs.confirmation }}
+          SECRET_VERSION: ${{ inputs.migration_secret_version }}
+          ADMIN_DB_USER: ${{ inputs.expected_admin_db_user }}
+        run: |
+          set -euo pipefail
+          fail() { echo "::error::$1"; exit 1; }
+
+          [ "$EVENT_NAME" = "workflow_dispatch" ] || fail "EVENT_NAME esperado 'workflow_dispatch', obtenido '$EVENT_NAME'."
+          [ "$REPOSITORY" = "freddyestebancuervo/rouvy_pro" ] || fail "REPOSITORY inesperado: '$REPOSITORY'"
+          [ "$REF" = "refs/heads/main" ] || fail "REF esperado 'refs/heads/main', obtenido '$REF'."
+          [[ "$SHA" =~ ^[0-9a-f]{40}$ ]] || fail "github.sha no es un SHA-1 completo (40 hex minúsculas): '$SHA'"
+
+          case "$MODE" in
+            preflight) EXPECTED_CONFIRMATION="PREFLIGHT_PRODUCTION_DB_ROLE_HARDENING" ;;
+            apply)     EXPECTED_CONFIRMATION="HARDEN_KORIXA_APP_PRODUCTION" ;;
+            verify)    EXPECTED_CONFIRMATION="VERIFY_PRODUCTION_DB_ROLE_HARDENING" ;;
+            *) fail "mode debe ser exactamente uno de preflight/apply/verify: '$MODE'" ;;
+          esac
+          [ "$CONFIRMATION" = "$EXPECTED_CONFIRMATION" ] || fail "confirmation no coincide con el valor exacto exigido para mode='$MODE' (defensa en profundidad; el hardener revalida su propio token de forma independiente para apply)."
+
+          [[ "$SECRET_VERSION" =~ ^[1-9][0-9]*$ ]] || fail "migration_secret_version debe ser un entero positivo, nunca 'latest' ni cero: '$SECRET_VERSION'"
+          [ -n "$ADMIN_DB_USER" ] || fail "expected_admin_db_user no puede estar vacío."
+
+          echo "guard_pass=YES" >> "$GITHUB_OUTPUT"
+
+  # ===========================================================================
+  # Job 2 — checkout exactamente github.sha y reverificación de frescura.
+  # ===========================================================================
+  prepare-inputs:
+    name: Prepare inputs (checkout only)
+    needs: guard
+    if: needs.guard.outputs.guard_pass == 'YES'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    outputs:
+      source_sha: ${{ steps.verify.outputs.source_sha }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+
+      - name: Verificar SHA fuente exacto
+        id: verify
+        shell: bash
+        run: |
+          set -euo pipefail
+          CHECKED_OUT_SHA="$(git rev-parse HEAD)"
+          [ "$CHECKED_OUT_SHA" = "${{ github.sha }}" ] || { echo "::error::Checkout SHA mismatch."; exit 1; }
+          echo "source_sha=${{ github.sha }}" >> "$GITHUB_OUTPUT"
+
+  # ===========================================================================
+  # Job 3 — build & publish del artefacto real de Production (contiene
+  # dist/ops/db-role-hardener.js) para el mismo source_sha ya validado.
+  # ===========================================================================
+  build-production-artifact:
+    name: Build & publish Production artifact
+    needs: [guard, prepare-inputs]
+    if: needs.guard.outputs.guard_pass == 'YES'
+    permissions:
+      contents: read
+      id-token: write
+    uses: ./.github/workflows/_backend-build-publish-production.yml
+    with:
+      operation: build-publish
+      source_sha: ${{ github.sha }}
+
+  # ===========================================================================
+  # Job 4 — puente permission-less: revuelve a probar, sin cloud, que
+  # source_sha/immutable_ref coinciden con lo esperado antes de que cualquier
+  # job posterior los reciba. Mismo patrón que production-db-readonly-inspection.yml.
+  # ===========================================================================
+  verify-build-output:
+    name: Verify build output identity (sin cloud)
+    needs: [guard, build-production-artifact]
+    runs-on: ubuntu-latest
+    permissions: {}
+    outputs:
+      verify_pass: ${{ steps.verify.outputs.verify_pass }}
+      source_sha: ${{ steps.verify.outputs.source_sha }}
+      immutable_ref: ${{ steps.verify.outputs.immutable_ref }}
+    steps:
+      - name: Reverificar source_sha e immutable_ref del build (sin efectos, sin cloud)
+        id: verify
+        shell: bash
+        env:
+          EXPECTED_SHA: ${{ github.sha }}
+          BUILD_SOURCE_SHA: ${{ needs.build-production-artifact.outputs.source_sha }}
+          IMMUTABLE_REF: ${{ needs.build-production-artifact.outputs.immutable_ref }}
+        run: |
+          set -euo pipefail
+          fail() { echo "::error::$1"; exit 1; }
+
+          [[ "$BUILD_SOURCE_SHA" =~ ^[0-9a-f]{40}$ ]] || fail "build_source_sha inválido: '$BUILD_SOURCE_SHA'"
+          [ "$BUILD_SOURCE_SHA" = "$EXPECTED_SHA" ] || fail "build_source_sha no coincide con github.sha."
+
+          EXPECTED_PREFIX="southamerica-east1-docker.pkg.dev/ridepro-dbafe/korixa-backend/api@sha256:"
+          case "$IMMUTABLE_REF" in
+            "${EXPECTED_PREFIX}"*)
+              DIGEST="${IMMUTABLE_REF#"$EXPECTED_PREFIX"}"
+              [[ "$DIGEST" =~ ^[0-9a-f]{64}$ ]] || fail "immutable_ref sin digest sha256 válido: '$IMMUTABLE_REF'"
+              ;;
+            *) fail "immutable_ref con forma inesperada: '$IMMUTABLE_REF'" ;;
+          esac
+
+          echo "source_sha=$BUILD_SOURCE_SHA" >> "$GITHUB_OUTPUT"
+          echo "immutable_ref=$IMMUTABLE_REF" >> "$GITHUB_OUTPUT"
+          echo "verify_pass=YES" >> "$GITHUB_OUTPUT"
+
+  # ===========================================================================
+  # Job 5 — verificación de prerrequisitos, ÚNICAMENTE de solo lectura. Este
+  # job NUNCA crea la Service Account futura, NUNCA otorga IAM, NUNCA cambia
+  # la política de Secret Manager — solo describe/lista. Mientras
+  # MIGRATION_EXECUTOR_SA no exista (estado real hoy), este job falla
+  # limpiamente y ningún job posterior se ejecuta (HOLD).
+  # ===========================================================================
+  verify-prerequisites:
+    name: Verify prerequisites (read-only — HOLD if absent)
+    needs: guard
+    if: needs.guard.outputs.guard_pass == 'YES'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    environment: production
+    permissions:
+      contents: read
+      id-token: write
+    outputs:
+      prerequisites_met: ${{ steps.summary.outputs.prerequisites_met }}
+      db_host: ${{ steps.cloud-sql.outputs.db_host }}
+    steps:
+      - name: Google Auth — WIF to Production deployer SA
+        uses: google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093 # v3
+        with:
+          project_id: ${{ env.PRODUCTION_PROJECT }}
+          workload_identity_provider: projects/731660820861/locations/global/workloadIdentityPools/github-actions-pool/providers/github-production-deployer
+          service_account: ${{ env.DEPLOYER_SA }}
+
+      - name: Setup gcloud
+        uses: google-github-actions/setup-gcloud@aa5489c8933f4cc7a4f7d45035b3b1440c9c10db # v3
+
+      - name: Verificar que MIGRATION_EXECUTOR_SA existe y está habilitada (NUNCA la crea)
+        id: sa
+        shell: bash
+        run: |
+          set -euo pipefail
+          set +e
+          DISABLED="$(gcloud iam service-accounts describe "${{ env.MIGRATION_EXECUTOR_SA }}" --project="${{ env.PRODUCTION_PROJECT }}" --format='value(disabled)' 2>&1)"
+          DESCRIBE_EXIT=$?
+          set -e
+          if [ "$DESCRIBE_EXIT" -ne 0 ]; then
+            echo "::error::MIGRATION_EXECUTOR_SA no existe todavía (${{ env.MIGRATION_EXECUTOR_SA }}) — HOLD. Este workflow nunca la crea; su creación es un Human Gate GCP/IAM separado."
+            echo "sa_exists=NO" >> "$GITHUB_OUTPUT"
+            exit 1
+          fi
+          if [ "$DISABLED" = "True" ] || [ "$DISABLED" = "true" ]; then
+            echo "::error::MIGRATION_EXECUTOR_SA existe pero está deshabilitada — HOLD."
+            echo "sa_exists=NO" >> "$GITHUB_OUTPUT"
+            exit 1
+          fi
+          echo "sa_exists=YES" >> "$GITHUB_OUTPUT"
+
+      - name: Verificar que la versión de secreto solicitada está ENABLED (nunca accede al payload)
+        id: secret
+        shell: bash
+        run: |
+          set -euo pipefail
+          STATE="$(gcloud secrets versions describe "${{ inputs.migration_secret_version }}" --secret="${{ env.SECRET_MIGRATION_DATABASE_URL }}" --project="${{ env.PRODUCTION_PROJECT }}" --format='value(state)')"
+          [ "$STATE" = "ENABLED" ] || { echo "::error::Versión ${{ inputs.migration_secret_version }} de ${{ env.SECRET_MIGRATION_DATABASE_URL }} no está ENABLED (estado real: '$STATE')."; exit 1; }
+          echo "SECRET_VERSION_ENABLED=YES"
+          echo "SECRET_PAYLOAD_ACCESSED=NO"
+
+      - name: Verificar que MIGRATION_EXECUTOR_SA tiene accessor sobre el secreto de migración (nunca lo otorga)
+        id: secret-iam
+        shell: bash
+        run: |
+          set -euo pipefail
+          MEMBER="serviceAccount:${{ env.MIGRATION_EXECUTOR_SA }}"
+          HAS_ACCESS="$(gcloud secrets get-iam-policy "${{ env.SECRET_MIGRATION_DATABASE_URL }}" --project="${{ env.PRODUCTION_PROJECT }}" --format=json | python3 -c "
+          import json, sys
+          policy = json.load(sys.stdin)
+          member = '$MEMBER'
+          for b in policy.get('bindings', []):
+              if b.get('role') == 'roles/secretmanager.secretAccessor' and member in b.get('members', []):
+                  print('YES'); break
+          else:
+              print('NO')
+          ")"
+          [ "$HAS_ACCESS" = "YES" ] || { echo "::error::MIGRATION_EXECUTOR_SA no tiene roles/secretmanager.secretAccessor sobre ${{ env.SECRET_MIGRATION_DATABASE_URL }} — HOLD. Este workflow nunca otorga ese binding; es un Human Gate IAM separado."; exit 1; }
+          echo "SECRET_ACCESSOR_BINDING=YES"
+
+      - name: Resolver EXPECTED_DB_HOST (IP privada real de Cloud SQL, solo lectura)
+        id: cloud-sql
+        shell: bash
+        run: |
+          set -euo pipefail
+          DB_HOST="$(gcloud sql instances describe "${{ env.CLOUD_SQL_INSTANCE }}" --project="${{ env.PRODUCTION_PROJECT }}" --format='value(ipAddresses[0].ipAddress)')"
+          [ -n "$DB_HOST" ] || { echo "::error::No se pudo resolver la IP privada de ${{ env.CLOUD_SQL_INSTANCE }}."; exit 1; }
+          echo "db_host=$DB_HOST" >> "$GITHUB_OUTPUT"
+
+      - name: Resumen — todos los prerrequisitos de solo lectura pasaron
+        id: summary
+        shell: bash
+        run: echo "prerequisites_met=YES" >> "$GITHUB_OUTPUT"
+
+  # ===========================================================================
+  # Job 6 — ejecución real. Solo alcanzable si guard, verify-build-output y
+  # verify-prerequisites pasaron los tres. En el estado real de hoy
+  # (MIGRATION_EXECUTOR_SA inexistente), verify-prerequisites SIEMPRE falla
+  # primero y este job nunca corre — eso es HOLD por diseño, no un bug.
+  # Crea/actualiza y ejecuta UNA VEZ un Cloud Run Job cuyo único comando es
+  # `node dist/ops/db-role-hardener.js` — nunca un shell, nunca un comando
+  # arbitrario. Misma VPC/subred/egress ya probados por el inspector de
+  # solo lectura.
+  # ===========================================================================
+  run-db-role-hardener:
+    name: Run DB role hardener (${{ inputs.mode }})
+    needs: [guard, prepare-inputs, verify-build-output, verify-prerequisites]
+    if: needs.verify-build-output.outputs.verify_pass == 'YES' && needs.verify-prerequisites.outputs.prerequisites_met == 'YES'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    environment: production
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - name: Google Auth — WIF to Production deployer SA
+        uses: google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093 # v3
+        with:
+          project_id: ${{ env.PRODUCTION_PROJECT }}
+          workload_identity_provider: projects/731660820861/locations/global/workloadIdentityPools/github-actions-pool/providers/github-production-deployer
+          service_account: ${{ env.DEPLOYER_SA }}
+
+      - name: Setup gcloud
+        uses: google-github-actions/setup-gcloud@aa5489c8933f4cc7a4f7d45035b3b1440c9c10db # v3
+
+      - name: Crear/actualizar el Job del hardener (solo node dist/ops/db-role-hardener.js)
+        shell: bash
+        env:
+          IMMUTABLE_REF: ${{ needs.verify-build-output.outputs.immutable_ref }}
+          SOURCE_SHA: ${{ needs.verify-build-output.outputs.source_sha }}
+          DB_HOST: ${{ needs.verify-prerequisites.outputs.db_host }}
+        run: |
+          set -euo pipefail
+          APPLY_ENV_FLAGS=()
+          if [ "${{ inputs.mode }}" = "apply" ]; then
+            APPLY_ENV_FLAGS=(--set-env-vars="HARDEN_CONFIRMATION=${{ inputs.confirmation }}")
+          fi
+
+          gcloud run jobs deploy "${{ env.HARDENER_JOB }}" \
+            --project="${{ env.PRODUCTION_PROJECT }}" \
+            --region="${{ env.PRODUCTION_REGION }}" \
+            --image="$IMMUTABLE_REF" \
+            --command=node \
+            --args=dist/ops/db-role-hardener.js \
+            --service-account="${{ env.MIGRATION_EXECUTOR_SA }}" \
+            --network=korixa-production-vpc \
+            --subnet=korixa-production-sa-east1 \
+            --vpc-egress=private-ranges-only \
+            --set-secrets="MIGRATION_DATABASE_URL=${{ env.SECRET_MIGRATION_DATABASE_URL }}:${{ inputs.migration_secret_version }}" \
+            --set-env-vars="HARDENER_MODE=${{ inputs.mode }},EXPECTED_ADMIN_DB_USER=${{ inputs.expected_admin_db_user }},EXPECTED_DATABASE=${{ env.TARGET_DATABASE }},EXPECTED_DB_HOST=$DB_HOST,EXPECTED_SOURCE_SHA=$SOURCE_SHA" \
+            "${APPLY_ENV_FLAGS[@]}" \
+            --max-retries=0 \
+            --task-timeout=300s \
+            --quiet
+
+      - name: Ejecutar el Job una vez y esperar su resultado
+        shell: bash
+        run: |
+          set -euo pipefail
+          gcloud run jobs execute "${{ env.HARDENER_JOB }}" \
+            --project="${{ env.PRODUCTION_PROJECT }}" \
+            --region="${{ env.PRODUCTION_REGION }}" \
+            --wait
+
+      - name: Emitir resumen (el propio hardener ya sanea su stdout — nunca DSN/password)
+        shell: bash
+        run: |
+          {
+            echo "### T-F1.2 Point 8 — Production DB role hardening (${{ inputs.mode }})"
+            echo ""
+            echo "- SOURCE_SHA = ${{ needs.verify-build-output.outputs.source_sha }}"
+            echo "- MODE = ${{ inputs.mode }}"
+            echo "- MIGRATION_SECRET_VERSION = ${{ inputs.migration_secret_version }}"
+            echo "- SECRET_PAYLOAD_ACCESSED = NO"
+            echo "- Ver logs del Job (${{ env.HARDENER_JOB }}) en Cloud Logging para el JSON estructurado de salida."
+          } >> "$GITHUB_STEP_SUMMARY"
