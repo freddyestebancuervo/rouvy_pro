@@ -2,7 +2,7 @@
 
 > **Documento separado, sucesor de `PROJECT_STATUS_POST95.md`.** `PROJECT_STATUS_CURRENT.md` conserva el corte reconciliado en PR #95 y no se reescribe. `PROJECT_STATUS_POST95.md` conserva su corte original (PR #96 + evidencia live posterior a #96) y tampoco se reescribe. Este archivo registra únicamente hechos posteriores a ese corte, hasta PR #102 inclusive.
 >
-> **Sucesor de este documento: `PROJECT_STATUS_POST106.md`** (2026-08-31), que registra los hechos posteriores a este corte, hasta PR #106 inclusive — incluida la revalidación live de `ROLE_PRIVILEGE_MODEL` preservado sin revalidar más abajo (§"Hallazgo preservado"), que **sigue sin revalidación live de Production** (el hardening de PR #104/#105/#106 es tooling NONPROD-probado, no una remediación ejecutada contra `korixa_app` real). Este archivo conserva su propio corte original, sin editar.
+> **Sucesor de este documento: `PROJECT_STATUS_POST106.md`** (2026-08-31), que registra los hechos posteriores a este corte, hasta PR #106 inclusive. `PROJECT_STATUS_POST106.md` **preserva `ROLE_PRIVILEGE_MODEL = HOLD` sin nueva revalidación live de Production** (§"Hallazgo preservado") — el hardening de PR #104/#105/#106 es tooling NONPROD-probado, no una remediación ejecutada contra `korixa_app` real, y no constituye evidencia live nueva de ese hallazgo. Este archivo conserva su propio corte original, sin editar.
 
 ## Identidad del snapshot
 

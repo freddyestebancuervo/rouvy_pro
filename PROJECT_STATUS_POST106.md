@@ -58,7 +58,7 @@ PGMIGRATIONS_RUNTIME_ACCESS = DENIED (estructural — pgmigrations nunca aparece
 AUDIT_LOG_RUNTIME_MODEL = APPEND_ONLY (INSERT únicamente; SELECT/UPDATE/DELETE denegados)
 ```
 
-Validado con PostgreSQL 16 efímero/local (roles `migration_test`/`runtime_test`, desechables). Independiente auditoría B posterior a la propia implementación encontró y corrigió, antes de entregar, una brecha real (`GRANT` puede degradar a `WARNING`-y-no-op en vez de error cuando el otorgante ya posee un privilegio solapado — el reconciliador ahora aborta también ante cualquier `NOTICE`/`WARNING` inesperado). Además del reconciliador, se ejecutó una remediación separada del contrato de conexión (`MIGRATION_DATABASE_URL` en vez de `DATABASE_URL`, coherente con `docs/T-F1.2_PORTABLE_PRODUCTION_CD.md`). `PRODUCTION_MUTATIONS = 0`, `GCP_MUTATIONS = 0`.
+Validado con PostgreSQL 16 efímero/local (roles `migration_test`/`runtime_test`, desechables). Independiente auditoría B posterior a la propia implementación encontró y corrigió, antes de entregar, una brecha real (`GRANT` puede degradar a `WARNING`-y-no-op en vez de error cuando el otorgante ya posee un privilegio solapado — el reconciliador ahora aborta también ante cualquier `NOTICE`/`WARNING` inesperado). En esta versión, el reconciliador todavía lee `DATABASE_URL` (más `RUNTIME_DB_ROLE`) como su contrato de conexión — ver PR #106 más abajo para la corrección de ese contrato. `PRODUCTION_MUTATIONS = 0`, `GCP_MUTATIONS = 0`.
 
 ### PR #106 — auditoría independiente y endurecimiento del modelo de privilegios (P1-1/P1-1A/P1-2/P1-3)
 
@@ -75,18 +75,24 @@ RUNTIME_SCHEMA_CREATE_HOLD = IMPLEMENTED (preexistente, conservado)
 UNEXPECTED_RUNTIME_ROLE_MEMBERSHIP_HOLD = IMPLEMENTED (nuevo — deny-by-default explícito, `EXPECTED_RUNTIME_ROLE_MEMBERSHIPS = []`, declarado por falta de evidencia de que el runtime necesite alguna, no inferido de una membresía histórica encontrada)
 POSTGRES16_REAL_PRIVILEGE_TEST = IMPLEMENTED (39 tests e2e contra PostgreSQL 16 real, incluidos los escenarios adversariales F-I del hallazgo P1, más 2 adiciones de red-team propio: una tabla creada después de reconciliar no recibe acceso automático; un fallo genuino a mitad de transacción revierte por completo)
 MIGRATION_ROLE_RUNTIME_ROLE_SEPARATED_IN_CI = PROVEN (roles `migration_test`/`runtime_test` reales, separados, en el mismo servicio Postgres 16 que ya usa el job "Backend — migración + e2e (C2)" — cero servicio nuevo)
+MIGRATION_DATABASE_URL_RECONCILER_CONTRACT = PR_106 (el reconciliador de PR #105 leía `DATABASE_URL` + `RUNTIME_DB_ROLE`; PR #106 lo cambió a `MIGRATION_DATABASE_URL` + `RUNTIME_DB_ROLE`, coherente con `docs/T-F1.2_PORTABLE_PRODUCTION_CD.md` — y aborta cerrado si `DATABASE_URL` está presente en su propio proceso, sin depender únicamente de que un runner externo haya validado el contrato antes de invocarlo)
 ```
 
 Modelo explícitamente `NO AUTO-REVOKE`: el reconciliador nunca revoca un privilegio inesperado que detecta — aborta cerrado y expone evidencia estructurada; cualquier remediación real queda para un Human Gate separado.
 
-**Evidencia CI para el HEAD auditado de PR #106** (`93dc07d53af843e4723af4c1208b379c4a83201b`, run `303`, `SUCCESS`):
+**Evidencia CI para el HEAD auditado de PR #106** (rama `fix/tf12-runtime-privilege-matrix-hardening-20260828`, run `303`, `SUCCESS`):
 
 ```text
+PR_106_HEAD_AUDITED = 313c542c5060bab803ae602446450555e23cfc1f
+PR_106_MERGE_COMMIT = 93dc07d53af843e4723af4c1208b379c4a83201b
+CI_RUN_303_HEAD = 313c542c5060bab803ae602446450555e23cfc1f
 UNIT_TESTS = 365/365 PASS
 E2E_TESTS = 170/170 PASS
 POSTGRES = 16
 CI_RUN_303 = SUCCESS
 ```
+
+`PR_106_HEAD_AUDITED` (el commit que CI realmente probó, `313c542c...`) es distinto de `PR_106_MERGE_COMMIT` (`93dc07d5...`, el commit de 2 padres que `git merge` creó al fusionar el PR a `main`) — GitHub Actions dispara el run sobre el HEAD del PR, no sobre el merge commit posterior.
 
 `PRODUCTION_MUTATIONS = 0`, `GCP_MUTATIONS = 0`, `IAM_MUTATIONS = 0`, `SECRET_PAYLOAD_ACCESSED = NO` en todo este rango (PR #103-106).
 
