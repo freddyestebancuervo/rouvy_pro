@@ -13,13 +13,49 @@ import {
   classifyOwnerModel,
   findPrivilegeEscalations,
   findMissingExpectedRoles,
+  findCloudSqlSuperuserMemberships,
+  findPgmigrationsRuntimeAccessViolations,
+  diffRuntimePrivilegesAgainstMatrix,
   topLevelStatementForm,
   InspectorError,
   runInspection,
   type RoleCapabilityRow,
+  type RoleMembershipRow,
+  type TablePrivilegeRow,
+  type SequencePrivilegeRow,
   type ExpectedPhysicalSet,
   type ActualPhysicalInventory,
 } from './db-readonly-inspector';
+import { RUNTIME_TABLE_PRIVILEGE_MATRIX, RUNTIME_SEQUENCE_PRIVILEGE_MATRIX } from './runtime-privilege-matrix';
+
+/** Filas de `tablePrivileges`/`sequencePrivileges` que reflejan EXACTAMENTE
+ * el modelo mínimo aprobado (`runtime-privilege-matrix.ts`) para
+ * `korixa_runtime` — el punto de partida "sano" de todos los fixtures de
+ * este archivo. Cualquier test que quiera provocar drift parte de acá y
+ * muta puntualmente, nunca al revés. */
+function healthyRuntimeTablePrivilegeRows(): TablePrivilegeRow[] {
+  return Object.entries(RUNTIME_TABLE_PRIVILEGE_MATRIX).map(([table_name, entry]) => ({
+    rolname: 'korixa_runtime',
+    table_name,
+    can_select: entry.select,
+    can_insert: entry.insert,
+    can_update: entry.update,
+    can_delete: entry.delete,
+    can_truncate: false,
+    can_references: false,
+    can_trigger: false,
+  }));
+}
+
+function healthyRuntimeSequencePrivilegeRows(): SequencePrivilegeRow[] {
+  return Object.entries(RUNTIME_SEQUENCE_PRIVILEGE_MATRIX).map(([sequence_name, entry]) => ({
+    rolname: 'korixa_runtime',
+    sequence_name,
+    can_usage: entry.usage,
+    can_select: false,
+    can_update: false,
+  }));
+}
 
 // `pg.Client` se mockea por completo — ningún test de este archivo toca
 // una base de datos real (Correction/PHASE 23: "NO real database").
@@ -101,6 +137,10 @@ function installHappyPathMock(options: {
   roleCapabilityRows?: RoleCapabilityRow[];
   dbOwnerRows?: { datname: string; owner: string }[];
   schemaOwnerRows?: { nspname: string; owner: string }[];
+  membershipRows?: RoleMembershipRow[];
+  tablePrivilegeRows?: TablePrivilegeRow[];
+  sequencePrivilegeRows?: SequencePrivilegeRow[];
+  dbPrivilegeRows?: { rolname: string; can_connect: boolean; can_schema_usage: boolean; can_schema_create: boolean }[];
 }) {
   const {
     transactionReadOnly = 'on',
@@ -115,6 +155,13 @@ function installHappyPathMock(options: {
     roleCapabilityRows = OK_ROLE_CAPS,
     dbOwnerRows = [{ datname: 'korixa_production', owner: 'korixa_app' }],
     schemaOwnerRows = [{ nspname: 'public', owner: 'korixa_app' }],
+    membershipRows = [],
+    tablePrivilegeRows = healthyRuntimeTablePrivilegeRows(),
+    sequencePrivilegeRows = healthyRuntimeSequencePrivilegeRows(),
+    dbPrivilegeRows = [
+      { rolname: 'korixa_app', can_connect: true, can_schema_usage: true, can_schema_create: true },
+      { rolname: 'korixa_runtime', can_connect: true, can_schema_usage: true, can_schema_create: false },
+    ],
   } = options;
 
   mockConnect.mockResolvedValue(undefined);
@@ -136,7 +183,7 @@ function installHappyPathMock(options: {
       return Promise.resolve({ rows: roleCapabilityRows });
     }
     if (sql === INSPECTION_QUERIES.roleMemberships) {
-      return Promise.resolve({ rows: [] });
+      return Promise.resolve({ rows: membershipRows });
     }
     if (sql === INSPECTION_QUERIES.databaseOwnership) {
       return Promise.resolve({ rows: dbOwnerRows });
@@ -148,34 +195,13 @@ function installHappyPathMock(options: {
       return Promise.resolve({ rows: objectOwners });
     }
     if (sql === INSPECTION_QUERIES.databasePrivileges) {
-      return Promise.resolve({
-        rows: [
-          { rolname: 'korixa_app', can_connect: true, can_schema_usage: true, can_schema_create: true },
-          { rolname: 'korixa_runtime', can_connect: true, can_schema_usage: true, can_schema_create: false },
-        ],
-      });
+      return Promise.resolve({ rows: dbPrivilegeRows });
     }
     if (sql === INSPECTION_QUERIES.tablePrivileges) {
-      return Promise.resolve({
-        rows: [
-          {
-            rolname: 'korixa_runtime',
-            table_name: 'users',
-            can_select: true,
-            can_insert: true,
-            can_update: true,
-            can_delete: true,
-            can_truncate: false,
-            can_references: false,
-            can_trigger: false,
-          },
-        ],
-      });
+      return Promise.resolve({ rows: tablePrivilegeRows });
     }
     if (sql === INSPECTION_QUERIES.sequencePrivileges) {
-      return Promise.resolve({
-        rows: [{ rolname: 'korixa_runtime', sequence_name: 'audit_log_id_seq', can_usage: true, can_select: false, can_update: true }],
-      });
+      return Promise.resolve({ rows: sequencePrivilegeRows });
     }
     if (sql === INSPECTION_QUERIES.migrationTrackerExists) {
       return Promise.resolve({ rows: [{ pgmigrations_exists: pgmigrationsExists }] });
@@ -986,6 +1012,7 @@ describe('db-readonly-inspector', () => {
       'privileges',
       'object_owners',
       'pgmigrations',
+      'runtime_privilege_drift',
       'physical_schema',
       'pgcrypto_present',
       'credential_db_user_mapping',
@@ -1129,6 +1156,244 @@ describe('db-readonly-inspector', () => {
     it('reporta SUPERUSER inesperado', () => {
       const rows = [{ ...OK_ROLE_CAPS[0], rolsuper: true }];
       expect(findPrivilegeEscalations(rows)).toEqual(['korixa_app: SUPERUSER inesperado']);
+    });
+  });
+
+  // ---------------------------------------------------------------------
+  // T-F1.2 KORIXA_TF12_PRIVILEGE_MODEL_REMEDIATION — 7.1/7.2/7.3.
+  // ---------------------------------------------------------------------
+  describe('findCloudSqlSuperuserMemberships', () => {
+    it('devuelve vacío cuando ninguna membresía apunta a cloudsqlsuperuser', () => {
+      expect(findCloudSqlSuperuserMemberships([{ member_role: 'korixa_app', granted_role: 'pg_read_all_data' }])).toEqual([]);
+    });
+
+    it('detecta membresía insegura de korixa_app en cloudsqlsuperuser, con el literal en el mensaje', () => {
+      const findings = findCloudSqlSuperuserMemberships([{ member_role: 'korixa_app', granted_role: 'cloudsqlsuperuser' }]);
+      expect(findings).toHaveLength(1);
+      expect(findings[0]).toContain('cloudsqlsuperuser');
+      expect(findings[0]).toContain('korixa_app');
+    });
+
+    it('detecta membresía insegura de korixa_runtime en cloudsqlsuperuser', () => {
+      const findings = findCloudSqlSuperuserMemberships([{ member_role: 'korixa_runtime', granted_role: 'cloudsqlsuperuser' }]);
+      expect(findings).toHaveLength(1);
+      expect(findings[0]).toContain('cloudsqlsuperuser');
+      expect(findings[0]).toContain('korixa_runtime');
+    });
+  });
+
+  describe('findPgmigrationsRuntimeAccessViolations', () => {
+    it('devuelve vacío si el runtime no tiene ninguna fila para pgmigrations', () => {
+      expect(findPgmigrationsRuntimeAccessViolations(healthyRuntimeTablePrivilegeRows(), 'korixa_runtime')).toEqual([]);
+    });
+
+    it.each(['can_select', 'can_insert', 'can_update', 'can_delete', 'can_truncate', 'can_trigger', 'can_references'] as const)(
+      'detecta %s inesperado del runtime sobre pgmigrations',
+      (verb) => {
+        const rows: TablePrivilegeRow[] = [
+          {
+            rolname: 'korixa_runtime',
+            table_name: 'pgmigrations',
+            can_select: false,
+            can_insert: false,
+            can_update: false,
+            can_delete: false,
+            can_truncate: false,
+            can_references: false,
+            can_trigger: false,
+            [verb]: true,
+          },
+        ];
+        const violations = findPgmigrationsRuntimeAccessViolations(rows, 'korixa_runtime');
+        expect(violations).toHaveLength(1);
+        expect(violations[0]).toContain('pgmigrations');
+      },
+    );
+
+    it('ignora privilegios de korixa_app (identidad de migración) sobre pgmigrations — solo audita al runtime', () => {
+      const rows: TablePrivilegeRow[] = [
+        {
+          rolname: 'korixa_app',
+          table_name: 'pgmigrations',
+          can_select: true,
+          can_insert: true,
+          can_update: true,
+          can_delete: true,
+          can_truncate: true,
+          can_references: false,
+          can_trigger: false,
+        },
+      ];
+      expect(findPgmigrationsRuntimeAccessViolations(rows, 'korixa_runtime')).toEqual([]);
+    });
+  });
+
+  describe('diffRuntimePrivilegesAgainstMatrix', () => {
+    it('devuelve missing/unexpected vacíos cuando el runtime coincide exactamente con la matriz', () => {
+      const drift = diffRuntimePrivilegesAgainstMatrix(
+        healthyRuntimeTablePrivilegeRows(),
+        healthyRuntimeSequencePrivilegeRows(),
+        { rolname: 'korixa_runtime', can_schema_create: false },
+        'korixa_runtime',
+      );
+      expect(drift).toEqual({ missing: [], unexpected: [] });
+    });
+
+    it('adversarial A — DELETE extra en una tabla donde la matriz no lo autoriza -> unexpected', () => {
+      const rows = healthyRuntimeTablePrivilegeRows().map((r) => (r.table_name === 'users' ? { ...r, can_delete: true } : r));
+      const drift = diffRuntimePrivilegesAgainstMatrix(rows, healthyRuntimeSequencePrivilegeRows(), { rolname: 'korixa_runtime', can_schema_create: false }, 'korixa_runtime');
+      expect(drift.unexpected).toContain('table:users:delete');
+    });
+
+    it('adversarial D — CREATE en schema public para runtime -> unexpected (schema:public:create)', () => {
+      const drift = diffRuntimePrivilegesAgainstMatrix(
+        healthyRuntimeTablePrivilegeRows(),
+        healthyRuntimeSequencePrivilegeRows(),
+        { rolname: 'korixa_runtime', can_schema_create: true },
+        'korixa_runtime',
+      );
+      expect(drift.unexpected).toContain('schema:public:create');
+    });
+
+    it('detecta un privilegio requerido pero ausente (missing) — ej. falta SELECT en users', () => {
+      const rows = healthyRuntimeTablePrivilegeRows().map((r) => (r.table_name === 'users' ? { ...r, can_select: false } : r));
+      const drift = diffRuntimePrivilegesAgainstMatrix(rows, healthyRuntimeSequencePrivilegeRows(), { rolname: 'korixa_runtime', can_schema_create: false }, 'korixa_runtime');
+      expect(drift.missing).toContain('table:users:select');
+    });
+
+    it('detecta TRUNCATE/TRIGGER/REFERENCES inesperados en cualquier tabla de la matriz (nunca autorizados)', () => {
+      const rows = healthyRuntimeTablePrivilegeRows().map((r) => (r.table_name === 'equipment' ? { ...r, can_truncate: true } : r));
+      const drift = diffRuntimePrivilegesAgainstMatrix(rows, healthyRuntimeSequencePrivilegeRows(), { rolname: 'korixa_runtime', can_schema_create: false }, 'korixa_runtime');
+      expect(drift.unexpected).toContain('table:equipment:truncate');
+    });
+
+    it('detecta acceso a una tabla completamente fuera de la matriz (ej. pgmigrations) como unexpected genérico', () => {
+      const rows = [
+        ...healthyRuntimeTablePrivilegeRows(),
+        {
+          rolname: 'korixa_runtime',
+          table_name: 'pgmigrations',
+          can_select: true,
+          can_insert: false,
+          can_update: false,
+          can_delete: false,
+          can_truncate: false,
+          can_references: false,
+          can_trigger: false,
+        },
+      ];
+      const drift = diffRuntimePrivilegesAgainstMatrix(rows, healthyRuntimeSequencePrivilegeRows(), { rolname: 'korixa_runtime', can_schema_create: false }, 'korixa_runtime');
+      expect(drift.unexpected).toContain('table:pgmigrations:unexpected_access');
+    });
+
+    it('detecta USAGE inesperado en una secuencia fuera de la matriz (ej. pgmigrations_id_seq)', () => {
+      const rows = [...healthyRuntimeSequencePrivilegeRows(), { rolname: 'korixa_runtime', sequence_name: 'pgmigrations_id_seq', can_usage: true, can_select: false, can_update: false }];
+      const drift = diffRuntimePrivilegesAgainstMatrix(healthyRuntimeTablePrivilegeRows(), rows, { rolname: 'korixa_runtime', can_schema_create: false }, 'korixa_runtime');
+      expect(drift.unexpected).toContain('sequence:pgmigrations_id_seq:unexpected_access');
+    });
+  });
+
+  describe('runInspection — nuevos HOLD automáticos (privilege model remediation)', () => {
+    it('membresía de korixa_runtime en cloudsqlsuperuser -> HOLD_ROLE_PRIVILEGE_ESCALATION (adversarial C)', async () => {
+      setEnv(baseEnv());
+      installFullyHealthyMock({ membershipRows: [{ member_role: 'korixa_runtime', granted_role: 'cloudsqlsuperuser' }] });
+
+      const result = await runInspection();
+
+      expect(result.final_disposition).toBe('HOLD_ROLE_PRIVILEGE_ESCALATION');
+      expect(result.db_role_model).toBe('OBVIOUS_VIOLATION');
+      expect(result.roles.privilege_escalation_findings.some((f) => f.includes('cloudsqlsuperuser'))).toBe(true);
+    });
+
+    it('runtime con SELECT en pgmigrations -> HOLD_PGMIGRATIONS_RUNTIME_ACCESS (nunca UNPROVEN_REQUIRES_REVIEW) (adversarial B)', async () => {
+      setEnv(baseEnv());
+      installFullyHealthyMock({
+        tablePrivilegeRows: [
+          ...healthyRuntimeTablePrivilegeRows(),
+          {
+            rolname: 'korixa_runtime',
+            table_name: 'pgmigrations',
+            can_select: true,
+            can_insert: false,
+            can_update: false,
+            can_delete: false,
+            can_truncate: false,
+            can_references: false,
+            can_trigger: false,
+          },
+        ],
+      });
+
+      const result = await runInspection();
+
+      expect(result.final_disposition).toBe('HOLD_PGMIGRATIONS_RUNTIME_ACCESS');
+      expect(result.db_role_model).toBe('OBVIOUS_VIOLATION');
+      expect(result.pgmigrations.runtime_access_violations.length).toBeGreaterThan(0);
+    });
+
+    it('runtime con DELETE extra fuera de la matriz -> HOLD_RUNTIME_PRIVILEGE_DRIFT (adversarial A)', async () => {
+      setEnv(baseEnv());
+      installFullyHealthyMock({
+        tablePrivilegeRows: healthyRuntimeTablePrivilegeRows().map((r) => (r.table_name === 'users' ? { ...r, can_delete: true } : r)),
+      });
+
+      const result = await runInspection();
+
+      expect(result.final_disposition).toBe('HOLD_RUNTIME_PRIVILEGE_DRIFT');
+      expect(result.runtime_privilege_drift.unexpected).toContain('table:users:delete');
+    });
+
+    it('runtime con CREATE en schema public -> HOLD_RUNTIME_PRIVILEGE_DRIFT (adversarial D)', async () => {
+      setEnv(baseEnv());
+      installFullyHealthyMock({
+        dbPrivilegeRows: [
+          { rolname: 'korixa_app', can_connect: true, can_schema_usage: true, can_schema_create: true },
+          { rolname: 'korixa_runtime', can_connect: true, can_schema_usage: true, can_schema_create: true },
+        ],
+      });
+
+      const result = await runInspection();
+
+      expect(result.final_disposition).toBe('HOLD_RUNTIME_PRIVILEGE_DRIFT');
+      expect(result.runtime_privilege_drift.unexpected).toContain('schema:public:create');
+    });
+
+    it('runtime como owner de un objeto de aplicación -> HOLD_INCONSISTENT_OWNER_MODEL, con precedencia sobre drift (adversarial E)', async () => {
+      setEnv(baseEnv());
+      const inv = fullHealthyInventory();
+      installFullyHealthyMock({
+        objectOwners: [
+          ...inv.tables.map((t) => ({ schema: 'public', object_name: t, object_type: 'table', owner: t === 'users' ? 'korixa_runtime' : 'korixa_app' })),
+          ...inv.sequences.map((s) => ({ schema: 'public', object_name: s, object_type: 'sequence', owner: 'korixa_app' })),
+        ],
+      });
+
+      const result = await runInspection();
+
+      expect(result.final_disposition).toBe('HOLD_INCONSISTENT_OWNER_MODEL');
+    });
+
+    it('runtime con un privilegio requerido ausente (missing) -> HOLD_RUNTIME_PRIVILEGE_DRIFT, nunca un PASS silencioso', async () => {
+      setEnv(baseEnv());
+      installFullyHealthyMock({
+        tablePrivilegeRows: healthyRuntimeTablePrivilegeRows().map((r) => (r.table_name === 'audit_log' ? { ...r, can_insert: false } : r)),
+      });
+
+      const result = await runInspection();
+
+      expect(result.final_disposition).toBe('HOLD_RUNTIME_PRIVILEGE_DRIFT');
+      expect(result.runtime_privilege_drift.missing).toContain('table:audit_log:insert');
+    });
+
+    it('modelo exactamente sano (matriz mínima, sin cloudsqlsuperuser, sin acceso a pgmigrations, sin CREATE en schema) -> TRACKED_AND_CONSISTENT, cero drift', async () => {
+      setEnv(baseEnv());
+      installFullyHealthyMock();
+
+      const result = await runInspection();
+
+      expect(result.final_disposition).toBe('TRACKED_AND_CONSISTENT');
+      expect(result.runtime_privilege_drift).toEqual({ missing: [], unexpected: [] });
+      expect(result.pgmigrations.runtime_access_violations).toEqual([]);
     });
   });
 });
