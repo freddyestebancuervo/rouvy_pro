@@ -14,7 +14,7 @@ name: Backend — Production DB role hardening (manual dispatch only)
 # still is not.
 #
 # CURRENT REAL-WORLD STATE (as of this PR): the runtime identity this
-# workflow needs, `korixa-production-migration-executor@ridepro-dbafe.iam
+# workflow needs, `korixa-prod-migration-exec@ridepro-dbafe.iam
 # .gserviceaccount.com`, DOES NOT EXIST YET, and the Production deployer has
 # no IAM binding letting it actAs that identity, and the migration secret has
 # no accessor binding for it either. All three are explicitly OUT OF SCOPE
@@ -23,6 +23,14 @@ name: Backend — Production DB role hardening (manual dispatch only)
 # workflow HOLDS at that job and never reaches `run-db-role-hardener`, no
 # matter what a human dispatches. This file does not create the service
 # account, does not grant IAM, and does not change Secret Manager policy.
+#
+# NAMING NOTE (T-F1.2 Point 8B.2): the identity was originally specified as
+# `korixa-production-migration-executor` (37 chars including the trailing
+# `@`-prefixed account id portion — 36 chars for the account id alone),
+# which GCP's IAM API rejects outright (`INVALID_ARGUMENT`: account ids must
+# be 6-30 characters). `korixa-prod-migration-exec` (26 characters) is the
+# corrected, GCP-valid account id — the only identity this workflow ever
+# references for this role from this point forward.
 #
 # WHAT A FUTURE REAL DISPATCH WOULD DO, once prerequisites exist: (A) resolve
 # a Production artifact for the exact dispatched commit — building/publishing
@@ -90,7 +98,7 @@ env:
   DEPLOYER_SA: korixa-production-deployer@ridepro-dbafe.iam.gserviceaccount.com
   # Future identity — does NOT exist yet (see header comment). Never created,
   # never granted IAM, never bound to the secret by this file.
-  MIGRATION_EXECUTOR_SA: korixa-production-migration-executor@ridepro-dbafe.iam.gserviceaccount.com
+  MIGRATION_EXECUTOR_SA: korixa-prod-migration-exec@ridepro-dbafe.iam.gserviceaccount.com
   SECRET_MIGRATION_DATABASE_URL: korixa-production-migration-database-url
   ARTIFACT_IMAGE: southamerica-east1-docker.pkg.dev/ridepro-dbafe/korixa-backend/api
   HARDENER_JOB: korixa-production-db-role-hardener
