@@ -1,6 +1,8 @@
 # Korixa — Evidencia Operativa POST-95
 
 > **Documento separado del snapshot histórico PR #1 → #95.** `PROJECT_STATUS_CURRENT.md` conserva el corte reconciliado en PR #95. Este archivo registra únicamente hechos posteriores a ese corte y no reescribe retrospectivamente el historial anterior.
+>
+> **Nota de supersesión (2026-08-31, sin alterar el texto original de este documento):** la afirmación de §5 de que `0001_init.sql` "requiere crear `pgcrypto` si falta" describía correctamente el código real a la fecha de este snapshot (~2026-08-26). Esa dependencia dejó de existir con PR #104 (`fix(db): remove unnecessary pgcrypto migration dependency`, 2026-08-28): `CREATE EXTENSION pgcrypto` fue eliminada de `0001_init.sql`; `gen_random_uuid()` (la única función que la motivaba) es una capacidad núcleo de PostgreSQL 16, sin ninguna extensión. `PGCRYPTO_CURRENT_BLOCKER = NO`. Ver `PROJECT_STATUS_POST106.md` para el detalle completo.
 
 ## Identidad del bloque
 

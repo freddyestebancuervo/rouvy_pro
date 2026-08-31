@@ -281,6 +281,20 @@ runtime/migración por variable, validación en CI, decisión de proveedor
 diferida — ver `docs/T-F1.2_PORTABLE_PRODUCTION_CD.md`). `T-F1.2` sigue
 **EN PROGRESO**: sin migración real ni deploy real de Production todavía.
 
+Después de ese corte (PR #103→#106, ver `PROJECT_STATUS_POST106.md` para la
+evidencia exacta), la dependencia de `pgcrypto` en `0001_init.sql` fue
+eliminada (PR #104 — `gen_random_uuid()` es una capacidad núcleo de
+PostgreSQL 16, sin extensión) y el modelo de privilegios del rol runtime se
+rediseñó como una matriz explícita, deny-by-default, con un reconciliador
+fail-closed (prueba de estado exacto antes y después de otorgar) y un
+inspector con HOLD automático ante `cloudsqlsuperuser` (directo o
+transitivo), acceso a `pgmigrations`/su secuencia, o cualquier privilegio
+fuera de la matriz (PR #105/#106) — todo probado contra PostgreSQL 16
+efímero/local, nunca contra Development o Production. El hallazgo
+`HOLD_ROLE_PRIVILEGE_ESCALATION` de `korixa_app` sigue exactamente donde
+estaba, sin revalidar; ninguno de estos PRs tocó Production, IAM, ni ejecutó
+una migración real. `T-F1.2` sigue **EN PROGRESO**.
+
 En deuda de calidad, `T-F2.5` quedó **CERRADA** en PR #92 y `T-F2.4` quedó
 **CERRADA** en PR #94 a nivel de código/migración: `0007_drop_unused_ride_sessions.sql`
 elimina la tabla Postgres legado sin `CASCADE`, con rollback definido y
