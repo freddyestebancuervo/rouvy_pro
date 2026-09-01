@@ -13,16 +13,24 @@ name: Backend — Production DB role hardening (manual dispatch only)
 # changes nothing about whether Production is reachable automatically: it
 # still is not.
 #
-# CURRENT REAL-WORLD STATE (as of this PR): the runtime identity this
-# workflow needs, `korixa-prod-migration-exec@ridepro-dbafe.iam
-# .gserviceaccount.com`, DOES NOT EXIST YET, and the Production deployer has
-# no IAM binding letting it actAs that identity, and the migration secret has
-# no accessor binding for it either. All three are explicitly OUT OF SCOPE
-# for this PR (separate, future, individually-authorized Human Gates) — see
-# `verify-prerequisites` below. Until every one of those exists, this
-# workflow HOLDS at that job and never reaches `run-db-role-hardener`, no
-# matter what a human dispatches. This file does not create the service
-# account, does not grant IAM, and does not change Secret Manager policy.
+# CURRENT REAL-WORLD STATE (T-F1.2 Point 8C, updated): the runtime identity
+# this workflow needs, `korixa-prod-migration-exec@ridepro-dbafe.iam
+# .gserviceaccount.com`, NOW EXISTS — it was provisioned, granted
+# `secretmanager.secretAccessor` on ONLY the migration secret, and granted
+# to the Production deployer as an `iam.serviceAccountUser` target, all
+# under a separate, explicit Human Gate (T-F1.2 Point 8C), and the WIF
+# provider's attribute-condition was separately extended (Point 8C
+# continuation) to recognize this workflow as an authorized caller. This
+# file itself STILL never creates the service account, never grants IAM,
+# and never changes Secret Manager policy — `verify-prerequisites` below
+# only describes/lists (read-only) and remains fail-closed: if the SA or its
+# secret binding were ever removed or broken, this job fails HOLD and
+# `run-db-role-hardener` never runs, exactly as it did before the SA
+# existed. A broken deployer actAs binding isn't checked here — it would
+# instead fail later, at the Cloud Run Job deployment step in
+# `run-db-role-hardener` (which passes `--service-account=
+# "${MIGRATION_EXECUTOR_SA}"` using the deployer's identity), still
+# fail-closed.
 #
 # NAMING NOTE (T-F1.2 Point 8B.2): the identity was originally specified as
 # `korixa-production-migration-executor` (37 chars including the trailing
@@ -96,8 +104,9 @@ env:
   CLOUD_SQL_INSTANCE: korixa-production-postgres
   TARGET_DATABASE: korixa_production
   DEPLOYER_SA: korixa-production-deployer@ridepro-dbafe.iam.gserviceaccount.com
-  # Future identity — does NOT exist yet (see header comment). Never created,
-  # never granted IAM, never bound to the secret by this file.
+  # Exists as of T-F1.2 Point 8C (see header comment) — provisioned and
+  # bound under a separate Human Gate. This file itself never creates it,
+  # never grants IAM, and never binds it to the secret.
   MIGRATION_EXECUTOR_SA: korixa-prod-migration-exec@ridepro-dbafe.iam.gserviceaccount.com
   SECRET_MIGRATION_DATABASE_URL: korixa-production-migration-database-url
   ARTIFACT_IMAGE: southamerica-east1-docker.pkg.dev/ridepro-dbafe/korixa-backend/api
@@ -228,17 +237,35 @@ jobs:
 
           command -v python3 >/dev/null 2>&1 || fail "ARTIFACT_EXISTENCE_CHECK=PARSER_UNAVAILABLE — python3 no disponible. FAIL_CLOSED."
 
+          # T-F1.2 Point 8B.3: stdout/stderr separados; un exit != 0 se
+          # CLASIFICA (nunca se reinterpreta como "artefacto ausente" — un
+          # 0/1 de MATCH_COUNT solo es válido si este comando tuvo éxito).
           LIST_STDOUT="$(mktemp)"
-          trap 'rm -f "$LIST_STDOUT"' EXIT
+          LIST_STDERR="$(mktemp)"
+          trap 'rm -f "$LIST_STDOUT" "$LIST_STDERR"' EXIT
 
           set +e
           gcloud artifacts docker images list "${{ env.ARTIFACT_IMAGE }}" \
             --include-tags \
             --project="${{ env.PRODUCTION_PROJECT }}" \
-            --format=json >"$LIST_STDOUT" 2>&1
+            --format=json >"$LIST_STDOUT" 2>"$LIST_STDERR"
           LIST_EXIT=$?
           set -e
-          [ "$LIST_EXIT" -eq 0 ] || fail "ARTIFACT_EXISTENCE_CHECK=LOOKUP_ERROR — docker images list terminó con exit=$LIST_EXIT. FAIL_CLOSED."
+
+          if [ "$LIST_EXIT" -ne 0 ]; then
+            LIST_ERR="$(grep -v 'gha-creds' "$LIST_STDERR" || true)"
+            if echo "$LIST_ERR" | grep -qiE 'PERMISSION_DENIED|permission denied|does not have permission|HTTP 403|status[^0-9]*403'; then
+              CLASSIFICATION="ARTIFACT_PERMISSION_DENIED"
+            elif echo "$LIST_ERR" | grep -qiE 'NOT_FOUND|not found|does not exist|HTTP 404|status[^0-9]*404'; then
+              CLASSIFICATION="ARTIFACT_REPOSITORY_NOT_FOUND"
+            elif echo "$LIST_ERR" | grep -qiE 'HTTP 5[0-9][0-9]|status[^0-9]*5[0-9][0-9]|internal error|unavailable|deadline exceeded'; then
+              CLASSIFICATION="ARTIFACT_API_ERROR"
+            else
+              CLASSIFICATION="ARTIFACT_LOOKUP_OTHER_ERROR"
+            fi
+            fail "ARTIFACT_EXISTENCE_CHECK=$CLASSIFICATION — docker images list terminó con exit=$LIST_EXIT. Detalle de gcloud (sin credenciales/env): $LIST_ERR"
+          fi
+          echo "ARTIFACT_EXISTENCE_CHECK=LOOKUP_SUCCEEDED"
 
           set +e
           MATCH_COUNT="$(python3 - "$SOURCE_SHA" "$LIST_STDOUT" <<'PY'
@@ -340,14 +367,33 @@ jobs:
 
           IMAGE_TAG_REF="${{ env.ARTIFACT_IMAGE }}:${SOURCE_SHA}"
 
+          # T-F1.2 Point 8B.3: mismo tratamiento que check-artifact-existence
+          # — stdout/stderr separados, error clasificado, nunca reinterpretado
+          # como ausencia (acá ni siquiera existe esa opción: un MATCH_COUNT
+          # != 1 tras un LIST_EXIT=0 real ya es FAIL_CLOSED más abajo).
           LIST_STDOUT="$(mktemp)"
-          trap 'rm -f "$LIST_STDOUT"' EXIT
+          LIST_STDERR="$(mktemp)"
+          trap 'rm -f "$LIST_STDOUT" "$LIST_STDERR"' EXIT
           set +e
           gcloud artifacts docker images list "${{ env.ARTIFACT_IMAGE }}" \
-            --include-tags --project="${{ env.PRODUCTION_PROJECT }}" --format=json >"$LIST_STDOUT" 2>&1
+            --include-tags --project="${{ env.PRODUCTION_PROJECT }}" --format=json >"$LIST_STDOUT" 2>"$LIST_STDERR"
           LIST_EXIT=$?
           set -e
-          [ "$LIST_EXIT" -eq 0 ] || fail "REUSE_RECHECK=LOOKUP_ERROR — exit=$LIST_EXIT."
+
+          if [ "$LIST_EXIT" -ne 0 ]; then
+            LIST_ERR="$(grep -v 'gha-creds' "$LIST_STDERR" || true)"
+            if echo "$LIST_ERR" | grep -qiE 'PERMISSION_DENIED|permission denied|does not have permission|HTTP 403|status[^0-9]*403'; then
+              CLASSIFICATION="ARTIFACT_PERMISSION_DENIED"
+            elif echo "$LIST_ERR" | grep -qiE 'NOT_FOUND|not found|does not exist|HTTP 404|status[^0-9]*404'; then
+              CLASSIFICATION="ARTIFACT_REPOSITORY_NOT_FOUND"
+            elif echo "$LIST_ERR" | grep -qiE 'HTTP 5[0-9][0-9]|status[^0-9]*5[0-9][0-9]|internal error|unavailable|deadline exceeded'; then
+              CLASSIFICATION="ARTIFACT_API_ERROR"
+            else
+              CLASSIFICATION="ARTIFACT_LOOKUP_OTHER_ERROR"
+            fi
+            fail "REUSE_RECHECK=$CLASSIFICATION — exit=$LIST_EXIT. Detalle de gcloud (sin credenciales/env): $LIST_ERR"
+          fi
+          echo "REUSE_RECHECK_LOOKUP=LOOKUP_SUCCEEDED"
 
           set +e
           MATCH_COUNT="$(python3 - "$SOURCE_SHA" "$LIST_STDOUT" <<'PY'
@@ -469,10 +515,13 @@ jobs:
 
   # ===========================================================================
   # Job 5 — verificación de prerrequisitos, ÚNICAMENTE de solo lectura. Este
-  # job NUNCA crea la Service Account futura, NUNCA otorga IAM, NUNCA cambia
-  # la política de Secret Manager — solo describe/lista. Mientras
-  # MIGRATION_EXECUTOR_SA no exista (estado real hoy), este job falla
-  # limpiamente y ningún job posterior se ejecuta (HOLD).
+  # job NUNCA crea la Service Account, NUNCA otorga IAM, NUNCA cambia la
+  # política de Secret Manager — solo describe/lista. MIGRATION_EXECUTOR_SA
+  # existe desde T-F1.2 Point 8C, pero este job sigue siendo fail-closed: si
+  # su existencia/habilitación, su binding sobre el secreto, o la IP privada
+  # de Cloud SQL no pueden probarse de forma inequívoca (sin inferir NUNCA
+  # ausencia a partir de un error genérico — ver clasificación de errores en
+  # el paso siguiente), el job falla y ningún job posterior se ejecuta (HOLD).
   # ===========================================================================
   verify-prerequisites:
     name: Verify prerequisites (read-only — HOLD if absent)
@@ -503,19 +552,47 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          fail() { echo "::error::$1"; exit 1; }
+
+          # T-F1.2 Point 8B.3: stdout y stderr se capturan POR SEPARADO (nunca
+          # combinados en la misma variable) para poder clasificar la causa
+          # real de un exit != 0 en vez de asumir "no existe" — esa afirmación
+          # ya demostró ser falsa una vez (Point 8C, la SA existía realmente).
+          # El stderr de `gcloud iam service-accounts describe` nunca contiene
+          # el archivo de credenciales ni variables de entorno; se filtra
+          # cualquier línea que mencione el patrón de archivo temporal de
+          # `google-github-actions/auth` (`gha-creds-*.json`) como defensa
+          # adicional antes de imprimir nada.
+          SA_STDOUT="$(mktemp)"
+          SA_STDERR="$(mktemp)"
+          trap 'rm -f "$SA_STDOUT" "$SA_STDERR"' EXIT
+
           set +e
-          DISABLED="$(gcloud iam service-accounts describe "${{ env.MIGRATION_EXECUTOR_SA }}" --project="${{ env.PRODUCTION_PROJECT }}" --format='value(disabled)' 2>&1)"
+          gcloud iam service-accounts describe "${{ env.MIGRATION_EXECUTOR_SA }}" \
+            --project="${{ env.PRODUCTION_PROJECT }}" \
+            --format='value(disabled)' \
+            >"$SA_STDOUT" 2>"$SA_STDERR"
           DESCRIBE_EXIT=$?
           set -e
+
           if [ "$DESCRIBE_EXIT" -ne 0 ]; then
-            echo "::error::MIGRATION_EXECUTOR_SA no existe todavía (${{ env.MIGRATION_EXECUTOR_SA }}) — HOLD. Este workflow nunca la crea; su creación es un Human Gate GCP/IAM separado."
+            SA_ERR="$(grep -v 'gha-creds' "$SA_STDERR" || true)"
+            if echo "$SA_ERR" | grep -qiE 'PERMISSION_DENIED|permission denied|does not have permission|HTTP 403|status[^0-9]*403'; then
+              CLASSIFICATION="SA_PERMISSION_DENIED"
+            elif echo "$SA_ERR" | grep -qiE 'NOT_FOUND|not found|does not exist|HTTP 404|status[^0-9]*404'; then
+              CLASSIFICATION="SA_NOT_FOUND"
+            else
+              CLASSIFICATION="SA_LOOKUP_OTHER_ERROR"
+            fi
             echo "sa_exists=NO" >> "$GITHUB_OUTPUT"
-            exit 1
+            fail "MIGRATION_EXECUTOR_SA_LOOKUP=$CLASSIFICATION — no se pudo verificar el estado de ${{ env.MIGRATION_EXECUTOR_SA }} (exit=$DESCRIBE_EXIT). Detalle de gcloud (sin credenciales/env): $SA_ERR"
           fi
+
+          echo "MIGRATION_EXECUTOR_SA_LOOKUP=PASS"
+          DISABLED="$(cat "$SA_STDOUT")"
           if [ "$DISABLED" = "True" ] || [ "$DISABLED" = "true" ]; then
-            echo "::error::MIGRATION_EXECUTOR_SA existe pero está deshabilitada — HOLD."
             echo "sa_exists=NO" >> "$GITHUB_OUTPUT"
-            exit 1
+            fail "MIGRATION_EXECUTOR_SA_LOOKUP=SA_DISABLED — la cuenta existe pero está deshabilitada — HOLD."
           fi
           echo "sa_exists=YES" >> "$GITHUB_OUTPUT"
 
@@ -637,12 +714,24 @@ jobs:
       - name: Emitir resumen (el propio hardener ya sanea su stdout — nunca DSN/password)
         shell: bash
         run: |
+          # T-F1.2 Point 8B.3: este paso solo se alcanza si "Ejecutar el Job
+          # una vez y esperar su resultado" (arriba) terminó con exit=0 —
+          # `set -euo pipefail` detiene el workflow antes de aquí si la
+          # ejecución del Job falló. Por construcción, llegar acá prueba que
+          # el Job corrió hasta el final, y el Job SIEMPRE lee
+          # MIGRATION_DATABASE_URL como parte de su contrato de entorno
+          # (`readRequiredEnv`) — así que "SECRET_PAYLOAD_ACCESSED = NO"
+          # sería falso acá. El operador (este workflow/humano) nunca ve ese
+          # valor — solo el proceso Node dentro del Job, en runtime, dentro
+          # de la red privada de Cloud Run.
           {
             echo "### T-F1.2 Point 8 — Production DB role hardening (${{ inputs.mode }})"
             echo ""
             echo "- SOURCE_SHA = ${{ needs.resolve-artifact.outputs.source_sha }}"
             echo "- MODE = ${{ inputs.mode }}"
             echo "- MIGRATION_SECRET_VERSION = ${{ inputs.migration_secret_version }}"
-            echo "- SECRET_PAYLOAD_ACCESSED = NO"
+            echo "- SECRET_PAYLOAD_ACCESSED_BY_JOB_AT_RUNTIME = YES"
+            echo "- SECRET_PAYLOAD_EXPOSED_TO_OPERATOR = NO"
+            echo "- SECRET_PAYLOAD_PRINTED = NO"
             echo "- Ver logs del Job (${{ env.HARDENER_JOB }}) en Cloud Logging para el JSON estructurado de salida."
           } >> "$GITHUB_STEP_SUMMARY"
