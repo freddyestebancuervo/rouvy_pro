@@ -23,10 +23,14 @@ name: Backend — Production DB role hardening (manual dispatch only)
 # continuation) to recognize this workflow as an authorized caller. This
 # file itself STILL never creates the service account, never grants IAM,
 # and never changes Secret Manager policy — `verify-prerequisites` below
-# only describes/lists (read-only) and remains fail-closed: if the SA, its
-# secret binding, or the deployer's actAs binding were ever removed or
-# broken, this job fails HOLD and `run-db-role-hardener` never runs, exactly
-# as it did before the SA existed.
+# only describes/lists (read-only) and remains fail-closed: if the SA or its
+# secret binding were ever removed or broken, this job fails HOLD and
+# `run-db-role-hardener` never runs, exactly as it did before the SA
+# existed. A broken deployer actAs binding isn't checked here — it would
+# instead fail later, at the Cloud Run Job deployment step in
+# `run-db-role-hardener` (which passes `--service-account=
+# "${MIGRATION_EXECUTOR_SA}"` using the deployer's identity), still
+# fail-closed.
 #
 # NAMING NOTE (T-F1.2 Point 8B.2): the identity was originally specified as
 # `korixa-production-migration-executor` (37 chars including the trailing
