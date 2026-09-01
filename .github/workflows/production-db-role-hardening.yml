@@ -654,7 +654,15 @@ jobs:
   run-db-role-hardener:
     name: Run DB role hardener (${{ inputs.mode }})
     needs: [guard, prepare-inputs, resolve-artifact, verify-prerequisites]
-    if: needs.resolve-artifact.outputs.verify_pass == 'YES' && needs.verify-prerequisites.outputs.prerequisites_met == 'YES'
+    if: |
+      !cancelled() &&
+      needs.guard.result == 'success' &&
+      needs.prepare-inputs.result == 'success' &&
+      needs.resolve-artifact.result == 'success' &&
+      needs.verify-prerequisites.result == 'success' &&
+      needs.guard.outputs.guard_pass == 'YES' &&
+      needs.resolve-artifact.outputs.verify_pass == 'YES' &&
+      needs.verify-prerequisites.outputs.prerequisites_met == 'YES'
     runs-on: ubuntu-latest
     timeout-minutes: 15
     environment: production
