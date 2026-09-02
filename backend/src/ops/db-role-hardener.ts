@@ -182,8 +182,71 @@ export class HardenerError extends Error {
   }
 }
 
-function sanitizeUnexpectedError(code: HardenerErrorCode, context: string): HardenerError {
-  return new HardenerError(code, `${context} — nunca se propaga DSN, password ni el objeto crudo de \`pg\`.`);
+function sanitizeUnexpectedError(
+  code: HardenerErrorCode,
+  context: string,
+  evidence?: Record<string, string | number | boolean>,
+): HardenerError {
+  return new HardenerError(code, `${context} — nunca se propaga DSN, password ni el objeto crudo de \`pg\`.`, evidence);
+}
+
+// =============================================================================
+// Clasificación segura de fallos de conexión — inspecciona ÚNICAMENTE
+// `error.code` (nunca `.message`, `.stack`, ni el objeto crudo) contra un
+// allowlist fijo de SQLSTATE de PostgreSQL y códigos de error de Node. Un
+// código ausente, no textual, o no reconocido siempre cae en
+// `CONNECT_OTHER` — el código crudo nunca se devuelve ni se adjunta a la
+// evidencia, así que un valor inventado/hostil nunca puede colarse.
+// =============================================================================
+
+export type SafeConnectionFailureClass =
+  | 'AUTH_INVALID_PASSWORD'
+  | 'AUTH_REJECTED'
+  | 'DATABASE_NOT_FOUND'
+  | 'NETWORK_CONNECTION_REFUSED'
+  | 'NETWORK_TIMEOUT'
+  | 'NETWORK_HOST_UNREACHABLE'
+  | 'NETWORK_UNREACHABLE'
+  | 'NETWORK_DNS_FAILURE'
+  | 'NETWORK_CONNECTION_RESET'
+  | 'TLS_CERTIFICATE_FAILURE'
+  | 'SERVER_TOO_MANY_CONNECTIONS'
+  | 'SERVER_NOT_ACCEPTING_CONNECTIONS'
+  | 'CONNECT_OTHER';
+
+/** SQLSTATE de PostgreSQL — https://www.postgresql.org/docs/current/errcodes-appendix.html */
+const SQLSTATE_TO_SAFE_CLASS = new Map<string, SafeConnectionFailureClass>([
+  ['28P01', 'AUTH_INVALID_PASSWORD'],
+  ['28000', 'AUTH_REJECTED'],
+  ['3D000', 'DATABASE_NOT_FOUND'],
+  ['53300', 'SERVER_TOO_MANY_CONNECTIONS'],
+  ['57P03', 'SERVER_NOT_ACCEPTING_CONNECTIONS'],
+]);
+
+const NODE_ERROR_CODE_TO_SAFE_CLASS = new Map<string, SafeConnectionFailureClass>([
+  ['ECONNREFUSED', 'NETWORK_CONNECTION_REFUSED'],
+  ['ETIMEDOUT', 'NETWORK_TIMEOUT'],
+  ['EHOSTUNREACH', 'NETWORK_HOST_UNREACHABLE'],
+  ['ENETUNREACH', 'NETWORK_UNREACHABLE'],
+  ['ENOTFOUND', 'NETWORK_DNS_FAILURE'],
+  ['ECONNRESET', 'NETWORK_CONNECTION_RESET'],
+]);
+
+/** Solo códigos TLS/certificado de Node conocidos como no sensibles — nunca
+ * incluyen host/DSN/nombre de archivo. */
+const TLS_CODE_ALLOWLIST = new Set<string>([
+  'ERR_TLS_CERT_ALTNAME_INVALID',
+  'DEPTH_ZERO_SELF_SIGNED_CERT',
+  'SELF_SIGNED_CERT_IN_CHAIN',
+  'UNABLE_TO_VERIFY_LEAF_SIGNATURE',
+  'CERT_HAS_EXPIRED',
+]);
+
+export function classifySafeConnectionFailure(error: unknown): SafeConnectionFailureClass {
+  if (typeof error !== 'object' || error === null) return 'CONNECT_OTHER';
+  const code = (error as { code?: unknown }).code;
+  if (typeof code !== 'string') return 'CONNECT_OTHER';
+  return SQLSTATE_TO_SAFE_CLASS.get(code) ?? NODE_ERROR_CODE_TO_SAFE_CLASS.get(code) ?? (TLS_CODE_ALLOWLIST.has(code) ? 'TLS_CERTIFICATE_FAILURE' : 'CONNECT_OTHER');
 }
 
 // =============================================================================
@@ -472,8 +535,10 @@ function createClient(migrationDatabaseUrl: string): Client {
 async function connectAndIdentify(client: Client): Promise<ConnectedIdentity & { database: string }> {
   try {
     await client.connect();
-  } catch {
-    throw sanitizeUnexpectedError('DB_CONNECTION_FAILED', 'No se pudo conectar a la base de datos');
+  } catch (error: unknown) {
+    throw sanitizeUnexpectedError('DB_CONNECTION_FAILED', 'No se pudo conectar a la base de datos', {
+      connection_failure_class: classifySafeConnectionFailure(error),
+    });
   }
   const identityResult = await client.query(QUERY_IDENTITY);
   const row = identityResult.rows[0] as { current_user: string; session_user: string; database: string };

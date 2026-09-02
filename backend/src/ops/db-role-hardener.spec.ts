@@ -5,6 +5,7 @@ import {
   assertSafeConnectedIdentity,
   assertExpectedAdminIdentity,
   classifyAdminCapability,
+  classifySafeConnectionFailure,
   runPreflight,
   runApply,
   runVerify,
@@ -19,6 +20,7 @@ import {
   TARGET_DATABASE,
   type HardenerEnv,
   type RoleStateSnapshot,
+  type SafeConnectionFailureClass,
 } from './db-role-hardener';
 
 // `pg.Client` se mockea por completo — ningún test de este archivo toca una
@@ -573,6 +575,150 @@ describe('sanitización de errores', () => {
     } catch (e) {
       const err = e as HardenerError;
       expect(JSON.stringify(err)).not.toContain(VALID_DSN);
+    }
+  });
+
+  it('un fallo de conexión adjunta connection_failure_class como única evidencia', async () => {
+    mockConnect.mockRejectedValueOnce(Object.assign(new Error('irrelevant'), { code: '28P01' }));
+    try {
+      await runPreflight(baseEnv());
+      fail('debía lanzar');
+    } catch (e) {
+      const err = e as HardenerError;
+      expect(err.code).toBe('DB_CONNECTION_FAILED');
+      expect(err.evidence).toEqual({ connection_failure_class: 'AUTH_INVALID_PASSWORD' });
+    }
+  });
+});
+
+// =============================================================================
+// classifySafeConnectionFailure — allowlist fijo, código crudo nunca emitido
+// =============================================================================
+
+describe('classifySafeConnectionFailure', () => {
+  const SQLSTATE_CASES: Array<[string, SafeConnectionFailureClass]> = [
+    ['28P01', 'AUTH_INVALID_PASSWORD'],
+    ['28000', 'AUTH_REJECTED'],
+    ['3D000', 'DATABASE_NOT_FOUND'],
+    ['53300', 'SERVER_TOO_MANY_CONNECTIONS'],
+    ['57P03', 'SERVER_NOT_ACCEPTING_CONNECTIONS'],
+  ];
+
+  const NODE_CODE_CASES: Array<[string, SafeConnectionFailureClass]> = [
+    ['ECONNREFUSED', 'NETWORK_CONNECTION_REFUSED'],
+    ['ETIMEDOUT', 'NETWORK_TIMEOUT'],
+    ['EHOSTUNREACH', 'NETWORK_HOST_UNREACHABLE'],
+    ['ENETUNREACH', 'NETWORK_UNREACHABLE'],
+    ['ENOTFOUND', 'NETWORK_DNS_FAILURE'],
+    ['ECONNRESET', 'NETWORK_CONNECTION_RESET'],
+  ];
+
+  it.each(SQLSTATE_CASES)('SQLSTATE %s -> %s', (code, expected) => {
+    expect(classifySafeConnectionFailure({ code })).toBe(expected);
+  });
+
+  it.each(NODE_CODE_CASES)('código de Node %s -> %s', (code, expected) => {
+    expect(classifySafeConnectionFailure({ code })).toBe(expected);
+  });
+
+  it('ERR_TLS_CERT_ALTNAME_INVALID -> TLS_CERTIFICATE_FAILURE', () => {
+    expect(classifySafeConnectionFailure({ code: 'ERR_TLS_CERT_ALTNAME_INVALID' })).toBe('TLS_CERTIFICATE_FAILURE');
+  });
+
+  it('un código no reconocido nunca se devuelve crudo -> CONNECT_OTHER', () => {
+    expect(classifySafeConnectionFailure({ code: 'SOME_TOTALLY_UNKNOWN_CODE' })).toBe('CONNECT_OTHER');
+  });
+
+  it('code ausente -> CONNECT_OTHER', () => {
+    expect(classifySafeConnectionFailure({})).toBe('CONNECT_OTHER');
+  });
+
+  it('code numérico -> CONNECT_OTHER', () => {
+    expect(classifySafeConnectionFailure({ code: 123 })).toBe('CONNECT_OTHER');
+  });
+
+  it('error null -> CONNECT_OTHER', () => {
+    expect(classifySafeConnectionFailure(null)).toBe('CONNECT_OTHER');
+  });
+
+  it('error string (no objeto) -> CONNECT_OTHER', () => {
+    expect(classifySafeConnectionFailure('some string error')).toBe('CONNECT_OTHER');
+  });
+
+  it('error undefined -> CONNECT_OTHER', () => {
+    expect(classifySafeConnectionFailure(undefined)).toBe('CONNECT_OTHER');
+  });
+
+  it('code como objeto anidado -> CONNECT_OTHER', () => {
+    expect(classifySafeConnectionFailure({ code: { nested: true } })).toBe('CONNECT_OTHER');
+  });
+});
+
+// =============================================================================
+// Pruebas de seguridad — un error malicioso/hostil con un secreto incrustado
+// en message/stack/otras propiedades nunca puede filtrarse a través del
+// clasificador, la evidencia, ni el HardenerError final.
+// =============================================================================
+
+describe('seguridad — un error hostil con un secreto incrustado nunca se filtra', () => {
+  const SECRET_DSN = 'postgresql://user:SUPER_SECRET_PASSWORD@10.10.16.3/korixa_production';
+
+  function maliciousError(overrides: Record<string, unknown> = {}): unknown {
+    const err = new Error(`connection failed: ${SECRET_DSN}`);
+    err.stack = `Error: connection failed: ${SECRET_DSN}\n    at somewhere (${SECRET_DSN}:1:1)`;
+    return Object.assign(err, { detail: SECRET_DSN, hint: SECRET_DSN, ...overrides });
+  }
+
+  it('el clasificador nunca devuelve un valor que contenga el secreto, sin importar el code recibido', () => {
+    const withKnownCode = classifySafeConnectionFailure(maliciousError({ code: '28P01' }));
+    expect(withKnownCode).toBe('AUTH_INVALID_PASSWORD');
+    expect(withKnownCode).not.toContain('SUPER_SECRET_PASSWORD');
+
+    const withUnknownCode = classifySafeConnectionFailure(maliciousError({ code: 'SUPER_SECRET_PASSWORD' }));
+    expect(withUnknownCode).toBe('CONNECT_OTHER');
+    expect(withUnknownCode).not.toContain('SUPER_SECRET_PASSWORD');
+  });
+
+  it('un code hostil que coincide textualmente con una clase segura nunca se confunde con el code crudo', () => {
+    // El propio VALOR de la clase (p. ej. 'CONNECT_OTHER') jamás debe poder
+    // ser pisado por un `code` arbitrario — el mapeo es siempre por lookup
+    // fijo, nunca por eco del valor recibido.
+    const result = classifySafeConnectionFailure(maliciousError({ code: 'CONNECT_OTHER_BUT_ACTUALLY_A_SECRET' }));
+    expect(result).toBe('CONNECT_OTHER');
+  });
+
+  it('runPreflight ante un error hostil produce un HardenerError sin el secreto en message/evidence/JSON completo', async () => {
+    mockConnect.mockRejectedValueOnce(maliciousError({ code: 'ECONNREFUSED' }));
+    try {
+      await runPreflight(baseEnv());
+      fail('debía lanzar');
+    } catch (e) {
+      const err = e as HardenerError;
+      expect(err.code).toBe('DB_CONNECTION_FAILED');
+      expect(err.evidence).toEqual({ connection_failure_class: 'NETWORK_CONNECTION_REFUSED' });
+      expect(err.message).not.toContain('SUPER_SECRET_PASSWORD');
+      expect(err.message).not.toContain(SECRET_DSN);
+      expect(JSON.stringify(err)).not.toContain('SUPER_SECRET_PASSWORD');
+      expect(JSON.stringify(err)).not.toContain(SECRET_DSN);
+      expect(JSON.stringify(err.evidence)).not.toContain('SUPER_SECRET_PASSWORD');
+      // El objeto de error crudo nunca queda adjunto en ninguna propiedad.
+      expect(Object.keys(err)).not.toContain('cause');
+      expect(Object.keys(err)).not.toContain('originalError');
+      expect(Object.keys(err)).not.toContain('rawError');
+    }
+  });
+
+  it('runPreflight ante un error hostil sin code reconocible cae en CONNECT_OTHER sin filtrar nada', async () => {
+    mockConnect.mockRejectedValueOnce(maliciousError({ code: 'TOTALLY_UNRECOGNIZED_HOSTILE_CODE' }));
+    try {
+      await runPreflight(baseEnv());
+      fail('debía lanzar');
+    } catch (e) {
+      const err = e as HardenerError;
+      expect(err.evidence).toEqual({ connection_failure_class: 'CONNECT_OTHER' });
+      expect(JSON.stringify(err)).not.toContain('SUPER_SECRET_PASSWORD');
+      expect(JSON.stringify(err)).not.toContain(SECRET_DSN);
+      expect(JSON.stringify(err)).not.toContain('TOTALLY_UNRECOGNIZED_HOSTILE_CODE');
     }
   });
 });
