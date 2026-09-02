@@ -44,24 +44,74 @@ name: Backend — Production DB role hardener (ephemeral admin, manual dispatch 
 #      creates anything. Exists because a cancelled/lost runner can strand
 #      resources before `apply`'s own `always()` cleanup ever runs.
 #
-# SOURCE SHA BINDING: `apply` requires `operation_source_sha` to equal
-# `github.sha` EXACTLY — if `main` has advanced since the `bootstrap_and_
-# preflight` dispatch, this workflow refuses to continue
-# (HOLD_OPERATION_CONTEXT_DRIFT). Dispatch `apply` with
-# `gh workflow run ... --ref <the exact source SHA>`, not merely "main" from
-# the UI dropdown, if `main` may have moved. `cleanup_only` intentionally
-# does NOT enforce this — incident recovery may legitimately need newer,
-# fixed cleanup code; it records both SHAs instead (never silently mixes
-# them into one).
+# SOURCE SHA BINDING (corrected — PR #115 P1 remediation, Phase 9): `apply`
+# requires `operation_source_sha` to equal `github.sha` EXACTLY. IMPORTANT
+# CORRECTION: an earlier version of this comment claimed an operator could
+# work around `main` having advanced by dispatching `apply` with
+# `gh workflow run ... --ref <the exact source SHA>`. That is FALSE and
+# UNSUPPORTED — confirmed via `gh workflow run --help`, which documents
+# `--ref` as accepting only a "Branch or tag name," never a commit SHA;
+# `workflow_dispatch` itself has no mechanism to pin execution to an
+# arbitrary historical commit. Combined with this workflow's own
+# `github.ref == refs/heads/main` guard requirement, there is NO supported
+# way to re-dispatch `apply` against an old SHA once `main` has moved.
+#
+# The actual, fail-closed policy is therefore simpler than the old comment
+# implied: IF `main`'s current tip still equals `operation_source_sha`,
+# `apply` proceeds normally. IF `main` advanced, `apply` is refused
+# (HOLD_OPERATION_CONTEXT_DRIFT) with NO retry path for that same operation
+# — the correct recovery is: dispatch `cleanup_only` for that `operation_id`
+# (which deliberately does NOT enforce this SHA match, since incident
+# recovery may legitimately need newer, trusted cleanup code — it records
+# `ORIGINAL_OPERATION_SHA` and `CLEANUP_IMPLEMENTATION_SHA` separately,
+# never silently mixing them), then start an entirely new operation via a
+# fresh `bootstrap_and_preflight` dispatch on current `main`, under its own
+# new Human Gate.
 #
 # NAMING NOTE: resource-name derivation (ephemeral admin username, ephemeral
-# secret name) is DUPLICATED here in bash from
-# `backend/src/ops/hardener-operation.ts`'s pure functions, because GitHub
-# Actions bash steps cannot import a TypeScript module without a build step.
-# `backend/src/ops/hardener-operation.spec.ts` is the single source of truth
-# for the exact format; this file's `deriveNames` step must be kept in exact
-# sync with it — this is a real, documented duplication risk (see PR
-# description), not a shortcut.
+# password secret name, ephemeral DSN secret name) is DUPLICATED here in bash
+# from `backend/src/ops/hardener-operation.ts`'s pure functions, because
+# GitHub Actions bash steps cannot import a TypeScript module without a build
+# step. `backend/src/ops/hardener-operation.spec.ts` is the single source of
+# truth for the exact format; this file's `derive-operation-names` step must
+# be kept in exact sync with it — this is a real, documented duplication risk
+# (see PR description), not a shortcut.
+#
+# REGIONAL SECRET OPERATIONS USE curl, NEVER `gcloud secrets ... --location=`
+# (PR #115 P1 remediation, Phase 11 live NONPROD proof, ridepro-development):
+# `gcloud secrets create/versions add/versions list/describe/
+# add-iam-policy-binding` combined with `--location=<region>` was confirmed,
+# by LIVE EXECUTION (not just `--help` text), to be BROKEN in the installed
+# gcloud SDK — every one of those subcommands fails with
+# `INVALID_ARGUMENT: The provided Secret ID [projects/.../locations/.../
+# secrets/...] does not match the expected format [projects/*/secrets/*]`,
+# regardless of whether `--project` is a project ID or a project number, and
+# regardless of GA vs `gcloud beta`. Calling the SAME underlying regional
+# Secret Manager REST API directly (`https://secretmanager.<region>.rep.
+# googleapis.com/v1/...`) with the WIF-issued access token from
+# `gcloud auth print-access-token` succeeds identically to how the CLI is
+# documented to behave — proving this is a client-side gcloud CLI defect, not
+# an API-level restriction. Every regional-secret operation in this file
+# therefore uses `curl` against that regional REST endpoint instead of the
+# (currently broken) `--location=` CLI flag. The GLOBAL DSN secret is
+# entirely unaffected — ordinary `gcloud secrets create/versions add/delete/
+# describe/add-iam-policy-binding` (no `--location`) work exactly as
+# documented and are used as-is.
+#
+# execute-sql REQUIRES dataApiAccess=ALLOW_DATA_API ON THE INSTANCE (same
+# live proof): `gcloud sql instances execute-sql` fails outright with
+# "The instance doesn't allow using ExecuteSql to access this instance" on
+# any Cloud SQL instance that has not been explicitly configured with
+# `dataApiAccess: ALLOW_DATA_API`. This is a REAL PREREQUISITE this workflow
+# has never enabled and MUST NOT silently enable on `korixa-production-
+# postgres` — per `gcloud sql instances patch --help`, for a Private IP
+# instance (which `korixa-production-postgres` is) this setting "will allow
+# authorized users to access the instance from the public internet using
+# ExecuteSql API," a genuine Production security-posture change that needs
+# its own explicit, separate Human Gate sign-off, never bundled silently into
+# this PR. `verify-prerequisites-instance` therefore FAILS CLOSED
+# (HOLD_DATA_API_ACCESS_NOT_ENABLED) if this is not already ON, rather than
+# ever attempting to enable it itself.
 
 on:
   workflow_dispatch:
@@ -106,7 +156,16 @@ env:
   # `deriveEphemeralJobName` en hardener-operation.ts.
   EPHEMERAL_JOB_PREFIX: korixa-prod-hardener-once-
   EPHEMERAL_ADMIN_PREFIX: korixa_db_hardener_once_
-  EPHEMERAL_SECRET_PREFIX: korixa-production-db-hardener-once-
+  # PR #115 P1 remediation (Phase 2): un solo secret no puede servir a la vez
+  # a `gcloud sql instances execute-sql --password-secret-version` (exige un
+  # secret REGIONAL verdadero, payload = SOLO el password) y al montaje de
+  # Cloud Run vía `--set-secrets` (exige un secret GLOBAL, Cloud Run no
+  # soporta secrets regionales; payload = DSN completo). Ver
+  # `deriveEphemeralPasswordSecretName`/`deriveEphemeralDsnSecretName` en
+  # hardener-operation.ts para la justificación completa, citando
+  # `gcloud secrets create --help`.
+  EPHEMERAL_PASSWORD_SECRET_PREFIX: korixa-production-db-hardener-password-
+  EPHEMERAL_DSN_SECRET_PREFIX: korixa-production-db-hardener-dsn-
 
 jobs:
   # ===========================================================================
@@ -159,7 +218,7 @@ jobs:
 
           if [ "$MODE" = "apply" ]; then
             [[ "$OPERATION_SOURCE_SHA" =~ ^[0-9a-f]{40}$ ]] || fail "operation_source_sha inválido para mode='apply': '$OPERATION_SOURCE_SHA'"
-            [ "$OPERATION_SOURCE_SHA" = "$SHA" ] || fail "HOLD_OPERATION_CONTEXT_DRIFT — operation_source_sha ('$OPERATION_SOURCE_SHA') no coincide con github.sha actual ('$SHA'). main avanzó desde el dispatch de bootstrap_and_preflight, o se dispatchó apply desde el ref equivocado. Re-dispatch apply pasando --ref exactamente el SHA original."
+            [ "$OPERATION_SOURCE_SHA" = "$SHA" ] || fail "HOLD_OPERATION_CONTEXT_DRIFT — operation_source_sha ('$OPERATION_SOURCE_SHA') no coincide con github.sha actual ('$SHA'). main avanzó desde el dispatch de bootstrap_and_preflight. NO existe forma soportada de re-dispatchear apply contra el SHA original (workflow_dispatch/--ref de gh CLI solo aceptan branch o tag, nunca un SHA de commit). Recuperación: dispatch mode=cleanup_only con este operation_id, luego iniciar una operación nueva con bootstrap_and_preflight sobre el main actual, bajo un nuevo Human Gate."
           fi
 
           echo "mode=$MODE" >> "$GITHUB_OUTPUT"
@@ -210,7 +269,8 @@ jobs:
     outputs:
       operation_id: ${{ steps.derive.outputs.operation_id }}
       ephemeral_admin_username: ${{ steps.derive.outputs.ephemeral_admin_username }}
-      ephemeral_secret_name: ${{ steps.derive.outputs.ephemeral_secret_name }}
+      ephemeral_password_secret_name: ${{ steps.derive.outputs.ephemeral_password_secret_name }}
+      ephemeral_dsn_secret_name: ${{ steps.derive.outputs.ephemeral_dsn_secret_name }}
       ephemeral_job_name: ${{ steps.derive.outputs.ephemeral_job_name }}
     steps:
       - name: Generar/reutilizar operation_id y derivar nombres
@@ -232,7 +292,8 @@ jobs:
 
           echo "operation_id=$OPERATION_ID" >> "$GITHUB_OUTPUT"
           echo "ephemeral_admin_username=${{ env.EPHEMERAL_ADMIN_PREFIX }}${OPERATION_ID}" >> "$GITHUB_OUTPUT"
-          echo "ephemeral_secret_name=${{ env.EPHEMERAL_SECRET_PREFIX }}${OPERATION_ID}" >> "$GITHUB_OUTPUT"
+          echo "ephemeral_password_secret_name=${{ env.EPHEMERAL_PASSWORD_SECRET_PREFIX }}${OPERATION_ID}" >> "$GITHUB_OUTPUT"
+          echo "ephemeral_dsn_secret_name=${{ env.EPHEMERAL_DSN_SECRET_PREFIX }}${OPERATION_ID}" >> "$GITHUB_OUTPUT"
           echo "ephemeral_job_name=${{ env.EPHEMERAL_JOB_PREFIX }}${OPERATION_ID}" >> "$GITHUB_OUTPUT"
 
   # ===========================================================================
@@ -428,10 +489,22 @@ jobs:
 
   # ===========================================================================
   # Job 5 — STAGE 1 únicamente. Crea el admin efímero (cloudsqlsuperuser
-  # INTENCIONAL), el secret efímero REGIONAL dedicado, el binding IAM sobre
-  # ÚNICAMENTE ese secreto, y el ADMIN OPTION sobre korixa_app — usando la
-  # identidad efímera para auto-otorgárselo (nunca se necesita ni se lee la
-  # contraseña de `postgres`, cuya procedencia sigue siendo desconocida).
+  # INTENCIONAL), DOS secrets efímeros independientes (Phase 2/3 P1
+  # remediation), el binding IAM mínimo y separado sobre cada uno, y el
+  # ADMIN OPTION sobre korixa_app — usando la identidad efímera para
+  # auto-otorgárselo (nunca se necesita ni se lee la contraseña de
+  # `postgres`, cuya procedencia sigue siendo desconocida).
+  #
+  # PASSWORD SECRET (regional verdadero, payload = solo el password): lo lee
+  # la Cloud SQL Admin API vía `--password-secret-version`, invocada por
+  # gcloud autenticado como DEPLOYER_SA (el step "Google Auth" de este job)
+  # — por eso su único accesor IAM es DEPLOYER_SA, nunca MIGRATION_EXECUTOR_SA
+  # (que jamás llama a execute-sql).
+  #
+  # DSN SECRET (global, payload = DSN completo): lo monta Cloud Run vía
+  # `--set-secrets` en los Jobs efímeros que ejecuta MIGRATION_EXECUTOR_SA
+  # (preflight/apply/verify) — por eso su único accesor IAM es
+  # MIGRATION_EXECUTOR_SA, nunca DEPLOYER_SA.
   # ===========================================================================
   bootstrap-ephemeral-admin:
     name: Bootstrap ephemeral DB admin (stage 1 only)
@@ -445,7 +518,8 @@ jobs:
       id-token: write
     outputs:
       ephemeral_admin_username: ${{ needs.derive-operation-names.outputs.ephemeral_admin_username }}
-      ephemeral_secret_name: ${{ needs.derive-operation-names.outputs.ephemeral_secret_name }}
+      ephemeral_password_secret_name: ${{ needs.derive-operation-names.outputs.ephemeral_password_secret_name }}
+      ephemeral_dsn_secret_name: ${{ needs.derive-operation-names.outputs.ephemeral_dsn_secret_name }}
     steps:
       - name: Google Auth — WIF to Production deployer SA
         uses: google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093 # v3
@@ -457,11 +531,12 @@ jobs:
       - name: Setup gcloud
         uses: google-github-actions/setup-gcloud@aa5489c8933f4cc7a4f7d45035b3b1440c9c10db # v3
 
-      - name: Crear usuario PostgreSQL efímero con cloudsqlsuperuser (intencional), crear secret regional, otorgar IAM, y auto-bootstrappear ADMIN OPTION
+      - name: Crear usuario PostgreSQL efímero con cloudsqlsuperuser (intencional), crear ambos secrets, otorgar IAM por separado, y auto-bootstrappear ADMIN OPTION
         shell: bash
         env:
           EPHEMERAL_ADMIN: ${{ needs.derive-operation-names.outputs.ephemeral_admin_username }}
-          EPHEMERAL_SECRET: ${{ needs.derive-operation-names.outputs.ephemeral_secret_name }}
+          EPHEMERAL_PASSWORD_SECRET: ${{ needs.derive-operation-names.outputs.ephemeral_password_secret_name }}
+          EPHEMERAL_DSN_SECRET: ${{ needs.derive-operation-names.outputs.ephemeral_dsn_secret_name }}
           DB_HOST: ${{ needs.verify-prerequisites-instance.outputs.db_host }}
         run: |
           set -euo pipefail
@@ -484,42 +559,103 @@ jobs:
             --quiet
           echo "EPHEMERAL_ADMIN_CREATED=YES"
 
-          # Secret Manager REGIONAL (no global) — requisito documentado de
+          command -v python3 >/dev/null 2>&1 || fail "PARSER_UNAVAILABLE — python3 requerido para las llamadas REST regionales, FAIL_CLOSED."
+          REGIONAL_SM_BASE="https://secretmanager.${{ env.PRODUCTION_REGION }}.rep.googleapis.com/v1/projects/${{ env.PRODUCTION_PROJECT }}/locations/${{ env.PRODUCTION_REGION }}/secrets"
+          TOKEN="$(gcloud auth print-access-token)"
+          [ -n "$TOKEN" ] || fail "No se pudo obtener un access token para las llamadas REST regionales."
+
+          # --- A. PASSWORD SECRET — REGIONAL VERDADERO, vía REST directo -------
+          # `gcloud secrets create/versions add/add-iam-policy-binding ...
+          # --location=` está CONFIRMADO ROTO en el SDK de gcloud instalado
+          # (falla con INVALID_ARGUMENT sobre un Secret ID malformado, en GA y
+          # en `gcloud beta` por igual — ver el comentario de cabecera de este
+          # archivo, PR #115 P1 remediation Phase 11). La misma API REST
+          # regional, llamada directamente con el access token ya emitido por
+          # WIF, funciona idéntico a lo documentado — por eso este archivo usa
+          # curl para TODA operación sobre el PASSWORD SECRET, nunca el flag
+          # `--location`. Requisito real de
           # `gcloud sql instances execute-sql --password-secret-version`:
           # "The secret should be created using the regional endpoint and
-          # stored in the same region as the Cloud SQL instance."
+          # stored in the same region as the Cloud SQL instance." Payload =
+          # SOLO el password, nunca el DSN completo.
+          curl -sf -X POST \
+            "${REGIONAL_SM_BASE}?secretId=${EPHEMERAL_PASSWORD_SECRET}" \
+            -H "Authorization: Bearer ${TOKEN}" \
+            -H "Content-Type: application/json" \
+            -d '{}' >/dev/null \
+            || fail "No se pudo crear el PASSWORD SECRET regional '$EPHEMERAL_PASSWORD_SECRET' vía REST."
+          PASSWORD_B64="$(printf '%s' "$EPHEMERAL_PASSWORD" | base64 -w0)"
+          curl -sf -X POST \
+            "${REGIONAL_SM_BASE}/${EPHEMERAL_PASSWORD_SECRET}:addVersion" \
+            -H "Authorization: Bearer ${TOKEN}" \
+            -H "Content-Type: application/json" \
+            -d "{\"payload\":{\"data\":\"${PASSWORD_B64}\"}}" >/dev/null \
+            || fail "No se pudo escribir el payload del PASSWORD SECRET regional vía REST."
+          unset PASSWORD_B64
+          echo "EPHEMERAL_PASSWORD_SECRET_CREATED=YES"
+          echo "SECRET_PAYLOAD_PRINTED=NO"
+
+          # Único accesor del PASSWORD SECRET: DEPLOYER_SA — es la identidad
+          # con la que este mismo job (y cleanup-after-apply/cleanup-only)
+          # autentica gcloud, y por lo tanto la que efectivamente invoca
+          # `execute-sql --password-secret-version`. MIGRATION_EXECUTOR_SA
+          # nunca llama a execute-sql y por eso NUNCA recibe acceso a este
+          # secret. setIamPolicy directo (no read-modify-write) es correcto
+          # acá porque el secret es recién creado — su política es vacía.
+          curl -sf -X POST \
+            "${REGIONAL_SM_BASE}/${EPHEMERAL_PASSWORD_SECRET}:setIamPolicy" \
+            -H "Authorization: Bearer ${TOKEN}" \
+            -H "Content-Type: application/json" \
+            -d "{\"policy\":{\"bindings\":[{\"role\":\"roles/secretmanager.secretAccessor\",\"members\":[\"serviceAccount:${{ env.DEPLOYER_SA }}\"]}]}}" >/dev/null \
+            || fail "No se pudo otorgar IAM sobre el PASSWORD SECRET regional vía REST."
+          echo "EPHEMERAL_PASSWORD_SECRET_IAM_GRANTED=YES"
+
+          # --- B. DSN SECRET — GLOBAL, COMPATIBLE CON CLOUD RUN ---------------
+          # Sin `--location=`/`--locations=` -> replication-policy automático
+          # (global), el único tipo que `gcloud run jobs deploy --set-secrets`
+          # soporta (Cloud Run no soporta secrets regionales). Payload = DSN
+          # completo, para que el propio hardener (corriendo como
+          # MIGRATION_EXECUTOR_SA dentro del Job de Cloud Run) pueda conectar
+          # sin necesitar acceso alguno al PASSWORD SECRET.
           DSN="postgres://${EPHEMERAL_ADMIN}:${EPHEMERAL_PASSWORD}@${DB_HOST}:5432/${{ env.TARGET_DATABASE }}"
 
-          gcloud secrets create "$EPHEMERAL_SECRET" \
+          gcloud secrets create "$EPHEMERAL_DSN_SECRET" \
             --project="${{ env.PRODUCTION_PROJECT }}" \
-            --locations="${{ env.PRODUCTION_REGION }}" \
-            --replication-policy=user-managed \
             --quiet
-          printf '%s' "$DSN" | gcloud secrets versions add "$EPHEMERAL_SECRET" \
+          printf '%s' "$DSN" | gcloud secrets versions add "$EPHEMERAL_DSN_SECRET" \
             --project="${{ env.PRODUCTION_PROJECT }}" \
             --data-file=- \
             --quiet
           unset DSN EPHEMERAL_PASSWORD
-          echo "EPHEMERAL_SECRET_CREATED=YES"
+          echo "EPHEMERAL_DSN_SECRET_CREATED=YES"
           echo "SECRET_PAYLOAD_PRINTED=NO"
 
-          # Único accesor: exactamente MIGRATION_EXECUTOR_SA, secret-level
-          # (nunca project-level).
-          gcloud secrets add-iam-policy-binding "$EPHEMERAL_SECRET" \
+          # Único accesor del DSN SECRET: MIGRATION_EXECUTOR_SA — la identidad
+          # bajo la cual corren los Jobs efímeros de Cloud Run
+          # (preflight/apply/verify) que montan este secret vía
+          # --set-secrets. DEPLOYER_SA nunca lo necesita.
+          gcloud secrets add-iam-policy-binding "$EPHEMERAL_DSN_SECRET" \
             --project="${{ env.PRODUCTION_PROJECT }}" \
             --member="serviceAccount:${{ env.MIGRATION_EXECUTOR_SA }}" \
             --role=roles/secretmanager.secretAccessor \
             --quiet
-          echo "EPHEMERAL_SECRET_IAM_GRANTED=YES"
+          echo "EPHEMERAL_DSN_SECRET_IAM_GRANTED=YES"
 
           # Bootstrap del ADMIN OPTION — se auto-otorga usando SU PROPIA
           # credencial recién creada (ya tiene cloudsqlsuperuser). Nunca se
-          # lee ni se necesita la contraseña de `postgres`. La versión de
-          # secreto usada es siempre la recién creada (nunca 'latest' como
-          # referencia implícita — se resuelve explícitamente el número).
-          SECRET_VERSION="$(gcloud secrets versions list "$EPHEMERAL_SECRET" --project="${{ env.PRODUCTION_PROJECT }}" --filter='state=ENABLED' --format='value(name)' --limit=1)"
-          [ -n "$SECRET_VERSION" ] || fail "No se pudo resolver la versión ENABLED recién creada de $EPHEMERAL_SECRET."
-          SECRET_RESOURCE="projects/${{ env.PRODUCTION_PROJECT }}/locations/${{ env.PRODUCTION_REGION }}/secrets/${EPHEMERAL_SECRET}/versions/${SECRET_VERSION}"
+          # lee ni se necesita la contraseña de `postgres`. Usa EXCLUSIVAMENTE
+          # el PASSWORD SECRET regional recién creado — la versión se resuelve
+          # explícitamente (nunca 'latest' como referencia implícita), vía
+          # REST (gcloud secrets versions list --location= está roto).
+          SECRET_VERSION="$(curl -sf "${REGIONAL_SM_BASE}/${EPHEMERAL_PASSWORD_SECRET}/versions" -H "Authorization: Bearer ${TOKEN}" | python3 -c "
+          import json, sys
+          d = json.load(sys.stdin)
+          enabled = [v['name'].rsplit('/', 1)[1] for v in d.get('versions', []) if v.get('state') == 'ENABLED']
+          print(enabled[0] if enabled else '')
+          ")"
+          [ -n "$SECRET_VERSION" ] || fail "No se pudo resolver la versión ENABLED recién creada de $EPHEMERAL_PASSWORD_SECRET."
+          SECRET_RESOURCE="projects/${{ env.PRODUCTION_PROJECT }}/locations/${{ env.PRODUCTION_REGION }}/secrets/${EPHEMERAL_PASSWORD_SECRET}/versions/${SECRET_VERSION}"
+          unset TOKEN
 
           gcloud sql instances execute-sql "${{ env.CLOUD_SQL_INSTANCE }}" \
             --project="${{ env.PRODUCTION_PROJECT }}" \
@@ -555,14 +691,29 @@ jobs:
           service_account: ${{ env.DEPLOYER_SA }}
       - name: Setup gcloud
         uses: google-github-actions/setup-gcloud@aa5489c8933f4cc7a4f7d45035b3b1440c9c10db # v3
-      - name: Resolver EXPECTED_DB_HOST (IP privada real, solo lectura)
+      - name: Resolver EXPECTED_DB_HOST (IP privada real, solo lectura) y confirmar dataApiAccess=ALLOW_DATA_API (nunca lo habilita — HOLD si está apagado)
         id: cloud-sql
         shell: bash
         run: |
           set -euo pipefail
+          fail() { echo "::error::HOLD_DATA_API_ACCESS_NOT_ENABLED — $1"; exit 1; }
+
           DB_HOST="$(gcloud sql instances describe "${{ env.CLOUD_SQL_INSTANCE }}" --project="${{ env.PRODUCTION_PROJECT }}" --format='value(ipAddresses[0].ipAddress)')"
           [ -n "$DB_HOST" ] || { echo "::error::No se pudo resolver la IP privada."; exit 1; }
           echo "db_host=$DB_HOST" >> "$GITHUB_OUTPUT"
+
+          # PR #115 P1 remediation, Phase 11 — prerrequisito real descubierto
+          # por prueba en vivo: execute-sql (usado en bootstrap-ephemeral-
+          # admin y en ambos jobs de cleanup para auto-otorgar/revocar ADMIN
+          # OPTION) exige dataApiAccess=ALLOW_DATA_API en la instancia. Esta
+          # verificación es SOLO DE LECTURA — nunca lo habilita, porque
+          # habilitarlo en una instancia de IP privada es un cambio real de
+          # postura de seguridad (permite acceso vía ExecuteSql API desde
+          # internet a usuarios autorizados, según `gcloud sql instances
+          # patch --help`) que exige su propio Human Gate explícito, nunca
+          # implícito dentro de este workflow.
+          DATA_API_ACCESS="$(gcloud sql instances describe "${{ env.CLOUD_SQL_INSTANCE }}" --project="${{ env.PRODUCTION_PROJECT }}" --format='value(settings.dataApiAccess)')"
+          [ "$DATA_API_ACCESS" = "ALLOW_DATA_API" ] || fail "settings.dataApiAccess de '${{ env.CLOUD_SQL_INSTANCE }}' es '$DATA_API_ACCESS' (se requiere ALLOW_DATA_API para execute-sql). Este workflow NUNCA lo habilita automáticamente — requiere su propio Human Gate explícito y separado antes de reintentar."
 
   # ===========================================================================
   # Job 7 — STAGE 1: preflight, usando la identidad efímera. Nunca fluye
@@ -602,7 +753,7 @@ jobs:
           SOURCE_SHA: ${{ needs.resolve-artifact.outputs.source_sha }}
           DB_HOST: ${{ needs.verify-prerequisites-instance.outputs.db_host }}
           EPHEMERAL_JOB: ${{ needs.derive-operation-names.outputs.ephemeral_job_name }}
-          EPHEMERAL_SECRET: ${{ needs.derive-operation-names.outputs.ephemeral_secret_name }}
+          EPHEMERAL_DSN_SECRET: ${{ needs.derive-operation-names.outputs.ephemeral_dsn_secret_name }}
         run: |
           set -euo pipefail
           fail() { echo "::error::$1"; exit 1; }
@@ -617,7 +768,7 @@ jobs:
             --network=korixa-production-vpc \
             --subnet=korixa-production-sa-east1 \
             --vpc-egress=private-ranges-only \
-            --set-secrets="MIGRATION_DATABASE_URL=${EPHEMERAL_SECRET}:latest" \
+            --set-secrets="MIGRATION_DATABASE_URL=${EPHEMERAL_DSN_SECRET}:latest" \
             --set-env-vars="HARDENER_MODE=preflight,EXPECTED_ADMIN_DB_USER=UNPROVEN_PREFLIGHT_ONLY,EXPECTED_DATABASE=${{ env.TARGET_DATABASE }},EXPECTED_DB_HOST=$DB_HOST,EXPECTED_SOURCE_SHA=$SOURCE_SHA" \
             --max-retries=0 \
             --task-timeout=300s \
@@ -650,7 +801,8 @@ jobs:
             echo "- OPERATION_ID = ${{ needs.derive-operation-names.outputs.operation_id }}"
             echo "- OPERATION_SOURCE_SHA = ${{ needs.prepare-inputs.outputs.source_sha }}"
             echo "- EPHEMERAL_ADMIN_USERNAME = ${{ needs.derive-operation-names.outputs.ephemeral_admin_username }}"
-            echo "- EPHEMERAL_SECRET_NAME = ${{ needs.derive-operation-names.outputs.ephemeral_secret_name }}"
+            echo "- EPHEMERAL_PASSWORD_SECRET_NAME = ${{ needs.derive-operation-names.outputs.ephemeral_password_secret_name }} (regional, ${{ env.PRODUCTION_REGION }})"
+            echo "- EPHEMERAL_DSN_SECRET_NAME = ${{ needs.derive-operation-names.outputs.ephemeral_dsn_secret_name }} (global)"
             echo "- PREFLIGHT_RESULT = ${{ needs.preflight.outputs.preflight_result }}"
             echo ""
             if [ "${{ needs.preflight.result }}" = "success" ]; then
@@ -698,12 +850,13 @@ jobs:
       - name: Setup gcloud
         uses: google-github-actions/setup-gcloud@aa5489c8933f4cc7a4f7d45035b3b1440c9c10db # v3
 
-      - name: Confirmar que el admin/secret efímeros de esta operation_id existen exactamente como los dejó stage 1
+      - name: Confirmar que el admin/ambos secrets efímeros de esta operation_id existen exactamente como los dejó stage 1
         id: verify
         shell: bash
         env:
           EPHEMERAL_ADMIN: ${{ needs.derive-operation-names.outputs.ephemeral_admin_username }}
-          EPHEMERAL_SECRET: ${{ needs.derive-operation-names.outputs.ephemeral_secret_name }}
+          EPHEMERAL_PASSWORD_SECRET: ${{ needs.derive-operation-names.outputs.ephemeral_password_secret_name }}
+          EPHEMERAL_DSN_SECRET: ${{ needs.derive-operation-names.outputs.ephemeral_dsn_secret_name }}
         run: |
           set -euo pipefail
           fail() { echo "::error::HOLD_OPERATION_CONTEXT_DRIFT — $1"; exit 1; }
@@ -712,10 +865,46 @@ jobs:
           [ -n "$ADMIN_ROLES" ] || fail "El admin efímero '$EPHEMERAL_ADMIN' no existe o ya fue eliminado — apply no puede continuar."
           echo "$ADMIN_ROLES" | grep -qi cloudsqlsuperuser || fail "El admin efímero '$EPHEMERAL_ADMIN' existe pero ya NO tiene cloudsqlsuperuser — estado inesperado, no se asume nada."
 
-          SECRET_STATE="$(gcloud secrets versions list "$EPHEMERAL_SECRET" --project="${{ env.PRODUCTION_PROJECT }}" --filter='state=ENABLED' --format='value(state)' --limit=1 2>/dev/null || true)"
-          [ "$SECRET_STATE" = "ENABLED" ] || fail "El secret efímero '$EPHEMERAL_SECRET' no tiene ninguna versión ENABLED."
+          # --- PASSWORD SECRET (regional) — accesor único esperado: DEPLOYER_SA.
+          # `gcloud secrets versions list/get-iam-policy --location=` está
+          # roto en el SDK instalado (ver comentario de cabecera) — vía REST.
+          command -v python3 >/dev/null 2>&1 || fail "PARSER_UNAVAILABLE — python3 requerido para las llamadas REST regionales, FAIL_CLOSED."
+          REGIONAL_SM_BASE="https://secretmanager.${{ env.PRODUCTION_REGION }}.rep.googleapis.com/v1/projects/${{ env.PRODUCTION_PROJECT }}/locations/${{ env.PRODUCTION_REGION }}/secrets"
+          TOKEN="$(gcloud auth print-access-token)"
+          [ -n "$TOKEN" ] || fail "No se pudo obtener un access token para las llamadas REST regionales."
 
-          ACCESSOR="$(gcloud secrets get-iam-policy "$EPHEMERAL_SECRET" --project="${{ env.PRODUCTION_PROJECT }}" --format=json | python3 -c "
+          PASSWORD_SECRET_STATE="$(curl -sf "${REGIONAL_SM_BASE}/${EPHEMERAL_PASSWORD_SECRET}/versions" -H "Authorization: Bearer ${TOKEN}" 2>/dev/null | python3 -c "
+          import json, sys
+          try:
+              d = json.load(sys.stdin)
+          except Exception:
+              print('')
+              raise SystemExit
+          enabled = [v for v in d.get('versions', []) if v.get('state') == 'ENABLED']
+          print('ENABLED' if enabled else '')
+          " || true)"
+          [ "$PASSWORD_SECRET_STATE" = "ENABLED" ] || fail "El password secret efímero '$EPHEMERAL_PASSWORD_SECRET' no tiene ninguna versión ENABLED."
+
+          PASSWORD_ACCESSOR="$(curl -sf "${REGIONAL_SM_BASE}/${EPHEMERAL_PASSWORD_SECRET}:getIamPolicy" -H "Authorization: Bearer ${TOKEN}" | python3 -c "
+          import json, sys
+          policy = json.load(sys.stdin)
+          member = 'serviceAccount:${{ env.DEPLOYER_SA }}'
+          for b in policy.get('bindings', []):
+              if b.get('role') == 'roles/secretmanager.secretAccessor':
+                  members = b.get('members', [])
+                  print('YES' if members == [member] else 'UNEXPECTED:' + ','.join(members))
+                  break
+          else:
+              print('NO')
+          ")"
+          [ "$PASSWORD_ACCESSOR" = "YES" ] || fail "El binding IAM del password secret efímero no es exactamente [DEPLOYER_SA]: '$PASSWORD_ACCESSOR'"
+          unset TOKEN
+
+          # --- DSN SECRET (global) — accesor único esperado: MIGRATION_EXECUTOR_SA
+          DSN_SECRET_STATE="$(gcloud secrets versions list "$EPHEMERAL_DSN_SECRET" --project="${{ env.PRODUCTION_PROJECT }}" --filter='state=ENABLED' --format='value(state)' --limit=1 2>/dev/null || true)"
+          [ "$DSN_SECRET_STATE" = "ENABLED" ] || fail "El DSN secret efímero '$EPHEMERAL_DSN_SECRET' no tiene ninguna versión ENABLED."
+
+          DSN_ACCESSOR="$(gcloud secrets get-iam-policy "$EPHEMERAL_DSN_SECRET" --project="${{ env.PRODUCTION_PROJECT }}" --format=json | python3 -c "
           import json, sys
           policy = json.load(sys.stdin)
           member = 'serviceAccount:${{ env.MIGRATION_EXECUTOR_SA }}'
@@ -727,7 +916,7 @@ jobs:
           else:
               print('NO')
           ")"
-          [ "$ACCESSOR" = "YES" ] || fail "El binding IAM del secret efímero no es exactamente [MIGRATION_EXECUTOR_SA]: '$ACCESSOR'"
+          [ "$DSN_ACCESSOR" = "YES" ] || fail "El binding IAM del DSN secret efímero no es exactamente [MIGRATION_EXECUTOR_SA]: '$DSN_ACCESSOR'"
 
           TARGET_ROLES="$(gcloud sql users describe "${{ env.TARGET_ROLE }}" --instance="${{ env.CLOUD_SQL_INSTANCE }}" --project="${{ env.PRODUCTION_PROJECT }}" --format='value(databaseRoles)')"
           echo "$TARGET_ROLES" | grep -qi cloudsqlsuperuser || fail "korixa_app ya NO tiene cloudsqlsuperuser — puede que otra operación ya haya corrido apply+removal. No se reintenta sobre un estado no probado."
@@ -771,7 +960,7 @@ jobs:
           SOURCE_SHA: ${{ needs.resolve-artifact.outputs.source_sha }}
           DB_HOST: ${{ needs.verify-prerequisites-instance.outputs.db_host }}
           EPHEMERAL_JOB: ${{ needs.derive-operation-names.outputs.ephemeral_job_name }}
-          EPHEMERAL_SECRET: ${{ needs.derive-operation-names.outputs.ephemeral_secret_name }}
+          EPHEMERAL_DSN_SECRET: ${{ needs.derive-operation-names.outputs.ephemeral_dsn_secret_name }}
           EPHEMERAL_ADMIN: ${{ needs.derive-operation-names.outputs.ephemeral_admin_username }}
         run: |
           set -euo pipefail
@@ -787,7 +976,7 @@ jobs:
             --network=korixa-production-vpc \
             --subnet=korixa-production-sa-east1 \
             --vpc-egress=private-ranges-only \
-            --set-secrets="MIGRATION_DATABASE_URL=${EPHEMERAL_SECRET}:latest" \
+            --set-secrets="MIGRATION_DATABASE_URL=${EPHEMERAL_DSN_SECRET}:latest" \
             --set-env-vars="HARDENER_MODE=apply,EXPECTED_ADMIN_DB_USER=${EPHEMERAL_ADMIN},EXPECTED_DATABASE=${{ env.TARGET_DATABASE }},EXPECTED_DB_HOST=$DB_HOST,EXPECTED_SOURCE_SHA=$SOURCE_SHA,HARDEN_CONFIRMATION=HARDEN_KORIXA_APP_PRODUCTION" \
             --max-retries=0 \
             --task-timeout=300s \
@@ -882,7 +1071,7 @@ jobs:
           SOURCE_SHA: ${{ needs.resolve-artifact.outputs.source_sha }}
           DB_HOST: ${{ needs.verify-prerequisites-instance.outputs.db_host }}
           EPHEMERAL_JOB: ${{ needs.derive-operation-names.outputs.ephemeral_job_name }}
-          EPHEMERAL_SECRET: ${{ needs.derive-operation-names.outputs.ephemeral_secret_name }}
+          EPHEMERAL_DSN_SECRET: ${{ needs.derive-operation-names.outputs.ephemeral_dsn_secret_name }}
         run: |
           set -euo pipefail
           fail() { echo "::error::HOLD_VERIFY_NOT_FULLY_HARDENED — $1"; exit 1; }
@@ -897,7 +1086,7 @@ jobs:
             --network=korixa-production-vpc \
             --subnet=korixa-production-sa-east1 \
             --vpc-egress=private-ranges-only \
-            --set-secrets="MIGRATION_DATABASE_URL=${EPHEMERAL_SECRET}:latest" \
+            --set-secrets="MIGRATION_DATABASE_URL=${EPHEMERAL_DSN_SECRET}:latest" \
             --set-env-vars="HARDENER_MODE=verify,EXPECTED_ADMIN_DB_USER=ignored-by-verify,EXPECTED_DATABASE=${{ env.TARGET_DATABASE }},EXPECTED_DB_HOST=$DB_HOST,EXPECTED_SOURCE_SHA=$SOURCE_SHA" \
             --max-retries=0 \
             --task-timeout=300s \
@@ -947,17 +1136,30 @@ jobs:
       - name: Setup gcloud
         uses: google-github-actions/setup-gcloud@aa5489c8933f4cc7a4f7d45035b3b1440c9c10db # v3
 
-      - name: Estado A — revocar ADMIN OPTION temporal (mientras el admin efímero todavía existe)
+      - name: Estado A — revocar ADMIN OPTION temporal (mientras el admin efímero todavía existe), vía el PASSWORD SECRET exclusivamente
         id: revoke-admin-option
         shell: bash
         env:
           EPHEMERAL_ADMIN: ${{ needs.derive-operation-names.outputs.ephemeral_admin_username }}
-          EPHEMERAL_SECRET: ${{ needs.derive-operation-names.outputs.ephemeral_secret_name }}
+          EPHEMERAL_PASSWORD_SECRET: ${{ needs.derive-operation-names.outputs.ephemeral_password_secret_name }}
         run: |
           set +e
-          SECRET_VERSION="$(gcloud secrets versions list "$EPHEMERAL_SECRET" --project="${{ env.PRODUCTION_PROJECT }}" --filter='state=ENABLED' --format='value(name)' --limit=1 2>/dev/null)"
+          # gcloud secrets versions list --location= está roto en el SDK
+          # instalado (ver comentario de cabecera) — se resuelve vía REST.
+          REGIONAL_SM_BASE="https://secretmanager.${{ env.PRODUCTION_REGION }}.rep.googleapis.com/v1/projects/${{ env.PRODUCTION_PROJECT }}/locations/${{ env.PRODUCTION_REGION }}/secrets"
+          TOKEN="$(gcloud auth print-access-token 2>/dev/null)"
+          SECRET_VERSION="$(curl -sf "${REGIONAL_SM_BASE}/${EPHEMERAL_PASSWORD_SECRET}/versions" -H "Authorization: Bearer ${TOKEN}" 2>/dev/null | python3 -c "
+          import json, sys
+          try:
+              d = json.load(sys.stdin)
+          except Exception:
+              print('')
+              raise SystemExit
+          enabled = [v['name'].rsplit('/', 1)[1] for v in d.get('versions', []) if v.get('state') == 'ENABLED']
+          print(enabled[0] if enabled else '')
+          " 2>/dev/null)"
           if [ -n "$SECRET_VERSION" ]; then
-            SECRET_RESOURCE="projects/${{ env.PRODUCTION_PROJECT }}/locations/${{ env.PRODUCTION_REGION }}/secrets/${EPHEMERAL_SECRET}/versions/${SECRET_VERSION}"
+            SECRET_RESOURCE="projects/${{ env.PRODUCTION_PROJECT }}/locations/${{ env.PRODUCTION_REGION }}/secrets/${EPHEMERAL_PASSWORD_SECRET}/versions/${SECRET_VERSION}"
             gcloud sql instances execute-sql "${{ env.CLOUD_SQL_INSTANCE }}" \
               --project="${{ env.PRODUCTION_PROJECT }}" \
               --database="${{ env.TARGET_DATABASE }}" \
@@ -966,15 +1168,16 @@ jobs:
               --sql="REVOKE ${{ env.TARGET_ROLE }} FROM ${EPHEMERAL_ADMIN};"
             REVOKE_EXIT=$?
           else
-            echo "Secret efímero ya ausente — nada que revocar vía él."
+            echo "Password secret efímero ya ausente — nada que revocar vía él."
             REVOKE_EXIT=0
           fi
+          unset TOKEN
           set -e
           if [ "$REVOKE_EXIT" -eq 0 ]; then
             echo "state=DONE" >> "$GITHUB_OUTPUT"
           else
             echo "state=FAILED" >> "$GITHUB_OUTPUT"
-            echo "::warning::Cleanup A (revoke ADMIN OPTION) falló — se continúa igual con B/C/D, nunca se detiene el cleanup ante un solo fallo parcial."
+            echo "::warning::Cleanup A (revoke ADMIN OPTION) falló — se continúa igual con B-F, nunca se detiene el cleanup ante un solo fallo parcial."
           fi
 
       - name: Estado B — eliminar el usuario PostgreSQL efímero (idempotente — ausente ya es éxito)
@@ -1001,44 +1204,81 @@ jobs:
             fi
           fi
 
-      - name: Estado C/D — eliminar el secret efímero (elimina también el binding IAM implícitamente, ya que el recurso desaparece)
-        id: delete-secret
+      - name: Estado C/D — eliminar el DSN SECRET (global) efímero (elimina también su binding IAM implícitamente, ya que el recurso desaparece)
+        id: delete-dsn-secret
         shell: bash
         env:
-          EPHEMERAL_SECRET: ${{ needs.derive-operation-names.outputs.ephemeral_secret_name }}
+          EPHEMERAL_DSN_SECRET: ${{ needs.derive-operation-names.outputs.ephemeral_dsn_secret_name }}
         run: |
           set +e
-          gcloud secrets describe "$EPHEMERAL_SECRET" --project="${{ env.PRODUCTION_PROJECT }}" >/dev/null 2>&1
+          gcloud secrets describe "$EPHEMERAL_DSN_SECRET" --project="${{ env.PRODUCTION_PROJECT }}" >/dev/null 2>&1
           EXISTS=$?
           if [ "$EXISTS" -ne 0 ]; then
-            echo "Secret efímero ya ausente — cleanup idempotente, éxito."
+            echo "DSN secret efímero ya ausente — cleanup idempotente, éxito."
             echo "state=DONE" >> "$GITHUB_OUTPUT"
           else
-            gcloud secrets delete "$EPHEMERAL_SECRET" --project="${{ env.PRODUCTION_PROJECT }}" --quiet
+            gcloud secrets delete "$EPHEMERAL_DSN_SECRET" --project="${{ env.PRODUCTION_PROJECT }}" --quiet
             DELETE_EXIT=$?
             set -e
             if [ "$DELETE_EXIT" -eq 0 ]; then
               echo "state=DONE" >> "$GITHUB_OUTPUT"
             else
               echo "state=FAILED" >> "$GITHUB_OUTPUT"
-              echo "::error::Cleanup C/D (delete ephemeral secret) falló — HOLD requerido."
+              echo "::error::Cleanup C/D (delete ephemeral DSN secret) falló — HOLD requerido."
             fi
           fi
 
-      - name: Estado 5 — verificación independiente de ausencia
+      - name: Estado E/F — eliminar el PASSWORD SECRET (regional) efímero (elimina también su binding IAM implícitamente, ya que el recurso desaparece)
+        id: delete-password-secret
+        shell: bash
+        env:
+          EPHEMERAL_PASSWORD_SECRET: ${{ needs.derive-operation-names.outputs.ephemeral_password_secret_name }}
+        run: |
+          set +e
+          # gcloud secrets describe/delete --location= está roto en el SDK
+          # instalado (ver comentario de cabecera) — vía REST.
+          REGIONAL_SM_BASE="https://secretmanager.${{ env.PRODUCTION_REGION }}.rep.googleapis.com/v1/projects/${{ env.PRODUCTION_PROJECT }}/locations/${{ env.PRODUCTION_REGION }}/secrets"
+          TOKEN="$(gcloud auth print-access-token 2>/dev/null)"
+          curl -sf -o /dev/null "${REGIONAL_SM_BASE}/${EPHEMERAL_PASSWORD_SECRET}" -H "Authorization: Bearer ${TOKEN}"
+          EXISTS=$?
+          if [ "$EXISTS" -ne 0 ]; then
+            echo "Password secret efímero ya ausente — cleanup idempotente, éxito."
+            echo "state=DONE" >> "$GITHUB_OUTPUT"
+          else
+            curl -sf -X DELETE "${REGIONAL_SM_BASE}/${EPHEMERAL_PASSWORD_SECRET}" -H "Authorization: Bearer ${TOKEN}" >/dev/null
+            DELETE_EXIT=$?
+            set -e
+            if [ "$DELETE_EXIT" -eq 0 ]; then
+              echo "state=DONE" >> "$GITHUB_OUTPUT"
+            else
+              echo "state=FAILED" >> "$GITHUB_OUTPUT"
+              echo "::error::Cleanup E/F (delete ephemeral password secret) falló — HOLD requerido."
+            fi
+          fi
+          unset TOKEN
+
+      - name: Estado G — verificación independiente de ausencia (admin + ambos secrets)
         id: independent-verify
         shell: bash
         env:
           EPHEMERAL_ADMIN: ${{ needs.derive-operation-names.outputs.ephemeral_admin_username }}
-          EPHEMERAL_SECRET: ${{ needs.derive-operation-names.outputs.ephemeral_secret_name }}
+          EPHEMERAL_PASSWORD_SECRET: ${{ needs.derive-operation-names.outputs.ephemeral_password_secret_name }}
+          EPHEMERAL_DSN_SECRET: ${{ needs.derive-operation-names.outputs.ephemeral_dsn_secret_name }}
         run: |
           set +e
           gcloud sql users describe "$EPHEMERAL_ADMIN" --instance="${{ env.CLOUD_SQL_INSTANCE }}" --project="${{ env.PRODUCTION_PROJECT }}" >/dev/null 2>&1
           ADMIN_STILL_EXISTS=$?
-          gcloud secrets describe "$EPHEMERAL_SECRET" --project="${{ env.PRODUCTION_PROJECT }}" >/dev/null 2>&1
-          SECRET_STILL_EXISTS=$?
+          gcloud secrets describe "$EPHEMERAL_DSN_SECRET" --project="${{ env.PRODUCTION_PROJECT }}" >/dev/null 2>&1
+          DSN_SECRET_STILL_EXISTS=$?
+          # gcloud secrets describe --location= está roto en el SDK instalado
+          # (ver comentario de cabecera) — vía REST.
+          REGIONAL_SM_BASE="https://secretmanager.${{ env.PRODUCTION_REGION }}.rep.googleapis.com/v1/projects/${{ env.PRODUCTION_PROJECT }}/locations/${{ env.PRODUCTION_REGION }}/secrets"
+          TOKEN="$(gcloud auth print-access-token 2>/dev/null)"
+          curl -sf -o /dev/null "${REGIONAL_SM_BASE}/${EPHEMERAL_PASSWORD_SECRET}" -H "Authorization: Bearer ${TOKEN}"
+          PASSWORD_SECRET_STILL_EXISTS=$?
+          unset TOKEN
           set -e
-          if [ "$ADMIN_STILL_EXISTS" -eq 0 ] || [ "$SECRET_STILL_EXISTS" -eq 0 ]; then
+          if [ "$ADMIN_STILL_EXISTS" -eq 0 ] || [ "$DSN_SECRET_STILL_EXISTS" -eq 0 ] || [ "$PASSWORD_SECRET_STILL_EXISTS" -eq 0 ]; then
             echo "independent_absence_verified=NO" >> "$GITHUB_OUTPUT"
           else
             echo "independent_absence_verified=YES" >> "$GITHUB_OUTPUT"
@@ -1053,7 +1293,8 @@ jobs:
           VERIFY_RESULT: ${{ needs.verify.result }}
           ADMIN_OPTION_STATE: ${{ steps.revoke-admin-option.outputs.state }}
           DELETE_ADMIN_STATE: ${{ steps.delete-admin.outputs.state }}
-          DELETE_SECRET_STATE: ${{ steps.delete-secret.outputs.state }}
+          DELETE_DSN_SECRET_STATE: ${{ steps.delete-dsn-secret.outputs.state }}
+          DELETE_PASSWORD_SECRET_STATE: ${{ steps.delete-password-secret.outputs.state }}
           INDEPENDENT_VERIFIED: ${{ steps.independent-verify.outputs.independent_absence_verified }}
         run: |
           OPERATION_OK="NO"
@@ -1062,7 +1303,7 @@ jobs:
           fi
 
           CLEANUP_OK="NO"
-          if [ "$ADMIN_OPTION_STATE" = "DONE" ] && [ "$DELETE_ADMIN_STATE" = "DONE" ] && [ "$DELETE_SECRET_STATE" = "DONE" ] && [ "$INDEPENDENT_VERIFIED" = "YES" ]; then
+          if [ "$ADMIN_OPTION_STATE" = "DONE" ] && [ "$DELETE_ADMIN_STATE" = "DONE" ] && [ "$DELETE_DSN_SECRET_STATE" = "DONE" ] && [ "$DELETE_PASSWORD_SECRET_STATE" = "DONE" ] && [ "$INDEPENDENT_VERIFIED" = "YES" ]; then
             CLEANUP_OK="YES"
           fi
 
@@ -1113,23 +1354,40 @@ jobs:
         shell: bash
         env:
           EPHEMERAL_ADMIN: ${{ needs.derive-operation-names.outputs.ephemeral_admin_username }}
-          EPHEMERAL_SECRET: ${{ needs.derive-operation-names.outputs.ephemeral_secret_name }}
+          EPHEMERAL_PASSWORD_SECRET: ${{ needs.derive-operation-names.outputs.ephemeral_password_secret_name }}
+          EPHEMERAL_DSN_SECRET: ${{ needs.derive-operation-names.outputs.ephemeral_dsn_secret_name }}
         run: |
           set +e
 
-          # A — revocar ADMIN OPTION, solo si el admin y el secret siguen
-          # existiendo (si el admin ya no existe, la membresía ya no existe
-          # con él — nada que hacer, no es un error).
+          # gcloud secrets .../versions .../--location= está roto en el SDK
+          # instalado (ver comentario de cabecera) — toda operación sobre el
+          # PASSWORD SECRET regional usa REST directo.
+          REGIONAL_SM_BASE="https://secretmanager.${{ env.PRODUCTION_REGION }}.rep.googleapis.com/v1/projects/${{ env.PRODUCTION_PROJECT }}/locations/${{ env.PRODUCTION_REGION }}/secrets"
+          TOKEN="$(gcloud auth print-access-token 2>/dev/null)"
+
+          # A — revocar ADMIN OPTION, solo si el admin y el PASSWORD SECRET
+          # siguen existiendo (si el admin ya no existe, la membresía ya no
+          # existe con él — nada que hacer, no es un error). Usa
+          # EXCLUSIVAMENTE el password secret regional, nunca el DSN secret.
           gcloud sql users describe "$EPHEMERAL_ADMIN" --instance="${{ env.CLOUD_SQL_INSTANCE }}" --project="${{ env.PRODUCTION_PROJECT }}" >/dev/null 2>&1
           ADMIN_EXISTS_BEFORE=$?
           if [ "$ADMIN_EXISTS_BEFORE" -eq 0 ]; then
-            SECRET_VERSION="$(gcloud secrets versions list "$EPHEMERAL_SECRET" --project="${{ env.PRODUCTION_PROJECT }}" --filter='state=ENABLED' --format='value(name)' --limit=1 2>/dev/null)"
+            SECRET_VERSION="$(curl -sf "${REGIONAL_SM_BASE}/${EPHEMERAL_PASSWORD_SECRET}/versions" -H "Authorization: Bearer ${TOKEN}" 2>/dev/null | python3 -c "
+          import json, sys
+          try:
+              d = json.load(sys.stdin)
+          except Exception:
+              print('')
+              raise SystemExit
+          enabled = [v['name'].rsplit('/', 1)[1] for v in d.get('versions', []) if v.get('state') == 'ENABLED']
+          print(enabled[0] if enabled else '')
+          " 2>/dev/null)"
             if [ -n "$SECRET_VERSION" ]; then
-              SECRET_RESOURCE="projects/${{ env.PRODUCTION_PROJECT }}/locations/${{ env.PRODUCTION_REGION }}/secrets/${EPHEMERAL_SECRET}/versions/${SECRET_VERSION}"
+              SECRET_RESOURCE="projects/${{ env.PRODUCTION_PROJECT }}/locations/${{ env.PRODUCTION_REGION }}/secrets/${EPHEMERAL_PASSWORD_SECRET}/versions/${SECRET_VERSION}"
               gcloud sql instances execute-sql "${{ env.CLOUD_SQL_INSTANCE }}" --project="${{ env.PRODUCTION_PROJECT }}" --database="${{ env.TARGET_DATABASE }}" --user="$EPHEMERAL_ADMIN" --password-secret-version="$SECRET_RESOURCE" --sql="REVOKE ${{ env.TARGET_ROLE }} FROM ${EPHEMERAL_ADMIN};" >/dev/null 2>&1
               echo "CLEANUP_A_ATTEMPTED=YES"
             else
-              echo "CLEANUP_A_SKIPPED=SECRET_ALREADY_ABSENT (nada que revocar vía él)"
+              echo "CLEANUP_A_SKIPPED=PASSWORD_SECRET_ALREADY_ABSENT (nada que revocar vía él)"
             fi
             # B — eliminar el admin.
             gcloud sql users delete "$EPHEMERAL_ADMIN" --instance="${{ env.CLOUD_SQL_INSTANCE }}" --project="${{ env.PRODUCTION_PROJECT }}" --quiet >/dev/null 2>&1
@@ -1138,29 +1396,48 @@ jobs:
             echo "CLEANUP_A_B_SKIPPED=ADMIN_ALREADY_ABSENT"
           fi
 
-          # C/D — eliminar el secret.
-          gcloud secrets describe "$EPHEMERAL_SECRET" --project="${{ env.PRODUCTION_PROJECT }}" >/dev/null 2>&1
-          SECRET_EXISTS_BEFORE=$?
-          if [ "$SECRET_EXISTS_BEFORE" -eq 0 ]; then
-            gcloud secrets delete "$EPHEMERAL_SECRET" --project="${{ env.PRODUCTION_PROJECT }}" --quiet >/dev/null 2>&1
+          # C/D — eliminar el DSN secret (global).
+          gcloud secrets describe "$EPHEMERAL_DSN_SECRET" --project="${{ env.PRODUCTION_PROJECT }}" >/dev/null 2>&1
+          DSN_SECRET_EXISTS_BEFORE=$?
+          if [ "$DSN_SECRET_EXISTS_BEFORE" -eq 0 ]; then
+            gcloud secrets delete "$EPHEMERAL_DSN_SECRET" --project="${{ env.PRODUCTION_PROJECT }}" --quiet >/dev/null 2>&1
             echo "CLEANUP_C_D_ATTEMPTED=YES"
           else
-            echo "CLEANUP_C_D_SKIPPED=SECRET_ALREADY_ABSENT"
+            echo "CLEANUP_C_D_SKIPPED=DSN_SECRET_ALREADY_ABSENT"
           fi
 
+          # E/F — eliminar el password secret (regional), vía REST.
+          curl -sf -o /dev/null "${REGIONAL_SM_BASE}/${EPHEMERAL_PASSWORD_SECRET}" -H "Authorization: Bearer ${TOKEN}"
+          PASSWORD_SECRET_EXISTS_BEFORE=$?
+          if [ "$PASSWORD_SECRET_EXISTS_BEFORE" -eq 0 ]; then
+            curl -sf -X DELETE "${REGIONAL_SM_BASE}/${EPHEMERAL_PASSWORD_SECRET}" -H "Authorization: Bearer ${TOKEN}" >/dev/null 2>&1
+            echo "CLEANUP_E_F_ATTEMPTED=YES"
+          else
+            echo "CLEANUP_E_F_SKIPPED=PASSWORD_SECRET_ALREADY_ABSENT"
+          fi
+
+          unset TOKEN
           set -e
 
       - name: Verificación independiente de ausencia — nunca se declara éxito sin re-comprobar
         shell: bash
         env:
           EPHEMERAL_ADMIN: ${{ needs.derive-operation-names.outputs.ephemeral_admin_username }}
-          EPHEMERAL_SECRET: ${{ needs.derive-operation-names.outputs.ephemeral_secret_name }}
+          EPHEMERAL_PASSWORD_SECRET: ${{ needs.derive-operation-names.outputs.ephemeral_password_secret_name }}
+          EPHEMERAL_DSN_SECRET: ${{ needs.derive-operation-names.outputs.ephemeral_dsn_secret_name }}
         run: |
           set +e
           gcloud sql users describe "$EPHEMERAL_ADMIN" --instance="${{ env.CLOUD_SQL_INSTANCE }}" --project="${{ env.PRODUCTION_PROJECT }}" >/dev/null 2>&1
           ADMIN_STILL_EXISTS=$?
-          gcloud secrets describe "$EPHEMERAL_SECRET" --project="${{ env.PRODUCTION_PROJECT }}" >/dev/null 2>&1
-          SECRET_STILL_EXISTS=$?
+          gcloud secrets describe "$EPHEMERAL_DSN_SECRET" --project="${{ env.PRODUCTION_PROJECT }}" >/dev/null 2>&1
+          DSN_SECRET_STILL_EXISTS=$?
+          # gcloud secrets describe --location= está roto en el SDK instalado
+          # (ver comentario de cabecera) — vía REST.
+          REGIONAL_SM_BASE="https://secretmanager.${{ env.PRODUCTION_REGION }}.rep.googleapis.com/v1/projects/${{ env.PRODUCTION_PROJECT }}/locations/${{ env.PRODUCTION_REGION }}/secrets"
+          TOKEN="$(gcloud auth print-access-token 2>/dev/null)"
+          curl -sf -o /dev/null "${REGIONAL_SM_BASE}/${EPHEMERAL_PASSWORD_SECRET}" -H "Authorization: Bearer ${TOKEN}"
+          PASSWORD_SECRET_STILL_EXISTS=$?
+          unset TOKEN
           set -e
           {
             echo "### T-F1.2 Point 8C — cleanup_only — operation ${{ needs.derive-operation-names.outputs.operation_id }}"
@@ -1168,13 +1445,13 @@ jobs:
             echo "- ORIGINAL_OPERATION_SHA = ${{ inputs.operation_source_sha != '' && inputs.operation_source_sha || 'NOT_PROVIDED_BY_OPERATOR' }} (audit-only, never enforced for cleanup_only — Phase 14: recovery may legitimately run newer trusted cleanup code)"
             echo "- CLEANUP_IMPLEMENTATION_SHA = ${{ github.sha }}"
             echo ""
-            if [ "$ADMIN_STILL_EXISTS" -ne 0 ] && [ "$SECRET_STILL_EXISTS" -ne 0 ]; then
-              echo "CLEANUP_ONLY_RESULT = CLEAN (ambos recursos confirmados ausentes)"
+            if [ "$ADMIN_STILL_EXISTS" -ne 0 ] && [ "$DSN_SECRET_STILL_EXISTS" -ne 0 ] && [ "$PASSWORD_SECRET_STILL_EXISTS" -ne 0 ]; then
+              echo "CLEANUP_ONLY_RESULT = CLEAN (los tres recursos confirmados ausentes: admin, DSN secret, password secret)"
             else
               echo "CLEANUP_ONLY_RESULT = HOLD_STILL_PRESENT"
             fi
           } >> "$GITHUB_STEP_SUMMARY"
-          if [ "$ADMIN_STILL_EXISTS" -eq 0 ] || [ "$SECRET_STILL_EXISTS" -eq 0 ]; then
-            echo "::error::CLEANUP_ONLY no logró dejar ambos recursos ausentes — reintentar o escalar."
+          if [ "$ADMIN_STILL_EXISTS" -eq 0 ] || [ "$DSN_SECRET_STILL_EXISTS" -eq 0 ] || [ "$PASSWORD_SECRET_STILL_EXISTS" -eq 0 ]; then
+            echo "::error::CLEANUP_ONLY no logró dejar los tres recursos ausentes — reintentar o escalar."
             exit 1
           fi

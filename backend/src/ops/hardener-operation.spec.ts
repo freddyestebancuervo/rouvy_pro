@@ -5,7 +5,8 @@ import {
   isValidOperationId,
   assertValidOperationId,
   deriveEphemeralAdminUsername,
-  deriveEphemeralSecretName,
+  deriveEphemeralPasswordSecretName,
+  deriveEphemeralDsnSecretName,
   deriveEphemeralJobName,
   deriveOperationResourceNames,
   assertValidTransition,
@@ -81,11 +82,22 @@ describe('nombres derivados', () => {
     expect(name).toMatch(/^[a-z_][a-z0-9_]*$/);
   });
 
-  it('deriveEphemeralSecretName tiene el prefijo exacto y respeta charset/longitud de Secret Manager', () => {
-    const name = deriveEphemeralSecretName(id);
-    expect(name).toBe(`korixa-production-db-hardener-once-${id}`);
+  it('deriveEphemeralPasswordSecretName tiene el prefijo exacto y respeta charset/longitud de Secret Manager', () => {
+    const name = deriveEphemeralPasswordSecretName(id);
+    expect(name).toBe(`korixa-production-db-hardener-password-${id}`);
     expect(name.length).toBeLessThanOrEqual(255);
     expect(name).toMatch(/^[A-Za-z0-9_-]+$/);
+  });
+
+  it('deriveEphemeralDsnSecretName tiene el prefijo exacto y respeta charset/longitud de Secret Manager', () => {
+    const name = deriveEphemeralDsnSecretName(id);
+    expect(name).toBe(`korixa-production-db-hardener-dsn-${id}`);
+    expect(name.length).toBeLessThanOrEqual(255);
+    expect(name).toMatch(/^[A-Za-z0-9_-]+$/);
+  });
+
+  it('el secret de password y el secret de DSN NUNCA son el mismo nombre, para ningún operation_id', () => {
+    expect(deriveEphemeralPasswordSecretName(id)).not.toBe(deriveEphemeralDsnSecretName(id));
   });
 
   it('deriveEphemeralJobName es distinto del Job persistente legado y respeta el límite de 63 de Cloud Run', () => {
@@ -95,25 +107,28 @@ describe('nombres derivados', () => {
     expect(name).toMatch(/^[a-z0-9-]+$/);
   });
 
-  it('las tres funciones son deterministas — mismo operation_id siempre produce los mismos tres nombres', () => {
+  it('las cuatro funciones son deterministas — mismo operation_id siempre produce los mismos cuatro nombres', () => {
     expect(deriveEphemeralAdminUsername(id)).toBe(deriveEphemeralAdminUsername(id));
-    expect(deriveEphemeralSecretName(id)).toBe(deriveEphemeralSecretName(id));
+    expect(deriveEphemeralPasswordSecretName(id)).toBe(deriveEphemeralPasswordSecretName(id));
+    expect(deriveEphemeralDsnSecretName(id)).toBe(deriveEphemeralDsnSecretName(id));
     expect(deriveEphemeralJobName(id)).toBe(deriveEphemeralJobName(id));
   });
 
-  it('deriveOperationResourceNames agrupa los tres de forma consistente', () => {
+  it('deriveOperationResourceNames agrupa los cuatro de forma consistente', () => {
     const names = deriveOperationResourceNames(id);
     expect(names).toEqual({
       operationId: id,
       ephemeralAdminUsername: `korixa_db_hardener_once_${id}`,
-      ephemeralSecretName: `korixa-production-db-hardener-once-${id}`,
+      ephemeralPasswordSecretName: `korixa-production-db-hardener-password-${id}`,
+      ephemeralDsnSecretName: `korixa-production-db-hardener-dsn-${id}`,
       ephemeralJobName: `korixa-prod-hardener-once-${id}`,
     });
   });
 
   it('rechaza un operation_id inválido antes de derivar cualquier nombre — nunca deriva de basura', () => {
     expect(() => deriveEphemeralAdminUsername('not-hex!!')).toThrow();
-    expect(() => deriveEphemeralSecretName('not-hex!!')).toThrow();
+    expect(() => deriveEphemeralPasswordSecretName('not-hex!!')).toThrow();
+    expect(() => deriveEphemeralDsnSecretName('not-hex!!')).toThrow();
     expect(() => deriveEphemeralJobName('not-hex!!')).toThrow();
     expect(() => deriveOperationResourceNames('not-hex!!')).toThrow();
   });
@@ -121,7 +136,8 @@ describe('nombres derivados', () => {
   it('dos operation_id distintos nunca producen el mismo nombre derivado', () => {
     const other = 'ffffffffffff';
     expect(deriveEphemeralAdminUsername(id)).not.toBe(deriveEphemeralAdminUsername(other));
-    expect(deriveEphemeralSecretName(id)).not.toBe(deriveEphemeralSecretName(other));
+    expect(deriveEphemeralPasswordSecretName(id)).not.toBe(deriveEphemeralPasswordSecretName(other));
+    expect(deriveEphemeralDsnSecretName(id)).not.toBe(deriveEphemeralDsnSecretName(other));
   });
 });
 
@@ -177,72 +193,111 @@ describe('máquina de estados de la operación (Phase 13)', () => {
   });
 });
 
-describe('máquina de estados de cleanup (Phase 11)', () => {
+describe('máquina de estados de cleanup (Phase 11 / Phase 8 remediación P1 — dos secrets)', () => {
   const NONE: CleanupResourceState = {
     targetAdminOptionRevoked: false,
     ephemeralAdminDeleted: false,
-    ephemeralSecretDisabled: false,
-    ephemeralIamBindingRemoved: false,
+    dsnSecretDeleted: false,
+    dsnSecretIamRemoved: false,
+    passwordSecretDeleted: false,
+    passwordSecretIamRemoved: false,
+  };
+
+  const ALL_DONE: CleanupResourceState = {
+    targetAdminOptionRevoked: true,
+    ephemeralAdminDeleted: true,
+    dsnSecretDeleted: true,
+    dsnSecretIamRemoved: true,
+    passwordSecretDeleted: true,
+    passwordSecretIamRemoved: true,
   };
 
   it('CLEANUP_STATE_0 cuando nada fue revocado todavía', () => {
     expect(classifyCleanupState(NONE, false)).toBe('CLEANUP_STATE_0');
   });
 
-  it('progresa exactamente en el orden A -> B -> C -> D -> verificación', () => {
+  it('progresa exactamente en el orden A -> B -> C(DSN) -> D(DSN IAM) -> E(password) -> F(password IAM) -> verificación', () => {
     expect(classifyCleanupState({ ...NONE, targetAdminOptionRevoked: true }, false)).toBe('CLEANUP_STATE_1');
     expect(
       classifyCleanupState({ ...NONE, targetAdminOptionRevoked: true, ephemeralAdminDeleted: true }, false),
     ).toBe('CLEANUP_STATE_2');
     expect(
       classifyCleanupState(
-        { ...NONE, targetAdminOptionRevoked: true, ephemeralAdminDeleted: true, ephemeralSecretDisabled: true },
+        { ...NONE, targetAdminOptionRevoked: true, ephemeralAdminDeleted: true, dsnSecretDeleted: true },
         false,
       ),
     ).toBe('CLEANUP_STATE_3');
     expect(
       classifyCleanupState(
         {
+          ...NONE,
           targetAdminOptionRevoked: true,
           ephemeralAdminDeleted: true,
-          ephemeralSecretDisabled: true,
-          ephemeralIamBindingRemoved: true,
+          dsnSecretDeleted: true,
+          dsnSecretIamRemoved: true,
         },
         false,
       ),
     ).toBe('CLEANUP_STATE_4');
+    expect(
+      classifyCleanupState(
+        {
+          ...NONE,
+          targetAdminOptionRevoked: true,
+          ephemeralAdminDeleted: true,
+          dsnSecretDeleted: true,
+          dsnSecretIamRemoved: true,
+          passwordSecretDeleted: true,
+        },
+        false,
+      ),
+    ).toBe('CLEANUP_STATE_5');
+    expect(classifyCleanupState({ ...ALL_DONE }, false)).toBe('CLEANUP_STATE_6');
   });
 
-  it('CLEANUP_STATE_5 solo cuando los 4 recursos están limpios Y la verificación independiente pasó', () => {
-    const allDone: CleanupResourceState = {
-      targetAdminOptionRevoked: true,
-      ephemeralAdminDeleted: true,
-      ephemeralSecretDisabled: true,
-      ephemeralIamBindingRemoved: true,
-    };
-    expect(classifyCleanupState(allDone, false)).toBe('CLEANUP_STATE_4');
-    expect(classifyCleanupState(allDone, true)).toBe('CLEANUP_STATE_5');
-    expect(isCleanupComplete(classifyCleanupState(allDone, true))).toBe(true);
+  it('CLEANUP_STATE_7 solo cuando los 6 recursos (ambos secrets + su IAM + admin + ADMIN OPTION) están limpios Y la verificación independiente pasó', () => {
+    expect(classifyCleanupState(ALL_DONE, false)).toBe('CLEANUP_STATE_6');
+    expect(classifyCleanupState(ALL_DONE, true)).toBe('CLEANUP_STATE_7');
+    expect(isCleanupComplete(classifyCleanupState(ALL_DONE, true))).toBe(true);
   });
 
-  it('un solo recurso pendiente, sin importar cuál, nunca reporta CLEANUP_STATE_5', () => {
-    const partial: CleanupResourceState = {
+  it('un solo recurso pendiente, sin importar cuál de los 6, nunca reporta completo', () => {
+    for (const key of Object.keys(ALL_DONE) as Array<keyof CleanupResourceState>) {
+      const partial: CleanupResourceState = { ...ALL_DONE, [key]: false };
+      expect(isCleanupComplete(classifyCleanupState(partial, true))).toBe(false);
+    }
+  });
+
+  it('el secret DSN eliminado no implica que el secret de password también lo esté, ni viceversa — se rastrean de forma completamente independiente', () => {
+    const onlyDsnDone: CleanupResourceState = {
+      ...NONE,
       targetAdminOptionRevoked: true,
       ephemeralAdminDeleted: true,
-      ephemeralSecretDisabled: true,
-      ephemeralIamBindingRemoved: false, // solo este falta
+      dsnSecretDeleted: true,
+      dsnSecretIamRemoved: true,
+      // passwordSecretDeleted / passwordSecretIamRemoved: siguen false
     };
-    expect(isCleanupComplete(classifyCleanupState(partial, true))).toBe(false);
+    expect(isCleanupComplete(classifyCleanupState(onlyDsnDone, true))).toBe(false);
+
+    const onlyPasswordDone: CleanupResourceState = {
+      ...NONE,
+      targetAdminOptionRevoked: true,
+      ephemeralAdminDeleted: true,
+      passwordSecretDeleted: true,
+      passwordSecretIamRemoved: true,
+      // dsnSecretDeleted / dsnSecretIamRemoved: siguen false
+    };
+    expect(isCleanupComplete(classifyCleanupState(onlyPasswordDone, true))).toBe(false);
   });
 });
 
 describe('classifyFinalOutcome — Phase 11, la clasificación más importante de todas', () => {
   it('éxito + cleanup completo -> SUCCESS_AND_CLEAN', () => {
-    expect(classifyFinalOutcome(true, 'CLEANUP_STATE_5')).toBe('SUCCESS_AND_CLEAN');
+    expect(classifyFinalOutcome(true, 'CLEANUP_STATE_7')).toBe('SUCCESS_AND_CLEAN');
   });
 
   it('falla de operación + cleanup completo -> FAILED_BUT_CLEAN (no privilegios huérfanos)', () => {
-    expect(classifyFinalOutcome(false, 'CLEANUP_STATE_5')).toBe('FAILED_BUT_CLEAN');
+    expect(classifyFinalOutcome(false, 'CLEANUP_STATE_7')).toBe('FAILED_BUT_CLEAN');
   });
 
   it('20. la falla de operación NUNCA se esconde detrás de un cleanup incompleto — máxima severidad', () => {
