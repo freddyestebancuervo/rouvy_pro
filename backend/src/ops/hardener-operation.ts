@@ -6,7 +6,7 @@
  * =============================================================================
  * Utilidades PURAS (sin I/O, sin gcloud, sin red) para derivar, de un único
  * `operation_id`, los tres nombres de recursos que la orquestación efímera
- * (workflow `production-db-role-hardener-ephemeral.yml`) necesita crear y —
+ * (workflow `production-db-role-hardening.yml`) necesita crear y —
  * más importante — volver a encontrar exactamente para hacer cleanup, sin
  * mantener ningún estado propio entre el dispatch de `bootstrap_and_preflight`
  * y el dispatch posterior de `apply`:

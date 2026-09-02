@@ -11,7 +11,7 @@ import * as path from 'path';
 
 const WORKFLOW_PATH = path.resolve(
   __dirname,
-  '../../../.github/workflows/production-db-role-hardener-ephemeral.yml',
+  '../../../.github/workflows/production-db-role-hardening.yml',
 );
 const source = fs.readFileSync(WORKFLOW_PATH, 'utf8');
 
@@ -36,7 +36,7 @@ function jobNeeds(jobName: string): string[] {
   return [];
 }
 
-describe('production-db-role-hardener-ephemeral.yml — contrato estructural', () => {
+describe('production-db-role-hardening.yml — contrato estructural', () => {
   it('el trigger es únicamente workflow_dispatch — nunca push/pull_request/schedule/workflow_run', () => {
     const onBlock = /\non:\n([\s\S]*?)\npermissions:/.exec(source)?.[1] ?? '';
     expect(onBlock).toMatch(/workflow_dispatch:/);
@@ -116,10 +116,18 @@ describe('production-db-role-hardener-ephemeral.yml — contrato estructural', (
     expect(source).toMatch(/HOLD_CLEANUP_INCOMPLETE/);
   });
 
-  it('Phase 12 — cleanup_only nunca contiene un verbo "create" de gcloud sql/secrets en su job', () => {
+  it('Phase 12/6 remediation — cleanup_only nunca puede crear/elevar una identidad PostgreSQL, un secret, ni un privilegio IAM (puede SOLO redesplegar el Cloud Run Job efímero exacto de la operación, cuando es necesario para revocar)', () => {
     const cleanupOnlySource = source.split('cleanup-only:')[1]!;
     expect(cleanupOnlySource).not.toMatch(/gcloud sql users create/);
     expect(cleanupOnlySource).not.toMatch(/gcloud secrets create/);
+    expect(cleanupOnlySource).not.toMatch(/gcloud secrets add-iam-policy-binding/);
+    expect(cleanupOnlySource).not.toMatch(/WITH ADMIN OPTION/);
+    expect(cleanupOnlySource).not.toMatch(/cloudsqlsuperuser/);
+    // La única excepción explícita y probada: redesplegar (nunca crear un
+    // recurso nuevo/distinto) el Cloud Run Job efímero exacto de esta
+    // operación, solo para poder ejecutar revoke-admin-option.
+    expect(cleanupOnlySource).toMatch(/gcloud run jobs deploy "\$EPHEMERAL_JOB"/);
+    expect(cleanupOnlySource).toMatch(/BOOTSTRAP_MODE=revoke-admin-option/);
   });
 
   it('Phase 12 — cleanup_only es idempotente: cada recurso se comprueba (describe) antes de intentar borrarlo, y "ya ausente" se trata como éxito', () => {
@@ -274,10 +282,15 @@ describe('production-db-role-hardener-ephemeral.yml — contrato estructural', (
       expect(source).toMatch(/HOLD_OPERATION_CONTEXT_DRIFT[\s\S]{0,400}NO existe forma soportada de re-dispatchear apply contra el SHA original/);
     });
 
-    it('14. WIF readiness — el comentario de cabecera documenta explícitamente que este workflow NO está autorizado hoy por el WIF provider/binding de Producción, y nunca afirma falsamente lo contrario', () => {
-      expect(source).toMatch(/WIF READINESS — NOT YET AUTHORIZED/);
-      expect(source).toMatch(/\(THIS file\) is not present in either clause/);
-      expect(source).not.toMatch(/WIF_INTEGRATION_READY\s*=\s*YES/);
+    it('14. WIF readiness (Option W1) — el comentario de cabecera documenta que este workflow vive en el filename ya autorizado por WIF (consolidación, no una segunda arista de política), y nunca reintroduce un filename efímero separado', () => {
+      expect(source).toMatch(/WHY WIF OPTION W1/);
+      expect(source).toMatch(/this exact filename/);
+      expect(source).not.toMatch(/WIF READINESS — NOT YET AUTHORIZED/);
+      // El filename efímero de desarrollo se menciona una única vez, en
+      // prosa histórica, explicando por qué fue eliminado — nunca como un
+      // segundo workflow real presente en el árbol.
+      const ephemeralFilenameMentions = [...source.matchAll(/production-db-role-hardener-ephemeral\.yml/g)];
+      expect(ephemeralFilenameMentions.length).toBeLessThanOrEqual(1);
     });
 
     it('15. el ADMIN OPTION se auto-otorga/revoca usando la credencial del propio admin efímero (EPHEMERAL_ADMIN_USERNAME=$EPHEMERAL_ADMIN), nunca la de "postgres"', () => {

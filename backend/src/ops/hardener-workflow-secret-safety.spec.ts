@@ -10,10 +10,10 @@ import { findSensitiveEchoPatterns } from './hardener-secret-safety';
 
 const WORKFLOW_PATH = path.resolve(
   __dirname,
-  '../../../.github/workflows/production-db-role-hardener-ephemeral.yml',
+  '../../../.github/workflows/production-db-role-hardening.yml',
 );
 
-describe('production-db-role-hardener-ephemeral.yml — SECRET_LOG_SINKS = 0', () => {
+describe('production-db-role-hardening.yml — SECRET_LOG_SINKS = 0', () => {
   const source = fs.readFileSync(WORKFLOW_PATH, 'utf8');
 
   it('el archivo existe y no está vacío', () => {
@@ -35,55 +35,55 @@ describe('production-db-role-hardener-ephemeral.yml — SECRET_LOG_SINKS = 0', (
     // workflow (PR #115 P1-B remediation: un solo secret DSN global, sin
     // secret de password), nunca descartada en bloque.
     {
-      lineNumber: 304,
+      lineNumber: 309,
       reason:
         'echo "ephemeral_dsn_secret_name=${{ env.EPHEMERAL_DSN_SECRET_PREFIX }}${OPERATION_ID}" — deriva y expone el NOMBRE del secret (prefijo fijo + operation_id público), nunca su payload.',
     },
     {
-      lineNumber: 573,
+      lineNumber: 579,
       reason:
         "printf '%s' \"$DSN\" | gcloud secrets versions add ... --data-file=- — el DSN se canaliza directo al secret DSN global vía stdin, nunca se imprime a stdout/log.",
     },
     {
-      lineNumber: 578,
+      lineNumber: 584,
       reason: 'echo "EPHEMERAL_DSN_SECRET_CREATED=YES" — flag de estado estático, ningún valor interpolado.',
     },
     {
-      lineNumber: 579,
+      lineNumber: 585,
       reason:
         'echo "SECRET_PAYLOAD_PRINTED=NO" — string estático que AFIRMA no-divulgación; contiene la subcadena "secret_payload" pero no imprime ningún payload real.',
     },
     {
-      lineNumber: 590,
+      lineNumber: 596,
       reason: 'echo "EPHEMERAL_DSN_SECRET_IAM_GRANTED=YES" — flag de estado estático, ningún valor interpolado.',
     },
     {
-      lineNumber: 749,
+      lineNumber: 755,
       reason:
         'echo "- EPHEMERAL_DSN_SECRET_NAME = ${{ needs...outputs.ephemeral_dsn_secret_name }} (global — único secret de este diseño, PR #115 P1-B remediation)" (resumen STAGE 1) — imprime el NOMBRE del secret, nunca su payload.',
     },
     {
-      lineNumber: 1062,
+      lineNumber: 1068,
       reason: 'echo "DSN secret efímero ya ausente — nada que revocar vía él." — string estático, ningún valor.',
     },
     {
-      lineNumber: 1125,
+      lineNumber: 1131,
       reason: 'echo "DSN secret efímero ya ausente — cleanup idempotente, éxito." — string estático, ningún valor.',
     },
     {
-      lineNumber: 1135,
+      lineNumber: 1141,
       reason: 'echo "::error::Cleanup C/D (delete ephemeral DSN secret) falló — HOLD requerido." — string estático, ningún valor.',
     },
     {
-      lineNumber: 1296,
+      lineNumber: 1309,
       reason: 'echo "CLEANUP_A_SKIPPED=DSN_SECRET_ALREADY_ABSENT (nada que revocar vía él)" — flag de estado estático, ningún valor.',
     },
     {
-      lineNumber: 1312,
+      lineNumber: 1325,
       reason: 'echo "CLEANUP_C_D_SKIPPED=DSN_SECRET_ALREADY_ABSENT" — flag de estado estático, ningún valor.',
     },
     {
-      lineNumber: 1349,
+      lineNumber: 1362,
       reason:
         'echo "CLEANUP_ONLY_RESULT = CLEAN (los tres recursos confirmados ausentes: admin, DSN secret, Cloud Run Job)" — string estático de resultado, ningún valor.',
     },
