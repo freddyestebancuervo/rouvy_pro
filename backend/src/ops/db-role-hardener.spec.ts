@@ -687,7 +687,7 @@ describe('seguridad — un error hostil con un secreto incrustado nunca se filtr
     expect(result).toBe('CONNECT_OTHER');
   });
 
-  it('runPreflight ante un error hostil produce un HardenerError sin el secreto en message/evidence/JSON completo', async () => {
+  it('runPreflight ante un error hostil produce un HardenerError sin el secreto en message/stack/evidence', async () => {
     mockConnect.mockRejectedValueOnce(maliciousError({ code: 'ECONNREFUSED' }));
     try {
       await runPreflight(baseEnv());
@@ -696,12 +696,26 @@ describe('seguridad — un error hostil con un secreto incrustado nunca se filtr
       const err = e as HardenerError;
       expect(err.code).toBe('DB_CONNECTION_FAILED');
       expect(err.evidence).toEqual({ connection_failure_class: 'NETWORK_CONNECTION_REFUSED' });
+      // Aserciones DIRECTAS contra message/stack — `message`/`stack` de
+      // `Error` son propiedades NO enumerables, así que
+      // `JSON.stringify(err)` jamás las incluye y nunca podría detectar una
+      // fuga ahí (confirmado empíricamente: `Object.keys(new HardenerError(...))`
+      // es exactamente `['name', 'code', 'evidence']`). Por eso estas dos
+      // líneas inspeccionan `err.message`/`err.stack` directamente, en vez
+      // de confiar en la serialización JSON del objeto completo.
       expect(err.message).not.toContain('SUPER_SECRET_PASSWORD');
       expect(err.message).not.toContain(SECRET_DSN);
+      expect(err.stack ?? '').not.toContain('SUPER_SECRET_PASSWORD');
+      expect(err.stack ?? '').not.toContain(SECRET_DSN);
+      // Evidencia — sí es una propiedad enumerable propia, así que
+      // JSON.stringify SÍ la cubre de verdad acá.
+      expect(JSON.stringify(err.evidence)).not.toContain('SUPER_SECRET_PASSWORD');
+      // El objeto de error crudo nunca queda adjunto en ninguna propiedad
+      // enumerable propia — esto SÍ es lo que `JSON.stringify(err)`
+      // realmente puede probar (name/code/evidence), a diferencia de
+      // message/stack de arriba.
       expect(JSON.stringify(err)).not.toContain('SUPER_SECRET_PASSWORD');
       expect(JSON.stringify(err)).not.toContain(SECRET_DSN);
-      expect(JSON.stringify(err.evidence)).not.toContain('SUPER_SECRET_PASSWORD');
-      // El objeto de error crudo nunca queda adjunto en ninguna propiedad.
       expect(Object.keys(err)).not.toContain('cause');
       expect(Object.keys(err)).not.toContain('originalError');
       expect(Object.keys(err)).not.toContain('rawError');
@@ -716,9 +730,48 @@ describe('seguridad — un error hostil con un secreto incrustado nunca se filtr
     } catch (e) {
       const err = e as HardenerError;
       expect(err.evidence).toEqual({ connection_failure_class: 'CONNECT_OTHER' });
+      expect(err.message).not.toContain('SUPER_SECRET_PASSWORD');
+      expect(err.message).not.toContain('TOTALLY_UNRECOGNIZED_HOSTILE_CODE');
+      expect(err.stack ?? '').not.toContain('SUPER_SECRET_PASSWORD');
+      expect(err.stack ?? '').not.toContain('TOTALLY_UNRECOGNIZED_HOSTILE_CODE');
+      expect(JSON.stringify(err.evidence)).not.toContain('SUPER_SECRET_PASSWORD');
+      // Cobertura de las propiedades enumerables propias únicamente — ver
+      // el comentario del test anterior sobre por qué esto NO cubre
+      // message/stack.
       expect(JSON.stringify(err)).not.toContain('SUPER_SECRET_PASSWORD');
       expect(JSON.stringify(err)).not.toContain(SECRET_DSN);
       expect(JSON.stringify(err)).not.toContain('TOTALLY_UNRECOGNIZED_HOSTILE_CODE');
+    }
+  });
+
+  it('un `code` implementado como getter que lanza jamás tumba la clasificación -> CONNECT_OTHER', () => {
+    const hostileGetter: unknown = {};
+    Object.defineProperty(hostileGetter, 'code', {
+      get(): never {
+        throw new Error('SUPER_SECRET_PASSWORD_LEAK_TEST');
+      },
+    });
+    expect(classifySafeConnectionFailure(hostileGetter)).toBe('CONNECT_OTHER');
+  });
+
+  it('runPreflight con un `code` getter que lanza preserva DB_CONNECTION_FAILED/CONNECT_OTHER, nunca degrada a UNEXPECTED_HARDENER_ERROR', async () => {
+    const hostileGetter: unknown = {};
+    Object.defineProperty(hostileGetter, 'code', {
+      get(): never {
+        throw new Error('SUPER_SECRET_PASSWORD_LEAK_TEST');
+      },
+    });
+    mockConnect.mockRejectedValueOnce(hostileGetter);
+    try {
+      await runPreflight(baseEnv());
+      fail('debía lanzar');
+    } catch (e) {
+      const err = e as HardenerError;
+      expect(err.code).toBe('DB_CONNECTION_FAILED');
+      expect(err.evidence).toEqual({ connection_failure_class: 'CONNECT_OTHER' });
+      expect(err.message).not.toContain('SUPER_SECRET_PASSWORD_LEAK_TEST');
+      expect(err.stack ?? '').not.toContain('SUPER_SECRET_PASSWORD_LEAK_TEST');
+      expect(JSON.stringify(err.evidence)).not.toContain('SUPER_SECRET_PASSWORD_LEAK_TEST');
     }
   });
 });

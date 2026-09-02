@@ -244,7 +244,21 @@ const TLS_CODE_ALLOWLIST = new Set<string>([
 
 export function classifySafeConnectionFailure(error: unknown): SafeConnectionFailureClass {
   if (typeof error !== 'object' || error === null) return 'CONNECT_OTHER';
-  const code = (error as { code?: unknown }).code;
+
+  // La lectura de `.code` se aísla en su propio try/catch: un objeto hostil
+  // puede definir `code` como un getter que lanza (o que hace cualquier otra
+  // cosa arbitraria) — eso nunca debe tumbar la clasificación completa ni
+  // degradar DB_CONNECTION_FAILED a UNEXPECTED_HARDENER_ERROR más arriba.
+  // Cualquier fallo acá, de cualquier tipo, cae directo en CONNECT_OTHER; el
+  // valor lanzado (que podría contener cualquier cosa) nunca se lee ni se
+  // propaga.
+  let code: unknown;
+  try {
+    code = (error as { code?: unknown }).code;
+  } catch {
+    return 'CONNECT_OTHER';
+  }
+
   if (typeof code !== 'string') return 'CONNECT_OTHER';
   return SQLSTATE_TO_SAFE_CLASS.get(code) ?? NODE_ERROR_CODE_TO_SAFE_CLASS.get(code) ?? (TLS_CODE_ALLOWLIST.has(code) ? 'TLS_CERTIFICATE_FAILURE' : 'CONNECT_OTHER');
 }
