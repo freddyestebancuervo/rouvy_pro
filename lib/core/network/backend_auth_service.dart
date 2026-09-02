@@ -4,15 +4,25 @@ import 'package:flutter/foundation.dart';
 import '../config/dev_backend_test_user.dart';
 import 'backend_session.dart';
 
-/// Maneja el ciclo de vida de la sesión del backend propio (login/registro
-/// de la cuenta de prueba solo en debug, refresh) y siempre entrega un
-/// access token válido a quien lo pida — lo consume
+/// Maneja el ciclo de vida de la sesión del backend propio (login —NUNCA
+/// registro— de la cuenta de prueba solo en debug, refresh) y siempre
+/// entrega un access token válido a quien lo pida — lo consume
 /// `BackendAuthInterceptor` (ver `backend_dio_client.dart`) antes de cada
 /// request a Equipment/Workouts.
 ///
 /// Recibe un [Dio] SIN el interceptor de auth (`authlessDio`) para sus
-/// propias llamadas de login/registro/refresh — evita el ciclo de que el
+/// propias llamadas de login/refresh — evita el ciclo de que el
 /// interceptor que lo invoca dispare, a su vez, otra ronda de auth.
+///
+/// AUDITORÍA 2026-09-01 (B2-QA-IDENTITY-HARDENING): antes, `_ensureAccessToken`
+/// intentaba `POST /auth/register` primero y solo caía a `/auth/login` ante
+/// un 409 — si el email/contraseña locales alguna vez se desalineaban de la
+/// cuenta QA real (p. ej. `backend/.env` y `dart_define.local.json` con
+/// contraseñas distintas), el registro podía tener éxito silenciosamente y
+/// crear una cuenta nueva en vez de fallar de forma visible. Este servicio
+/// ya NUNCA llama a `/auth/register` — `DevBackendTestUser` es una cuenta
+/// QA preexistente y fija; una identidad QA inválida debe fallar con un
+/// error claro, no generar una cuenta nueva.
 class BackendAuthService {
   BackendAuthService({
     required Dio authlessDio,
@@ -43,8 +53,8 @@ class BackendAuthService {
   /// Devuelve un access token válido, refrescando o (solo en
   /// `kDebugMode`) iniciando sesión con la cuenta de prueba si hace falta.
   /// Coalesce llamadas concurrentes en un único `Future` — sin esto, dos
-  /// requests simultáneas sin sesión dispararían dos registros/logins en
-  /// paralelo contra el backend.
+  /// requests simultáneas sin sesión dispararían dos logins en paralelo
+  /// contra el backend.
   Future<String> ensureAccessToken() {
     return _inFlight ??=
         _ensureAccessToken().whenComplete(() => _inFlight = null);
@@ -87,7 +97,7 @@ class BackendAuthService {
       );
     }
 
-    final BackendSession session = await _loginOrRegisterTestUser();
+    final BackendSession session = await _loginTestUser();
     await _store.save(session);
     return session.accessToken;
   }
@@ -104,31 +114,32 @@ class BackendAuthService {
     }
   }
 
-  Future<BackendSession> _loginOrRegisterTestUser() async {
+  /// Únicamente `POST /auth/login` — `DevBackendTestUser` es una cuenta QA
+  /// preexistente y fija; este método NUNCA registra una cuenta nueva. Si
+  /// el login falla por cualquier motivo (credenciales desalineadas,
+  /// cuenta inexistente, backend caído), se lanza un `StateError` explícito
+  /// (`QA_BACKEND_IDENTITY_INVALID`) en vez de intentar crear una cuenta.
+  Future<BackendSession> _loginTestUser() async {
     try {
       final Response<dynamic> response = await _dio.post<dynamic>(
-        '/auth/register',
+        '/auth/login',
         data: <String, dynamic>{
           'email': DevBackendTestUser.email,
           'password': DevBackendTestUser.password,
-          'displayName': DevBackendTestUser.displayName,
         },
       );
       return _sessionFromResponse(response.data as Map<String, dynamic>);
     } on DioException catch (e) {
-      // 409 EMAIL_ALREADY_EXISTS: la cuenta de prueba ya existía de una
-      // corrida anterior — camino esperado a partir del segundo uso.
-      if (e.response?.statusCode == 409) {
-        final Response<dynamic> response = await _dio.post<dynamic>(
-          '/auth/login',
-          data: <String, dynamic>{
-            'email': DevBackendTestUser.email,
-            'password': DevBackendTestUser.password,
-          },
-        );
-        return _sessionFromResponse(response.data as Map<String, dynamic>);
-      }
-      rethrow;
+      throw StateError(
+        'QA_BACKEND_IDENTITY_INVALID: no se pudo iniciar sesión con '
+        'DevBackendTestUser (status: ${e.response?.statusCode}). La '
+        'identidad QA configurada localmente (QA_BACKEND_EMAIL/'
+        'QA_BACKEND_PASSWORD en dart_define.local.json) no coincide con '
+        'ninguna cuenta existente en el backend. Este servicio nunca '
+        'registra una cuenta nueva automáticamente — verificá que la '
+        'contraseña QA local sea la canónica vigente contra el backend '
+        'real, en vez de crear una cuenta nueva.',
+      );
     }
   }
 
