@@ -12,6 +12,13 @@
 // `lib/core/config/dev_backend_test_user.dart` consume vía
 // --dart-define-from-file) para que ningún valor real quede en el
 // código fuente ni en el historial de git.
+//
+// Auditoría 2026-09-01 (B2-QA-IDENTITY-HARDENING): antes, un login QA
+// fallido (401/404) intentaba `POST /auth/register` automáticamente — si
+// QA_BACKEND_PASSWORD local quedaba desalineado de la cuenta QA real, este
+// script podía crear una cuenta nueva en silencio en vez de fallar de
+// forma visible. Ahora, cualquier fallo de login termina el script sin
+// intentar registrar nada — la cuenta QA es preexistente y fija.
 
 // Ya presente en node_modules como dependencia transitiva de
 // @nestjs/config — no es una dependencia nueva del proyecto.
@@ -21,7 +28,6 @@ const BASE_URL = 'http://localhost:3000/v1';
 
 const QA_EMAIL = process.env.QA_BACKEND_EMAIL;
 const QA_PASSWORD = process.env.QA_BACKEND_PASSWORD;
-const QA_DISPLAY_NAME = process.env.QA_BACKEND_DISPLAY_NAME || 'QA Workouts';
 
 if (!QA_EMAIL || !QA_PASSWORD) {
   console.error(
@@ -66,6 +72,10 @@ const SAMPLE_WORKOUTS = [
   },
 ];
 
+// Solo `POST /auth/login` — la cuenta QA es preexistente y fija; este
+// script nunca registra una cuenta nueva. Cualquier fallo de login
+// (credenciales desalineadas, cuenta inexistente, backend caído) detiene
+// el script con un mensaje seguro, sin PII.
 async function login() {
   const res = await fetch(`${BASE_URL}/auth/login`, {
     method: 'POST',
@@ -74,20 +84,9 @@ async function login() {
   });
   if (res.ok) return res.json();
 
-  if (res.status === 401 || res.status === 404) {
-    console.log('Login QA falló, intentando registrar la cuenta...');
-    const registerRes = await fetch(`${BASE_URL}/auth/register`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ email: QA_EMAIL, password: QA_PASSWORD, displayName: QA_DISPLAY_NAME }),
-    });
-    if (!registerRes.ok) {
-      throw new Error(`Registro falló: ${registerRes.status} ${await registerRes.text()}`);
-    }
-    return registerRes.json();
-  }
-
-  throw new Error(`Login falló: ${res.status} ${await res.text()}`);
+  throw new Error(
+    'Cuenta QA backend inválida o no disponible. Verifique la identidad QA canónica.',
+  );
 }
 
 async function listWorkouts(accessToken) {
@@ -128,7 +127,7 @@ async function main() {
   }
 
   console.log('\nSeed de Workouts completo.');
-  console.log(`  Email:    ${QA_EMAIL}`);
+  console.log('Identidad QA autenticada correctamente.');
 }
 
 main().catch((err) => {

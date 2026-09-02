@@ -7,11 +7,13 @@
 /// sistemas de autenticación completamente independientes (ver
 /// `docs/TECHNICAL_SPECIFICATION_BLOQUE_D.md`).
 ///
-/// NO es un bypass de seguridad: pasa por `POST /auth/register` y
-/// `POST /auth/login` reales del backend, obtiene un JWT RS256 firmado de
-/// verdad, y queda sujeto a las mismas reglas de ownership que cualquier
-/// otro usuario — simplemente no hay todavía una UI para elegir/crear esa
-/// cuenta a mano.
+/// NO es un bypass de seguridad: pasa por `POST /auth/login` real del
+/// backend (nunca `/auth/register` — ver B2-QA-IDENTITY-HARDENING,
+/// 2026-09-01: esta cuenta es preexistente y fija, y
+/// `BackendAuthService` nunca la crea automáticamente), obtiene un JWT
+/// RS256 firmado de verdad, y queda sujeta a las mismas reglas de
+/// ownership que cualquier otro usuario — simplemente no hay todavía una
+/// UI para elegir/crear esa cuenta a mano.
 ///
 /// Auditoría 2026-07-23: antes estas credenciales estaban hardcodeadas
 /// como `static const`. Se reemplazan por `String.fromEnvironment` —
