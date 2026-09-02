@@ -27,104 +27,65 @@ describe('production-db-role-hardener-ephemeral.yml — SECRET_LOG_SINKS = 0', (
   // ESA línea específica es seguro.
   const REVIEWED_SAFE_LINES: ReadonlyArray<{ lineNumber: number; reason: string }> = [
     // La mayoría de las coincidencias del detector son `echo` de NOMBRES DE
-    // RECURSO (p. ej. "ephemeral_password_secret_name", el nombre del
-    // secret, nunca su payload) o de banderas de ESTADO (CREATED=YES,
-    // SKIPPED=..., RESULT=CLEAN) que contienen la subcadena "password"/"dsn"
-    // solo porque describen a QUÉ secret se refieren — no porque interpolen
-    // su valor. Cada una está revisada individualmente contra el texto real
-    // del workflow, nunca descartada en bloque.
+    // RECURSO (p. ej. "ephemeral_dsn_secret_name", el nombre del secret,
+    // nunca su payload) o de banderas de ESTADO (CREATED=YES, SKIPPED=...,
+    // RESULT=CLEAN) que contienen la subcadena "dsn"/"password" solo porque
+    // describen a QUÉ recurso se refieren — no porque interpolen su valor.
+    // Cada una está revisada individualmente contra el texto real del
+    // workflow (PR #115 P1-B remediation: un solo secret DSN global, sin
+    // secret de password), nunca descartada en bloque.
     {
-      lineNumber: 295,
+      lineNumber: 304,
       reason:
-        'echo "ephemeral_password_secret_name=${{ env.EPHEMERAL_PASSWORD_SECRET_PREFIX }}${OPERATION_ID}" — deriva y expone el NOMBRE del secret (prefijo fijo + operation_id público), nunca su payload.',
+        'echo "ephemeral_dsn_secret_name=${{ env.EPHEMERAL_DSN_SECRET_PREFIX }}${OPERATION_ID}" — deriva y expone el NOMBRE del secret (prefijo fijo + operation_id público), nunca su payload.',
     },
     {
-      lineNumber: 296,
+      lineNumber: 573,
       reason:
-        'echo "ephemeral_dsn_secret_name=${{ env.EPHEMERAL_DSN_SECRET_PREFIX }}${OPERATION_ID}" — deriva y expone el NOMBRE del secret, nunca su payload.',
+        "printf '%s' \"$DSN\" | gcloud secrets versions add ... --data-file=- — el DSN se canaliza directo al secret DSN global vía stdin, nunca se imprime a stdout/log.",
     },
     {
-      lineNumber: 587,
-      reason:
-        'PASSWORD_B64="$(printf \'%s\' "$EPHEMERAL_PASSWORD" | base64 -w0)" — construye el payload base64 para el REST body; la variable resultante (PASSWORD_B64) nunca se imprime, solo se interpola en el `-d` de un `curl` (ver línea siguiente) y se usa dentro del mismo step.',
-    },
-    {
-      lineNumber: 595,
-      reason: 'echo "EPHEMERAL_PASSWORD_SECRET_CREATED=YES" — flag de estado estático, ningún valor interpolado.',
-    },
-    {
-      lineNumber: 596,
-      reason:
-        'echo "SECRET_PAYLOAD_PRINTED=NO" (tras crear el PASSWORD SECRET) — string estático que AFIRMA no-divulgación; contiene la subcadena "secret_payload" pero no imprime ningún payload real.',
-    },
-    {
-      lineNumber: 611,
-      reason: 'echo "EPHEMERAL_PASSWORD_SECRET_IAM_GRANTED=YES" — flag de estado estático, ningún valor interpolado.',
-    },
-    {
-      lineNumber: 625,
-      reason:
-        "printf '%s' \"$DSN\" | gcloud secrets versions add ... --data-file=- — el DSN se canaliza directo al DSN SECRET global vía stdin, nunca se imprime a stdout/log.",
-    },
-    {
-      lineNumber: 630,
+      lineNumber: 578,
       reason: 'echo "EPHEMERAL_DSN_SECRET_CREATED=YES" — flag de estado estático, ningún valor interpolado.',
     },
     {
-      lineNumber: 631,
+      lineNumber: 579,
       reason:
-        'echo "SECRET_PAYLOAD_PRINTED=NO" (tras crear el DSN SECRET) — mismo string estático que AFIRMA no-divulgación, repetido una vez por secret creado.',
+        'echo "SECRET_PAYLOAD_PRINTED=NO" — string estático que AFIRMA no-divulgación; contiene la subcadena "secret_payload" pero no imprime ningún payload real.',
     },
     {
-      lineNumber: 642,
+      lineNumber: 590,
       reason: 'echo "EPHEMERAL_DSN_SECRET_IAM_GRANTED=YES" — flag de estado estático, ningún valor interpolado.',
     },
     {
-      lineNumber: 804,
+      lineNumber: 749,
       reason:
-        'echo "- EPHEMERAL_PASSWORD_SECRET_NAME = ${{ needs...outputs.ephemeral_password_secret_name }} ..." (resumen STAGE 1) — imprime el NOMBRE del secret como evidencia no-secreta, nunca su payload.',
+        'echo "- EPHEMERAL_DSN_SECRET_NAME = ${{ needs...outputs.ephemeral_dsn_secret_name }} (global — único secret de este diseño, PR #115 P1-B remediation)" (resumen STAGE 1) — imprime el NOMBRE del secret, nunca su payload.',
     },
     {
-      lineNumber: 805,
-      reason:
-        'echo "- EPHEMERAL_DSN_SECRET_NAME = ${{ needs...outputs.ephemeral_dsn_secret_name }} (global)" (resumen STAGE 1) — imprime el NOMBRE del secret, nunca su payload.',
+      lineNumber: 1062,
+      reason: 'echo "DSN secret efímero ya ausente — nada que revocar vía él." — string estático, ningún valor.',
     },
     {
-      lineNumber: 1171,
-      reason: 'echo "Password secret efímero ya ausente — nada que revocar vía él." — string estático, ningún valor.',
-    },
-    {
-      lineNumber: 1217,
+      lineNumber: 1125,
       reason: 'echo "DSN secret efímero ya ausente — cleanup idempotente, éxito." — string estático, ningún valor.',
     },
     {
-      lineNumber: 1227,
+      lineNumber: 1135,
       reason: 'echo "::error::Cleanup C/D (delete ephemeral DSN secret) falló — HOLD requerido." — string estático, ningún valor.',
     },
     {
-      lineNumber: 1245,
-      reason: 'echo "Password secret efímero ya ausente — cleanup idempotente, éxito." — string estático, ningún valor.',
+      lineNumber: 1296,
+      reason: 'echo "CLEANUP_A_SKIPPED=DSN_SECRET_ALREADY_ABSENT (nada que revocar vía él)" — flag de estado estático, ningún valor.',
     },
     {
-      lineNumber: 1255,
-      reason: 'echo "::error::Cleanup E/F (delete ephemeral password secret) falló — HOLD requerido." — string estático, ningún valor.',
-    },
-    {
-      lineNumber: 1390,
-      reason: 'echo "CLEANUP_A_SKIPPED=PASSWORD_SECRET_ALREADY_ABSENT ..." — flag de estado estático, ningún valor.',
-    },
-    {
-      lineNumber: 1406,
+      lineNumber: 1312,
       reason: 'echo "CLEANUP_C_D_SKIPPED=DSN_SECRET_ALREADY_ABSENT" — flag de estado estático, ningún valor.',
     },
     {
-      lineNumber: 1416,
-      reason: 'echo "CLEANUP_E_F_SKIPPED=PASSWORD_SECRET_ALREADY_ABSENT" — flag de estado estático, ningún valor.',
-    },
-    {
-      lineNumber: 1449,
+      lineNumber: 1349,
       reason:
-        'echo "CLEANUP_ONLY_RESULT = CLEAN (los tres recursos confirmados ausentes: admin, DSN secret, password secret)" — string estático de resultado, ningún valor.',
+        'echo "CLEANUP_ONLY_RESULT = CLEAN (los tres recursos confirmados ausentes: admin, DSN secret, Cloud Run Job)" — string estático de resultado, ningún valor.',
     },
   ];
 

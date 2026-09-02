@@ -144,161 +144,126 @@ describe('production-db-role-hardener-ephemeral.yml — contrato estructural', (
     expect(cleanupOnlySource).toMatch(/github\.sha/);
   });
 
-  it('Phase 15 — el job de bootstrap otorga IAM a nivel de secreto (setIamPolicy REST sobre el PASSWORD SECRET, add-iam-policy-binding sobre el DSN SECRET), nunca a nivel de proyecto', () => {
-    // PASSWORD SECRET: gcloud secrets add-iam-policy-binding --location= está
-    // roto (ver comentario de cabecera) — el binding se otorga vía REST
-    // directo (:setIamPolicy) sobre el mismo recurso regional específico.
-    expect(source).toMatch(/\$\{REGIONAL_SM_BASE\}\/\$\{EPHEMERAL_PASSWORD_SECRET\}:setIamPolicy/);
-    // DSN SECRET: el flag global funciona normalmente, sin necesidad de REST.
+  it('Phase 15 — el job de bootstrap otorga IAM a nivel de secreto (add-iam-policy-binding sobre el DSN SECRET específico), nunca a nivel de proyecto', () => {
     expect(source).toMatch(/gcloud secrets add-iam-policy-binding "\$EPHEMERAL_DSN_SECRET"/);
     expect(source).not.toMatch(/gcloud projects add-iam-policy-binding/);
   });
 
   // ===========================================================================
-  // PR #115 P1 remediation — contrato de DOS secrets independientes
-  // (password-only REGIONAL vs. DSN-completo GLOBAL). Los 16 tests de la
-  // Phase 10 de la misión de remediación viven en este bloque.
+  // PR #115 P1-B remediation (TF12-POINT8C-PR115-FINAL-INTEGRATION) —
+  // arquitectura enteramente VPC privada: sin ExecuteSql API, sin
+  // dataApiAccess, sin secret regional de password. El GRANT/REVOKE del
+  // ADMIN OPTION corre por el mismo Cloud Run Job efímero que preflight/
+  // apply/verify, invocando `db-hardener-bootstrap.js`. Fase 8 de la misión
+  // de remediación exige explícitamente: EXECUTE_SQL_REFERENCES=0,
+  // DATA_API_ENABLE_REFERENCES=0, REGIONAL_SECRET_OPERATION_REFERENCES=0.
   // ===========================================================================
-  describe('PR #115 P1 remediation — contrato de dos secrets independientes', () => {
+  describe('PR #115 P1-B remediation — arquitectura VPC privada, un solo secret DSN', () => {
     const bootstrapSource = source.split('bootstrap-ephemeral-admin:')[1]!.split('# ===')[0]!;
+    const cleanupAfterApplySource = source.split('cleanup-after-apply:')[1]!.split('cleanup-only:')[0]!;
+    const cleanupOnlySource = jobSource('cleanup-only');
 
-    it('1. los dos secrets tienen prefijos/nombres de recurso completamente distintos entre sí', () => {
-      const passwordPrefixMatch = /EPHEMERAL_PASSWORD_SECRET_PREFIX:\s*(\S+)/.exec(source);
-      const dsnPrefixMatch = /EPHEMERAL_DSN_SECRET_PREFIX:\s*(\S+)/.exec(source);
-      expect(passwordPrefixMatch?.[1]).toBeDefined();
-      expect(dsnPrefixMatch?.[1]).toBeDefined();
-      expect(passwordPrefixMatch![1]).not.toBe(dsnPrefixMatch![1]);
-      expect(source).toMatch(/ephemeral_password_secret_name=\$\{\{ env\.EPHEMERAL_PASSWORD_SECRET_PREFIX \}\}/);
-      expect(source).toMatch(/ephemeral_dsn_secret_name=\$\{\{ env\.EPHEMERAL_DSN_SECRET_PREFIX \}\}/);
+    function operationalLines(text: string): string[] {
+      return text.split('\n').filter((line) => !line.trim().startsWith('#'));
+    }
+
+    it('1. EXECUTE_SQL_REFERENCES = 0 — ninguna línea operativa invoca gcloud sql instances execute-sql (solo prosa histórica en comentarios)', () => {
+      const hits = operationalLines(source).filter((line) => /execute-sql/.test(line));
+      expect(hits).toEqual([]);
     });
 
-    it('2. el PASSWORD SECRET recibe EXCLUSIVAMENTE el password como payload — nunca el DSN completo (vía REST :addVersion, ya que gcloud secrets versions add --location= está roto)', () => {
-      expect(bootstrapSource).toMatch(/PASSWORD_B64="\$\(printf '%s' "\$EPHEMERAL_PASSWORD" \| base64 -w0\)"/);
-      expect(bootstrapSource).toMatch(/\$\{REGIONAL_SM_BASE\}\/\$\{EPHEMERAL_PASSWORD_SECRET\}:addVersion/);
-      expect(bootstrapSource).toMatch(/\\"payload\\":\{\\"data\\":\\"\$\{PASSWORD_B64\}\\"\}/);
-      expect(bootstrapSource).not.toMatch(/printf '%s' "\$DSN" \| gcloud secrets versions add "\$EPHEMERAL_PASSWORD_SECRET"/);
-      expect(bootstrapSource).not.toMatch(/EPHEMERAL_PASSWORD_SECRET:addVersion[\s\S]{0,120}DSN/);
+    it('2. DATA_API_ENABLE_REFERENCES = 0 — ninguna línea operativa referencia dataApiAccess/ALLOW_DATA_API/--data-api-access= (solo prosa histórica)', () => {
+      const hits = operationalLines(source).filter((line) => /dataApiAccess|ALLOW_DATA_API|--data-api-access=/.test(line));
+      expect(hits).toEqual([]);
     });
 
-    it('3. el DSN SECRET recibe EXCLUSIVAMENTE el DSN completo como payload — nunca el password solo', () => {
-      expect(bootstrapSource).toMatch(/printf '%s' "\$DSN" \| gcloud secrets versions add "\$EPHEMERAL_DSN_SECRET"/);
-      expect(bootstrapSource).not.toMatch(/printf '%s' "\$EPHEMERAL_PASSWORD" \| gcloud secrets versions add "\$EPHEMERAL_DSN_SECRET"/);
+    it('3. REGIONAL_SECRET_OPERATION_REFERENCES = 0 — ningún --location= operativo, ningún REGIONAL_SM_BASE, ningún curl a secretmanager.*.rep.googleapis.com', () => {
+      const hits = operationalLines(source).filter(
+        (line) => /--location=/.test(line) || /REGIONAL_SM_BASE/.test(line) || /secretmanager\.[^"]*\.rep\.googleapis\.com/.test(line),
+      );
+      expect(hits).toEqual([]);
+      expect(source).not.toMatch(/curl /);
     });
 
-    it('4. el PASSWORD SECRET se crea como REGIONAL verdadero, vía REST directo a la API regional de Secret Manager (gcloud secrets create --location= está confirmado roto en el SDK instalado — nunca vía --replication-policy=user-managed --locations=)', () => {
-      expect(bootstrapSource).toMatch(/REGIONAL_SM_BASE="https:\/\/secretmanager\.\$\{\{ env\.PRODUCTION_REGION \}\}\.rep\.googleapis\.com\/v1\/projects\/\$\{\{ env\.PRODUCTION_PROJECT \}\}\/locations\/\$\{\{ env\.PRODUCTION_REGION \}\}\/secrets"/);
-      expect(bootstrapSource).toMatch(/\$\{REGIONAL_SM_BASE\}\?secretId=\$\{EPHEMERAL_PASSWORD_SECRET\}/);
-      expect(bootstrapSource).not.toMatch(/gcloud secrets create "\$EPHEMERAL_PASSWORD_SECRET"/);
-      expect(bootstrapSource).not.toMatch(/--replication-policy=user-managed/);
-      expect(bootstrapSource).not.toMatch(/EPHEMERAL_PASSWORD_SECRET"[\s\S]{0,80}--locations=/);
+    it('4. un único secret efímero (DSN global) existe en todo el archivo — ninguna referencia a EPHEMERAL_PASSWORD_SECRET/password secret regional', () => {
+      expect(source).not.toMatch(/EPHEMERAL_PASSWORD_SECRET/);
+      expect(source).toMatch(/EPHEMERAL_DSN_SECRET_PREFIX:/);
+      const dsnUses = [...source.matchAll(/EPHEMERAL_DSN_SECRET\b/g)];
+      expect(dsnUses.length).toBeGreaterThan(5);
     });
 
-    it('5. el DSN SECRET se crea GLOBAL (compatible con Cloud Run) — sin --location ni --locations', () => {
-      const dsnCreateBlock = /gcloud secrets create "\$EPHEMERAL_DSN_SECRET"[\s\S]*?--quiet/.exec(bootstrapSource)?.[0] ?? '';
-      expect(dsnCreateBlock.length).toBeGreaterThan(0);
-      expect(dsnCreateBlock).not.toMatch(/--location=/);
-      expect(dsnCreateBlock).not.toMatch(/--locations=/);
+    it('5. bootstrap-ephemeral-admin otorga el ADMIN OPTION vía el Cloud Run Job efímero con BOOTSTRAP_MODE=grant-admin-option, por el camino VPC privado exacto (mismo network/subnet/vpc-egress que preflight/apply/verify)', () => {
+      expect(bootstrapSource).toMatch(/--args=dist\/ops\/db-hardener-bootstrap\.js/);
+      expect(bootstrapSource).toMatch(/BOOTSTRAP_MODE=grant-admin-option/);
+      expect(bootstrapSource).toMatch(/--service-account="\$\{\{ env\.MIGRATION_EXECUTOR_SA \}\}"/);
+      expect(bootstrapSource).toMatch(/--network=korixa-production-vpc/);
+      expect(bootstrapSource).toMatch(/--subnet=korixa-production-sa-east1/);
+      expect(bootstrapSource).toMatch(/--vpc-egress=private-ranges-only/);
+      expect(bootstrapSource).toMatch(/--set-secrets="MIGRATION_DATABASE_URL=\$\{EPHEMERAL_DSN_SECRET\}:latest"/);
     });
 
-    it('6. execute-sql (--password-secret-version) referencia EXCLUSIVAMENTE el PASSWORD SECRET, en cada uso, en todo el workflow', () => {
-      // --password-secret-version siempre recibe la variable ya resuelta
-      // $SECRET_RESOURCE (nunca el nombre del secret inline) — se prueba en
-      // su lugar que cada construcción de SECRET_RESOURCE que precede a un
-      // uso de execute-sql interpola EXCLUSIVAMENTE EPHEMERAL_PASSWORD_SECRET.
-      expect(source).toMatch(/--password-secret-version="\$SECRET_RESOURCE"/);
-      const secretResourceAssignments = [
-        ...source.matchAll(/SECRET_RESOURCE="projects\/[^"]*\/secrets\/\$\{([A-Z_]+)\}\/versions\/[^"]*"/g),
-      ].map((m) => m[1]);
-      expect(secretResourceAssignments.length).toBeGreaterThan(0);
-      for (const varName of secretResourceAssignments) {
-        expect(varName).toBe('EPHEMERAL_PASSWORD_SECRET');
+    it('6. cleanup-after-apply revoca el ADMIN OPTION vía el mismo Cloud Run Job con BOOTSTRAP_MODE=revoke-admin-option, por el mismo camino VPC privado — nunca execute-sql', () => {
+      expect(cleanupAfterApplySource).toMatch(/--args=dist\/ops\/db-hardener-bootstrap\.js/);
+      expect(cleanupAfterApplySource).toMatch(/BOOTSTRAP_MODE=revoke-admin-option/);
+      expect(cleanupAfterApplySource).toMatch(/--vpc-egress=private-ranges-only/);
+      expect(cleanupAfterApplySource).not.toMatch(/execute-sql/);
+    });
+
+    it('7. cleanup_only también revoca vía el Cloud Run Job privado — solo si el admin y el secret DSN todavía existen — nunca execute-sql', () => {
+      expect(cleanupOnlySource).toMatch(/--args=dist\/ops\/db-hardener-bootstrap\.js/);
+      expect(cleanupOnlySource).toMatch(/BOOTSTRAP_MODE=revoke-admin-option/);
+      expect(cleanupOnlySource).not.toMatch(/execute-sql/);
+      // Orden: describe del admin ANTES del deploy del Job de revoke.
+      const adminCheckIdx = cleanupOnlySource.indexOf('gcloud sql users describe "$EPHEMERAL_ADMIN"');
+      const revokeJobIdx = cleanupOnlySource.indexOf('BOOTSTRAP_MODE=revoke-admin-option');
+      expect(adminCheckIdx).toBeGreaterThan(-1);
+      expect(revokeJobIdx).toBeGreaterThan(-1);
+      expect(adminCheckIdx).toBeLessThan(revokeJobIdx);
+    });
+
+    it('8. BOOTSTRAP_MODE nunca recibe un valor fuera de {grant-admin-option, revoke-admin-option} en ningún job — nunca SQL arbitrario inyectado vía env var', () => {
+      const modeValues = [...source.matchAll(/BOOTSTRAP_MODE=([a-zA-Z0-9_-]+)/g)].map((m) => m[1]);
+      expect(modeValues.length).toBeGreaterThan(0);
+      for (const value of modeValues) {
+        expect(['grant-admin-option', 'revoke-admin-option']).toContain(value);
       }
     });
 
-    it('7. Cloud Run (--set-secrets) monta EXCLUSIVAMENTE el DSN SECRET, en cada uso, en todo el workflow', () => {
-      const setSecretsCalls = [...source.matchAll(/--set-secrets="MIGRATION_DATABASE_URL=\$\{([A-Z_]+)\}:latest"/g)].map((m) => m[1]);
-      expect(setSecretsCalls.length).toBeGreaterThan(0);
-      for (const varName of setSecretsCalls) {
-        expect(varName).toBe('EPHEMERAL_DSN_SECRET');
-      }
-    });
-
-    it('8. el secret legado korixa-production-migration-database-url (identidad de korixa_app) nunca se referencia operacionalmente (solo se lo menciona en prosa, en el comentario de cabecera, para explicar por qué este archivo es separado)', () => {
-      const operationalLines = source
-        .split('\n')
-        .filter((line) => !line.trim().startsWith('#'))
-        .join('\n');
-      expect(operationalLines).not.toMatch(/korixa-production-migration-database-url/);
-      // Confirma que la única mención real está en el comentario de cabecera
-      // esperado — si aparece en más de un lugar, algo cambió y este test
-      // debe fallar en vez de quedar obsoleto en silencio.
-      const allMentions = [...source.matchAll(/korixa-production-migration-database-url/g)];
-      expect(allMentions).toHaveLength(1);
-    });
-
-    it('9. el PASSWORD SECRET nunca se monta en Cloud Run vía --set-secrets', () => {
-      expect(source).not.toMatch(/--set-secrets="[^"]*EPHEMERAL_PASSWORD_SECRET/);
-    });
-
-    it('10. el DSN SECRET nunca se pasa a --password-secret-version', () => {
-      expect(source).not.toMatch(/--password-secret-version="[^"]*DSN_SECRET/);
-    });
-
-    it('11. cleanup-after-apply elimina Y verifica AMBOS secrets de forma independiente (DSN vía gcloud CLI, PASSWORD vía REST — describe/delete --location= está roto)', () => {
-      const cleanupSource = source.split('cleanup-after-apply:')[1]!.split('cleanup-only:')[0]!;
-      expect(cleanupSource).toMatch(/gcloud secrets delete "\$EPHEMERAL_DSN_SECRET"/);
-      expect(cleanupSource).toMatch(/gcloud secrets describe "\$EPHEMERAL_DSN_SECRET"/);
-      expect(cleanupSource).toMatch(/curl -sf -X DELETE "\$\{REGIONAL_SM_BASE\}\/\$\{EPHEMERAL_PASSWORD_SECRET\}"/);
-      expect(cleanupSource).toMatch(/curl -sf -o \/dev\/null "\$\{REGIONAL_SM_BASE\}\/\$\{EPHEMERAL_PASSWORD_SECRET\}"/);
-      expect(cleanupSource).not.toMatch(/gcloud secrets (describe|delete) "\$EPHEMERAL_PASSWORD_SECRET"/);
-      expect(cleanupSource).toMatch(/DSN_SECRET_STILL_EXISTS/);
-      expect(cleanupSource).toMatch(/PASSWORD_SECRET_STILL_EXISTS/);
-    });
-
-    it('12. cleanup_only descubre, elimina y verifica AMBOS secrets de forma independiente e idempotente (DSN vía gcloud CLI, PASSWORD vía REST)', () => {
-      const cleanupOnlySource = jobSource('cleanup-only');
-      expect(cleanupOnlySource).toMatch(/gcloud secrets describe "\$EPHEMERAL_DSN_SECRET"/);
-      expect(cleanupOnlySource).toMatch(/gcloud secrets delete "\$EPHEMERAL_DSN_SECRET"/);
-      expect(cleanupOnlySource).toMatch(/curl -sf -o \/dev\/null "\$\{REGIONAL_SM_BASE\}\/\$\{EPHEMERAL_PASSWORD_SECRET\}"/);
-      expect(cleanupOnlySource).toMatch(/curl -sf -X DELETE "\$\{REGIONAL_SM_BASE\}\/\$\{EPHEMERAL_PASSWORD_SECRET\}"/);
-      expect(cleanupOnlySource).not.toMatch(/gcloud secrets (describe|delete) "\$EPHEMERAL_PASSWORD_SECRET"/);
-      expect(cleanupOnlySource).toMatch(/DSN_SECRET_ALREADY_ABSENT/);
-      expect(cleanupOnlySource).toMatch(/PASSWORD_SECRET_ALREADY_ABSENT/);
-    });
-
-    it('13a. el PASSWORD SECRET otorga acceso EXCLUSIVAMENTE a DEPLOYER_SA (la identidad que invoca execute-sql), nunca a MIGRATION_EXECUTOR_SA — vía REST :setIamPolicy (add-iam-policy-binding --location= está roto)', () => {
-      const passwordIamBlock = /\$\{REGIONAL_SM_BASE\}\/\$\{EPHEMERAL_PASSWORD_SECRET\}:setIamPolicy[\s\S]*?\|\| fail/.exec(bootstrapSource)?.[0] ?? '';
-      expect(passwordIamBlock.length).toBeGreaterThan(0);
-      expect(passwordIamBlock).toMatch(/serviceAccount:\$\{\{ env\.DEPLOYER_SA \}\}/);
-      expect(passwordIamBlock).not.toMatch(/MIGRATION_EXECUTOR_SA/);
-    });
-
-    it('13b. el DSN SECRET otorga acceso EXCLUSIVAMENTE a MIGRATION_EXECUTOR_SA (la identidad que corre los Jobs de Cloud Run), nunca a DEPLOYER_SA', () => {
+    it('9. el DSN SECRET es el único secret cuyo IAM se otorga en todo el archivo, y su único accesor es MIGRATION_EXECUTOR_SA (nunca DEPLOYER_SA)', () => {
+      const iamGrants = [...source.matchAll(/gcloud secrets add-iam-policy-binding "\$([A-Z_]+)"/g)].map((m) => m[1]);
+      expect(iamGrants.length).toBeGreaterThan(0);
+      for (const secretVar of iamGrants) expect(secretVar).toBe('EPHEMERAL_DSN_SECRET');
       const dsnIamBlock = /gcloud secrets add-iam-policy-binding "\$EPHEMERAL_DSN_SECRET"[\s\S]*?--quiet/.exec(bootstrapSource)?.[0] ?? '';
       expect(dsnIamBlock).toMatch(/--member="serviceAccount:\$\{\{ env\.MIGRATION_EXECUTOR_SA \}\}"/);
       expect(dsnIamBlock).not.toMatch(/DEPLOYER_SA/);
     });
 
-    it('14. verify-operation-context re-verifica AMBOS secrets (ENABLED + accesor IAM exacto) antes de cualquier mutación de apply', () => {
-      const verifyContextSource = jobSource('verify-operation-context');
-      expect(verifyContextSource).toMatch(/EPHEMERAL_PASSWORD_SECRET/);
-      expect(verifyContextSource).toMatch(/EPHEMERAL_DSN_SECRET/);
-      expect(verifyContextSource).toMatch(/PASSWORD_ACCESSOR/);
-      expect(verifyContextSource).toMatch(/DSN_ACCESSOR/);
-      expect(verifyContextSource).toMatch(/serviceAccount:\$\{\{ env\.DEPLOYER_SA \}\}/);
-      expect(verifyContextSource).toMatch(/serviceAccount:\$\{\{ env\.MIGRATION_EXECUTOR_SA \}\}/);
+    it('10. el secret legado korixa-production-migration-database-url (identidad de korixa_app) nunca se referencia operacionalmente (solo se lo menciona en prosa, en el comentario de cabecera)', () => {
+      expect(operationalLines(source).some((line) => line.includes('korixa-production-migration-database-url'))).toBe(false);
+      const allMentions = [...source.matchAll(/korixa-production-migration-database-url/g)];
+      expect(allMentions).toHaveLength(1);
     });
 
-    it('15. ningún --set-env-vars de ningún Cloud Run Job interpola EPHEMERAL_PASSWORD/DSN crudos (solo referencias a secrets, nunca payloads)', () => {
-      const envVarsCalls = [...source.matchAll(/--set-env-vars="([^"]*)"/g)].map((m) => m[1]);
-      expect(envVarsCalls.length).toBeGreaterThan(0);
-      for (const envVars of envVarsCalls) {
-        expect(envVars).not.toMatch(/\$EPHEMERAL_PASSWORD\b/);
-        expect(envVars).not.toMatch(/\$DSN\b/);
-      }
+    it('11. el Cloud Run Job efímero se elimina Y se re-verifica ausente EN AMBOS jobs de cleanup (Phase 7 remediación — antes nunca se eliminaba)', () => {
+      expect(cleanupAfterApplySource).toMatch(/gcloud run jobs delete "\$EPHEMERAL_JOB"/);
+      expect(cleanupAfterApplySource).toMatch(/gcloud run jobs describe "\$EPHEMERAL_JOB"/);
+      expect(cleanupAfterApplySource).toMatch(/JOB_STILL_EXISTS/);
+      expect(cleanupOnlySource).toMatch(/gcloud run jobs delete "\$EPHEMERAL_JOB"/);
+      expect(cleanupOnlySource).toMatch(/gcloud run jobs describe "\$EPHEMERAL_JOB"/);
+      expect(cleanupOnlySource).toMatch(/JOB_STILL_EXISTS/);
     });
 
-    it('16. la política de drift de SOURCE_SHA documentada coincide con la semántica real soportada por gh/GitHub Actions (--ref solo acepta branch/tag, nunca un SHA)', () => {
+    it('12. resolve-artifact y verify-prerequisites-instance ahora también corren para cleanup_only (necesario para poder ejecutar el Cloud Run Job de revoke)', () => {
+      const resolveArtifactSource = jobSource('resolve-artifact');
+      const verifyPrereqSource = jobSource('verify-prerequisites-instance');
+      expect(resolveArtifactSource).toMatch(/cleanup_only/);
+      expect(verifyPrereqSource).toMatch(/cleanup_only/);
+      expect(jobNeeds('cleanup-only')).toEqual(
+        expect.arrayContaining(['resolve-artifact', 'verify-prerequisites-instance']),
+      );
+    });
+
+    it('13. la política de drift de SOURCE_SHA documentada coincide con la semántica real soportada por gh/GitHub Actions (--ref solo acepta branch/tag, nunca un SHA)', () => {
       // La frase `gh workflow run ... --ref <the exact source SHA>` SIGUE
       // apareciendo, pero únicamente citada como ejemplo de la instrucción
       // FALSA que este comentario corrige — nunca como una instrucción
@@ -309,38 +274,18 @@ describe('production-db-role-hardener-ephemeral.yml — contrato estructural', (
       expect(source).toMatch(/HOLD_OPERATION_CONTEXT_DRIFT[\s\S]{0,400}NO existe forma soportada de re-dispatchear apply contra el SHA original/);
     });
 
-    it('17. ninguna operación real sobre el PASSWORD SECRET regional usa el flag `gcloud secrets ... --location=` (confirmado roto por prueba en vivo — Phase 11); toda operación real pasa por curl', () => {
-      // Solo prosa (comentarios) puede mencionar `--location=` — ninguna
-      // línea de código real (gcloud/curl) lo usa como argumento operativo.
-      const operationalLines = source
-        .split('\n')
-        .filter((line) => !line.trim().startsWith('#'));
-      const linesUsingLocationFlag = operationalLines.filter((line) => /--location=/.test(line));
-      expect(linesUsingLocationFlag).toEqual([]);
-      // Cada operación sobre el password secret pasa por REGIONAL_SM_BASE.
-      expect(source).toMatch(/REGIONAL_SM_BASE="https:\/\/secretmanager\./);
-      const regionalSmBaseUses = [...source.matchAll(/\$\{REGIONAL_SM_BASE\}/g)];
-      expect(regionalSmBaseUses.length).toBeGreaterThanOrEqual(8); // create, addVersion, setIamPolicy, y las re-lecturas en verify-operation-context/cleanup-after-apply/cleanup-only
+    it('14. WIF readiness — el comentario de cabecera documenta explícitamente que este workflow NO está autorizado hoy por el WIF provider/binding de Producción, y nunca afirma falsamente lo contrario', () => {
+      expect(source).toMatch(/WIF READINESS — NOT YET AUTHORIZED/);
+      expect(source).toMatch(/\(THIS file\) is not present in either clause/);
+      expect(source).not.toMatch(/WIF_INTEGRATION_READY\s*=\s*YES/);
     });
 
-    it('18. verify-prerequisites-instance verifica (solo lectura) dataApiAccess=ALLOW_DATA_API antes de cualquier bootstrap/apply, y NUNCA lo habilita él mismo', () => {
-      const prereqSource = jobSource('verify-prerequisites-instance');
-      expect(prereqSource).toMatch(/settings\.dataApiAccess/);
-      expect(prereqSource).toMatch(/ALLOW_DATA_API/);
-      expect(prereqSource).toMatch(/HOLD_DATA_API_ACCESS_NOT_ENABLED/);
-      // Nunca debe existir un `gcloud sql instances patch ... --data-api-access=`
-      // en este archivo — habilitarlo es una decisión de postura de
-      // seguridad de Producción que requiere su propio Human Gate explícito,
-      // nunca implícito dentro de este workflow.
-      expect(source).not.toMatch(/--data-api-access=/);
+    it('15. el ADMIN OPTION se auto-otorga/revoca usando la credencial del propio admin efímero (EPHEMERAL_ADMIN_USERNAME=$EPHEMERAL_ADMIN), nunca la de "postgres"', () => {
+      const usernameAssignments = [...source.matchAll(/EPHEMERAL_ADMIN_USERNAME=\$\{?([A-Za-z_]+)\}?/g)].map((m) => m[1]);
+      expect(usernameAssignments.length).toBeGreaterThan(0);
+      for (const value of usernameAssignments) expect(value).toBe('EPHEMERAL_ADMIN');
+      expect(source).not.toMatch(/EPHEMERAL_ADMIN_USERNAME=postgres/);
     });
-  });
-
-  it('Phase 6 — el ADMIN OPTION se auto-otorga usando la credencial del propio admin efímero, nunca la de "postgres"', () => {
-    const bootstrapSource = source.split('bootstrap-ephemeral-admin:')[1]!.split('# ===')[0]!;
-    expect(bootstrapSource).toMatch(/--user="\$EPHEMERAL_ADMIN"/);
-    expect(bootstrapSource).not.toMatch(/--user=postgres/);
-    expect(bootstrapSource).not.toMatch(/--user="postgres"/);
   });
 
   it('Phase 3 — el Cloud Run Job efímero nunca se despliega/ejecuta bajo el nombre del Job persistente legado (solo se lo menciona en prosa, para explicar la distinción)', () => {
@@ -354,12 +299,18 @@ describe('production-db-role-hardener-ephemeral.yml — contrato estructural', (
     expect(source).not.toMatch(/\bmigrations\//);
   });
 
-  it('el hardener Cloud Run Job SIEMPRE corre exactamente `node dist/ops/db-role-hardener.js` — nunca un shell ni un comando arbitrario', () => {
+  it('cada Cloud Run Job SIEMPRE corre exactamente `node dist/ops/db-role-hardener.js` (preflight/apply/verify) o `node dist/ops/db-hardener-bootstrap.js` (grant/revoke ADMIN OPTION) — nunca un shell ni un comando arbitrario', () => {
     const commandMatches = [...source.matchAll(/--command=(\S+)/g)];
     const argsMatches = [...source.matchAll(/--args=(\S+)/g)];
     expect(commandMatches.length).toBeGreaterThan(0);
     for (const m of commandMatches) expect(m[1]).toBe('node');
-    for (const m of argsMatches) expect(m[1]).toBe('dist/ops/db-role-hardener.js');
+    const ALLOWED_ARGS = new Set(['dist/ops/db-role-hardener.js', 'dist/ops/db-hardener-bootstrap.js']);
+    expect(argsMatches.length).toBeGreaterThan(0);
+    for (const m of argsMatches) expect(ALLOWED_ARGS.has(m[1]!)).toBe(true);
+    // Ambos entrypoints deben aparecer — ninguno quedó sin usar.
+    const usedArgs = new Set(argsMatches.map((m) => m[1]));
+    expect(usedArgs.has('dist/ops/db-role-hardener.js')).toBe(true);
+    expect(usedArgs.has('dist/ops/db-hardener-bootstrap.js')).toBe(true);
   });
 
   it('todo job que ejecuta gcloud contra Production declara environment: production (gate adicional de GitHub Environments)', () => {

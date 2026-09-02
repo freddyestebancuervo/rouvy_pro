@@ -100,9 +100,18 @@ export function assertValidOperationId(value: unknown): asserts value is string 
 // =============================================================================
 
 const EPHEMERAL_ADMIN_PREFIX = 'korixa_db_hardener_once_';
-const EPHEMERAL_PASSWORD_SECRET_PREFIX = 'korixa-production-db-hardener-password-';
 const EPHEMERAL_DSN_SECRET_PREFIX = 'korixa-production-db-hardener-dsn-';
 const EPHEMERAL_JOB_PREFIX = 'korixa-prod-hardener-once-';
+
+/**
+ * Patrón exacto de un username de admin efímero válido — único punto de
+ * verdad, reutilizado por `db-hardener-bootstrap.ts` (PR #115 P1-B
+ * remediation, Phase 1) para validar `EPHEMERAL_ADMIN_USERNAME` ANTES de
+ * interpolarlo en un statement `GRANT`/`REVOKE` (los identificadores de rol
+ * no admiten parámetros posicionales de `pg` — esta validación de formato ES
+ * el mecanismo de seguridad, no una capa cosmética).
+ */
+export const EPHEMERAL_ADMIN_USERNAME_PATTERN = new RegExp(`^${EPHEMERAL_ADMIN_PREFIX}[0-9a-f]{12}$`);
 
 /**
  * Nombre de usuario PostgreSQL/Cloud SQL efímero.
@@ -121,43 +130,23 @@ export function deriveEphemeralAdminUsername(operationId: string): string {
 }
 
 /**
- * Nombre del secret REGIONAL de Secret Manager que contiene ÚNICAMENTE el
- * password del admin efímero — nunca DSN, nunca usuario, nunca host.
- *
- * =============================================================================
- * POR QUÉ ES UN SECRET SEPARADO Y POR QUÉ ES REGIONAL
- * =============================================================================
- * `gcloud sql instances execute-sql --password-secret-version` exige un
- * recurso de Secret Manager REGIONAL — confirmado vía `gcloud secrets create
- * --help` en este mismo repo (T-F1.2 Point 8C, remediación P1 de PR #115):
- * `--location=LOCATION` es un flag DISTINTO e incompatible con
- * `--replication-policy=user-managed --locations=[...]` (ese segundo crea un
- * secret GLOBAL con una réplica fijada a una región — NO un recurso regional;
- * su resource name sigue siendo `projects/{p}/secrets/{s}`, nunca
- * `projects/{p}/locations/{l}/secrets/{s}`, que es exactamente lo que
- * `--password-secret-version` requiere). La implementación original de PR
- * #115 usaba el mecanismo incorrecto — este secret reemplaza esa versión.
- *
- * Longitud: `korixa-production-db-hardener-password-` (41) + 12 hex = 53
- * caracteres — dentro del límite de 255 de Secret Manager.
- */
-export function deriveEphemeralPasswordSecretName(operationId: string): string {
-  assertValidOperationId(operationId);
-  return `${EPHEMERAL_PASSWORD_SECRET_PREFIX}${operationId}`;
-}
-
-/**
  * Nombre del secret GLOBAL (automatic replication) de Secret Manager que
  * contiene el DSN completo (`postgres://usuario:password@host:5432/db`) —
- * este es el ÚNICO secret que Cloud Run monta como `MIGRATION_DATABASE_URL`.
+ * este es el ÚNICO secret efímero que este diseño crea. Cloud Run
+ * (`gcloud run jobs deploy --set-secrets`) no soporta secrets regionales —
+ * solo resuelve nombres bajo el namespace global `projects/{p}/secrets/{s}`.
  *
- * Cloud Run (`gcloud run jobs deploy --set-secrets`) no soporta secrets
- * regionales — solo resuelve nombres bajo el namespace global
- * `projects/{p}/secrets/{s}`. Por eso el DSN, que es lo único que el Job del
- * hardener necesita, vive en un secret GLOBAL separado del secret regional
- * de password que usa `execute-sql`. Ambos son efímeros, únicos por
- * operación, y nunca se reutilizan entre sí ni con el secret de migración
- * legado ni con el secret de runtime.
+ * PR #115 P1-B remediation (Phase 3): la versión anterior de este diseño
+ * también creaba un segundo secret REGIONAL con solo el password, consumido
+ * por `gcloud sql instances execute-sql --password-secret-version` — ese
+ * mecanismo exigía `settings.dataApiAccess=ALLOW_DATA_API` en la instancia
+ * (un cambio real de postura de seguridad en una instancia de IP privada,
+ * nunca antes verificado) y quedó completamente reemplazado por
+ * `db-hardener-bootstrap.ts`, que ejecuta el GRANT/REVOKE del ADMIN OPTION
+ * por el mismo camino VPC privado que preflight/apply/verify. El secret
+ * regional de password YA NO EXISTE en este diseño — el password se genera
+ * en memoria, se usa una sola vez para crear el usuario Cloud SQL y construir
+ * este DSN, y se descarta inmediatamente (nunca persiste en Secret Manager).
  *
  * Longitud: `korixa-production-db-hardener-dsn-` (36) + 12 hex = 48
  * caracteres.
@@ -185,7 +174,6 @@ export function deriveEphemeralJobName(operationId: string): string {
 export interface OperationResourceNames {
   operationId: string;
   ephemeralAdminUsername: string;
-  ephemeralPasswordSecretName: string;
   ephemeralDsnSecretName: string;
   ephemeralJobName: string;
 }
@@ -197,7 +185,6 @@ export function deriveOperationResourceNames(operationId: string): OperationReso
   return {
     operationId,
     ephemeralAdminUsername: deriveEphemeralAdminUsername(operationId),
-    ephemeralPasswordSecretName: deriveEphemeralPasswordSecretName(operationId),
     ephemeralDsnSecretName: deriveEphemeralDsnSecretName(operationId),
     ephemeralJobName: deriveEphemeralJobName(operationId),
   };
@@ -266,9 +253,13 @@ export function assertValidTransition(from: OperationState, to: OperationState):
 // =============================================================================
 
 /**
- * PR #115 P1 remediation: dos secrets efímeros (password regional + DSN
- * global) reemplazan el único secret original — cleanup ahora debe probar
- * la ausencia de AMBOS, independientemente, antes de declarar completo.
+ * PR #115 P1-B remediation (Phase 7): el secret regional de password fue
+ * eliminado del diseño (ver `deriveEphemeralDsnSecretName`), y el propio
+ * Cloud Run Job efímero (reutilizado por bootstrap-grant/preflight/apply/
+ * verify/revoke) se agrega explícitamente al conjunto de recursos huérfanos
+ * rastreados — el diseño anterior nunca lo eliminaba. El conjunto completo:
+ * admin efímero, secret DSN global + su IAM, el Cloud Run Job efímero, y el
+ * ADMIN OPTION temporal sobre korixa_app.
  */
 export interface CleanupResourceState {
   /** A — ADMIN OPTION temporal sobre korixa_app revocada. */
@@ -281,11 +272,8 @@ export interface CleanupResourceState {
    * que el secreto ya no existe — se rastrea por separado para poder
    * reportar la causa exacta de cualquier falla parcial). */
   dsnSecretIamRemoved: boolean;
-  /** E — secret de password (regional, usado por execute-sql) eliminado. */
-  passwordSecretDeleted: boolean;
-  /** F — binding IAM del secret de password eliminado (mismo razonamiento
-   * que D). */
-  passwordSecretIamRemoved: boolean;
+  /** E — Cloud Run Job efímero eliminado. */
+  ephemeralJobDeleted: boolean;
 }
 
 export type CleanupState =
@@ -295,22 +283,20 @@ export type CleanupState =
   | 'CLEANUP_STATE_3' // A + B + C
   | 'CLEANUP_STATE_4' // A + B + C + D
   | 'CLEANUP_STATE_5' // A + B + C + D + E
-  | 'CLEANUP_STATE_6' // A + B + C + D + E + F
-  | 'CLEANUP_STATE_7'; // todo lo anterior, y además verificado independientemente (G)
+  | 'CLEANUP_STATE_6'; // todo lo anterior, y además verificado independientemente (F)
 
 export function classifyCleanupState(resources: CleanupResourceState, independentlyVerified: boolean): CleanupState {
   if (!resources.targetAdminOptionRevoked) return 'CLEANUP_STATE_0';
   if (!resources.ephemeralAdminDeleted) return 'CLEANUP_STATE_1';
   if (!resources.dsnSecretDeleted) return 'CLEANUP_STATE_2';
   if (!resources.dsnSecretIamRemoved) return 'CLEANUP_STATE_3';
-  if (!resources.passwordSecretDeleted) return 'CLEANUP_STATE_4';
-  if (!resources.passwordSecretIamRemoved) return 'CLEANUP_STATE_5';
-  if (!independentlyVerified) return 'CLEANUP_STATE_6';
-  return 'CLEANUP_STATE_7';
+  if (!resources.ephemeralJobDeleted) return 'CLEANUP_STATE_4';
+  if (!independentlyVerified) return 'CLEANUP_STATE_5';
+  return 'CLEANUP_STATE_6';
 }
 
 export function isCleanupComplete(state: CleanupState): boolean {
-  return state === 'CLEANUP_STATE_7';
+  return state === 'CLEANUP_STATE_6';
 }
 
 /**
