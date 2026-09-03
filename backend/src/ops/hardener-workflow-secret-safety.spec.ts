@@ -35,55 +35,75 @@ describe('production-db-role-hardening.yml — SECRET_LOG_SINKS = 0', () => {
     // workflow (PR #115 P1-B remediation: un solo secret DSN global, sin
     // secret de password), nunca descartada en bloque.
     {
-      lineNumber: 309,
+      lineNumber: 357,
       reason:
         'echo "ephemeral_dsn_secret_name=${{ env.EPHEMERAL_DSN_SECRET_PREFIX }}${OPERATION_ID}" — deriva y expone el NOMBRE del secret (prefijo fijo + operation_id público), nunca su payload.',
     },
     {
-      lineNumber: 579,
+      lineNumber: 627,
       reason:
         "printf '%s' \"$DSN\" | gcloud secrets versions add ... --data-file=- — el DSN se canaliza directo al secret DSN global vía stdin, nunca se imprime a stdout/log.",
     },
     {
-      lineNumber: 584,
+      lineNumber: 632,
       reason: 'echo "EPHEMERAL_DSN_SECRET_CREATED=YES" — flag de estado estático, ningún valor interpolado.',
     },
     {
-      lineNumber: 585,
+      lineNumber: 633,
       reason:
         'echo "SECRET_PAYLOAD_PRINTED=NO" — string estático que AFIRMA no-divulgación; contiene la subcadena "secret_payload" pero no imprime ningún payload real.',
     },
     {
-      lineNumber: 596,
+      lineNumber: 644,
       reason: 'echo "EPHEMERAL_DSN_SECRET_IAM_GRANTED=YES" — flag de estado estático, ningún valor interpolado.',
     },
     {
-      lineNumber: 755,
+      lineNumber: 856,
       reason:
         'echo "- EPHEMERAL_DSN_SECRET_NAME = ${{ needs...outputs.ephemeral_dsn_secret_name }} (global — único secret de este diseño, PR #115 P1-B remediation)" (resumen STAGE 1) — imprime el NOMBRE del secret, nunca su payload.',
     },
     {
-      lineNumber: 1068,
+      lineNumber: 979,
+      reason:
+        'echo "STAGE1_CLEANUP_C_D_SKIPPED=DSN_SECRET_ALREADY_ABSENT" (cleanup-after-stage1-failure, PR #115 P1-2) — flag de estado estático, ningún valor.',
+    },
+    {
+      lineNumber: 1012,
+      reason:
+        'echo "STAGE1_CLEANUP_RESULT = CLEAN (los tres recursos confirmados ausentes: admin, DSN secret, Cloud Run Job)" (cleanup-after-stage1-failure) — string estático de resultado, ningún valor.',
+    },
+    {
+      lineNumber: 1084,
+      reason:
+        'echo "$DSN_VERSIONS_JSON" | python3 -c "..." (PR #115 P1-6, verify-operation-context) — DSN_VERSIONS_JSON es la salida de `gcloud secrets versions list` (metadata: nombres de versión + estado ENABLED/DISABLED), NUNCA el payload/valor del secret — el nombre de la variable contiene "DSN" solo porque describe A QUÉ secret pertenece esa metadata.',
+    },
+    {
+      lineNumber: 1119,
+      reason:
+        'echo "$DSN_SECRET_DESCRIBE_JSON" | python3 -c "..." (PR #115 P1-3, verify-operation-context) — DSN_SECRET_DESCRIBE_JSON es la salida de `gcloud secrets describe` (metadata: nombre, createTime, replication), NUNCA el payload/valor del secret — usado únicamente para calcular el lease acotado a partir de createTime.',
+    },
+    {
+      lineNumber: 1391,
       reason: 'echo "DSN secret efímero ya ausente — nada que revocar vía él." — string estático, ningún valor.',
     },
     {
-      lineNumber: 1131,
+      lineNumber: 1461,
       reason: 'echo "DSN secret efímero ya ausente — cleanup idempotente, éxito." — string estático, ningún valor.',
     },
     {
-      lineNumber: 1141,
+      lineNumber: 1471,
       reason: 'echo "::error::Cleanup C/D (delete ephemeral DSN secret) falló — HOLD requerido." — string estático, ningún valor.',
     },
     {
-      lineNumber: 1309,
+      lineNumber: 1664,
       reason: 'echo "CLEANUP_A_SKIPPED=DSN_SECRET_ALREADY_ABSENT (nada que revocar vía él)" — flag de estado estático, ningún valor.',
     },
     {
-      lineNumber: 1325,
+      lineNumber: 1682,
       reason: 'echo "CLEANUP_C_D_SKIPPED=DSN_SECRET_ALREADY_ABSENT" — flag de estado estático, ningún valor.',
     },
     {
-      lineNumber: 1362,
+      lineNumber: 1719,
       reason:
         'echo "CLEANUP_ONLY_RESULT = CLEAN (los tres recursos confirmados ausentes: admin, DSN secret, Cloud Run Job)" — string estático de resultado, ningún valor.',
     },

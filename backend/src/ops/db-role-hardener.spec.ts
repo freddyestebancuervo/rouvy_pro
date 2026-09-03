@@ -10,6 +10,7 @@ import {
   runApply,
   runVerify,
   runHardener,
+  assertVerifyFullyHardened,
   HardenerError,
   APPLY_MUTATION_STATEMENTS,
   APPLY_CONFIRMATION_TOKEN,
@@ -21,6 +22,8 @@ import {
   type HardenerEnv,
   type RoleStateSnapshot,
   type SafeConnectionFailureClass,
+  type VerifyResult,
+  type VerifyDisposition,
 } from './db-role-hardener';
 
 // `pg.Client` se mockea por completo — ningún test de este archivo toca una
@@ -825,6 +828,78 @@ describe('runVerify', () => {
   it('nunca emite un campo literal POINT_8_PASS', async () => {
     const result = await runVerify(baseEnv({ HARDENER_MODE: 'verify' }));
     expect(JSON.stringify(result)).not.toContain('POINT_8_PASS');
+  });
+
+  it('reporta SQL_HARDENING_PARTIAL_OR_UNEXPECTED_STATE cuando el target está endurecido pero el runtime no es seguro', async () => {
+    installMockQuery({
+      targetRoleRow: TARGET_ROLE_STATE_HARDENED,
+      cloudsqlsuperuserDirect: false,
+      cloudsqlsuperuserTransitive: false,
+      runtimeRoleRow: { ...RUNTIME_ROLE_STATE, rolcreaterole: true },
+    });
+    const result = await runVerify(baseEnv({ HARDENER_MODE: 'verify' }));
+    expect(result.disposition).toBe('SQL_HARDENING_PARTIAL_OR_UNEXPECTED_STATE');
+  });
+});
+
+// =============================================================================
+// PR #115 P1-1 remediation — verify strict gate, machine-enforced. runVerify
+// en sí sigue sin lanzar por un disposition parcial (sigue siendo útil como
+// primitivo de solo-reporte) — assertVerifyFullyHardened es el ÚNICO punto
+// que traduce "no fully hardened" en un fallo real, y es lo que el
+// entrypoint CLI invoca para mode=verify. Cubre las 4 dispositions posibles.
+// =============================================================================
+
+describe('assertVerifyFullyHardened — P1-1 strict gate (machine-enforced, nunca depende de inspección humana)', () => {
+  function verifyResultWith(disposition: VerifyDisposition): VerifyResult {
+    return {
+      mode: 'verify',
+      source_sha: '84d7b2f2d9fb40ad0859671f8f264fec1a61f228',
+      target_state: { rolcreatedb: false, rolcreaterole: false, rolcanlogin: true },
+      target_privileges: { connect: true, schema_usage: true, schema_create: true },
+      runtime_state: RUNTIME_ROLE_STATE,
+      runtime_safe: true,
+      target_cloudsqlsuperuser_direct: false,
+      target_cloudsqlsuperuser_transitive: false,
+      disposition,
+    };
+  }
+
+  it('NO lanza únicamente para SQL_AND_CLOUDSQL_FULLY_HARDENED', () => {
+    expect(() => assertVerifyFullyHardened(verifyResultWith('SQL_AND_CLOUDSQL_FULLY_HARDENED'))).not.toThrow();
+  });
+
+  it.each<VerifyDisposition>([
+    'SQL_HARDENING_NOT_YET_APPLIED',
+    'SQL_HARDENED_CLOUDSQL_MEMBERSHIP_PENDING',
+    'SQL_HARDENING_PARTIAL_OR_UNEXPECTED_STATE',
+  ])('lanza HOLD_VERIFY_NOT_FULLY_HARDENED para %s — las otras 3 dispositions NUNCA pasan el gate', (disposition) => {
+    let thrown: unknown;
+    try {
+      assertVerifyFullyHardened(verifyResultWith(disposition));
+    } catch (e) {
+      thrown = e;
+    }
+    expect(thrown).toBeInstanceOf(HardenerError);
+    expect((thrown as HardenerError).code).toBe('HOLD_VERIFY_NOT_FULLY_HARDENED');
+    expect((thrown as HardenerError).evidence).toEqual({ disposition });
+  });
+
+  it('el entrypoint CLI real (mode=verify) hace exit != 0 para las 3 dispositions no fully-hardened, y exit 0 SOLO para fully-hardened — nunca depende de inspección humana de Cloud Logging', async () => {
+    for (const disposition of [
+      'SQL_HARDENING_NOT_YET_APPLIED',
+      'SQL_HARDENED_CLOUDSQL_MEMBERSHIP_PENDING',
+      'SQL_HARDENING_PARTIAL_OR_UNEXPECTED_STATE',
+    ] as const) {
+      const result = verifyResultWith(disposition);
+      expect(() => {
+        if (result.mode === 'verify') assertVerifyFullyHardened(result);
+      }).toThrow(HardenerError);
+    }
+    const fullyHardened = verifyResultWith('SQL_AND_CLOUDSQL_FULLY_HARDENED');
+    expect(() => {
+      if (fullyHardened.mode === 'verify') assertVerifyFullyHardened(fullyHardened);
+    }).not.toThrow();
   });
 });
 

@@ -86,7 +86,7 @@ describe('production-db-role-hardening.yml — contrato estructural', () => {
   });
 
   it('Phase 7 — stage1-summary nunca ejecuta el Job de apply ni limpia recursos (solo lee outputs, no gcloud sql/secrets mutation)', () => {
-    const stage1Source = source.split('stage1-summary:')[1]!.split('verify-operation-context:')[0]!;
+    const stage1Source = jobSource('stage1-summary');
     expect(stage1Source).not.toMatch(/gcloud sql users (create|delete|assign-roles)/);
     expect(stage1Source).not.toMatch(/gcloud secrets (create|delete)/);
   });
@@ -207,7 +207,7 @@ describe('production-db-role-hardening.yml — contrato estructural', () => {
       expect(bootstrapSource).toMatch(/--network=korixa-production-vpc/);
       expect(bootstrapSource).toMatch(/--subnet=korixa-production-sa-east1/);
       expect(bootstrapSource).toMatch(/--vpc-egress=private-ranges-only/);
-      expect(bootstrapSource).toMatch(/--set-secrets="MIGRATION_DATABASE_URL=\$\{EPHEMERAL_DSN_SECRET\}:latest"/);
+      expect(bootstrapSource).toMatch(/--set-secrets="MIGRATION_DATABASE_URL=\$\{EPHEMERAL_DSN_SECRET\}:1"/);
     });
 
     it('6. cleanup-after-apply revoca el ADMIN OPTION vía el mismo Cloud Run Job con BOOTSTRAP_MODE=revoke-admin-option, por el mismo camino VPC privado — nunca execute-sql', () => {
@@ -331,6 +331,7 @@ describe('production-db-role-hardening.yml — contrato estructural', () => {
       'bootstrap-ephemeral-admin',
       'verify-prerequisites-instance',
       'preflight',
+      'cleanup-after-stage1-failure',
       'verify-operation-context',
       'apply',
       'remove-target-cloudsqlsuperuser',
@@ -342,5 +343,115 @@ describe('production-db-role-hardening.yml — contrato estructural', () => {
       const jobSource = source.split(`\n  ${jobName}:`)[1]?.split(/\n {2}[a-zA-Z-]+:\n/)[0] ?? '';
       expect(jobSource).toMatch(/environment: production/);
     }
+  });
+
+  // ===========================================================================
+  // TF12-POINT8C-PR115-SEMANTIC-FAIL-CLOSED-FINAL-REMEDIATION — P1-1..P1-7
+  // y P2. La arquitectura ephemeral-admin en sí NO se rediseña; estos tests
+  // prueban que la orquestación de seguridad (verify estricto, cleanup
+  // automático, precondiciones exactas, versión de secret fijada, cleanup
+  // no bloqueado por artefacto, postura de red exacta) está realmente
+  // presente en el YAML real, nunca solo documentada en prosa.
+  // ===========================================================================
+  describe('P1-1..P1-7 / P2 — remediación semántica fail-closed final', () => {
+    it('P1-1: el job verify depende del gate estricto machine-enforced — verify_disposition_ok=YES solo si el proceso Node salió 0 (nunca CHECK_CLOUD_LOGGING)', () => {
+      const verifySource = jobSource('verify');
+      expect(verifySource).not.toMatch(/CHECK_CLOUD_LOGGING/);
+      expect(verifySource).toMatch(/verify_disposition_ok=YES/);
+      expect(verifySource).toMatch(/EXECUTE_EXIT.*-eq 0.*fail/s);
+    });
+
+    it('P1-2: existe cleanup-after-stage1-failure, corre siempre que bootstrap+preflight NO tuvieron éxito completo, y elimina admin/secret/Job con verificación independiente', () => {
+      const stage1CleanupSource = jobSource('cleanup-after-stage1-failure');
+      expect(stage1CleanupSource).toMatch(/always\(\)/);
+      expect(stage1CleanupSource).toMatch(/!\(needs\.bootstrap-ephemeral-admin\.result == 'success' && needs\.preflight\.result == 'success'\)/);
+      expect(stage1CleanupSource).toMatch(/gcloud sql users delete "\$EPHEMERAL_ADMIN"/);
+      expect(stage1CleanupSource).toMatch(/gcloud secrets delete "\$EPHEMERAL_DSN_SECRET"/);
+      expect(stage1CleanupSource).toMatch(/gcloud run jobs delete "\$EPHEMERAL_JOB"/);
+      expect(stage1CleanupSource).toMatch(/ADMIN_STILL_EXISTS/);
+      expect(jobNeeds('cleanup-after-stage1-failure')).toEqual(
+        expect.arrayContaining(['bootstrap-ephemeral-admin', 'preflight']),
+      );
+    });
+
+    it('P1-3: existe un lease acotado, explícito y testeable (EPHEMERAL_ADMIN_MAX_LIFETIME_SECONDS), calculado desde createTime real del secret DSN, y apply lo rechaza si expiró', () => {
+      expect(source).toMatch(/EPHEMERAL_ADMIN_MAX_LIFETIME_SECONDS:\s*"?(\d+)"?/);
+      const lifetimeMatch = /EPHEMERAL_ADMIN_MAX_LIFETIME_SECONDS:\s*"?(\d+)"?/.exec(source);
+      expect(lifetimeMatch?.[1]).toBeDefined();
+      expect(Number(lifetimeMatch![1])).toBeGreaterThan(0);
+      expect(source).toMatch(/HOLD_OPERATION_LEASE_EXPIRED/);
+      const verifyContextSource = jobSource('verify-operation-context');
+      expect(verifyContextSource).toMatch(/createTime/);
+      expect(verifyContextSource).toMatch(/EPHEMERAL_ADMIN_MAX_LIFETIME_SECONDS/);
+      // Nunca se introduce un trigger `schedule:` para forzar limpieza —
+      // la aplicación del lease es reactiva, dentro del propio dispatch.
+      const onBlock = /\non:\n([\s\S]*?)\npermissions:/.exec(source)?.[1] ?? '';
+      expect(onBlock).not.toMatch(/^\s*schedule:/m);
+    });
+
+    it('P1-4a: guard expone sha_drift_detected (escrito ANTES del exit del chequeo de drift) y deriva mode/operation_id antes de ese chequeo, para que el cleanup automático pueda derivar nombres de recurso', () => {
+      const guardSource = jobSource('guard');
+      expect(guardSource).toMatch(/sha_drift_detected: \$\{\{ steps\.checks\.outputs\.sha_drift_detected \}\}/);
+      const echoModeIdx = guardSource.indexOf('echo "mode=$MODE" >> "$GITHUB_OUTPUT"');
+      const driftCheckIdx = guardSource.indexOf('sha_drift_detected=YES');
+      expect(echoModeIdx).toBeGreaterThan(-1);
+      expect(driftCheckIdx).toBeGreaterThan(-1);
+      expect(echoModeIdx).toBeLessThan(driftCheckIdx);
+    });
+
+    it('P1-4b: cleanup-after-apply corre para CUALQUIER dispatch mode=apply con guard_pass=YES — ya NO exige context_verified==YES (eso ocultaba el drift que más necesita cleanup)', () => {
+      const cleanupAfterApplySource = jobSource('cleanup-after-apply');
+      expect(cleanupAfterApplySource).not.toMatch(/needs\.verify-operation-context\.outputs\.context_verified == 'YES'/);
+      expect(cleanupAfterApplySource).toMatch(/always\(\) && needs\.guard\.outputs\.guard_pass == 'YES' && needs\.guard\.outputs\.mode == 'apply'/);
+    });
+
+    it('P1-4a/P1-4b: cleanup-only también se dispara automáticamente cuando guard rechazó apply por drift de SHA (sha_drift_detected==YES), no solo por dispatch manual mode=cleanup_only', () => {
+      const cleanupOnlySource = jobSource('cleanup-only');
+      expect(cleanupOnlySource).toMatch(/needs\.guard\.outputs\.sha_drift_detected == 'YES'/);
+    });
+
+    it('P1-5: databaseRoles del admin efímero Y de korixa_app se prueban EXACTOS vía JSON estructurado (nunca grep/substring), con HOLD_TARGET_DATABASE_ROLES_DRIFT si difieren', () => {
+      const verifyContextSource = jobSource('verify-operation-context');
+      expect(verifyContextSource).not.toMatch(/grep -qi cloudsqlsuperuser/);
+      expect(verifyContextSource).toMatch(/HOLD_TARGET_DATABASE_ROLES_DRIFT/);
+      const exactChecks = [...verifyContextSource.matchAll(/roles == \['cloudsqlsuperuser'\]/g)];
+      expect(exactChecks.length).toBeGreaterThanOrEqual(2); // admin + target
+    });
+
+    it('P1-6: SECRET_LATEST_REFERENCES = 0 — el DSN secret siempre se referencia con versión fijada ":1", nunca ":latest"; drift de versión ENABLED dispara HOLD_OPERATION_SECRET_VERSION_DRIFT', () => {
+      const latestReferences = [...source.matchAll(/EPHEMERAL_DSN_SECRET\}?:latest/g)];
+      expect(latestReferences).toHaveLength(0);
+      const pinnedReferences = [...source.matchAll(/EPHEMERAL_DSN_SECRET\}:1"/g)];
+      expect(pinnedReferences.length).toBeGreaterThanOrEqual(6); // grant/preflight/apply/verify/revoke(x2)
+      expect(source).toMatch(/HOLD_OPERATION_SECRET_VERSION_DRIFT/);
+    });
+
+    it('P1-7: ni cleanup-only ni cleanup-after-apply ni cleanup-after-stage1-failure exigen needs.resolve-artifact.result == "success" — la eliminación de admin/secret/Job nunca se bloquea por artefacto', () => {
+      for (const jobName of ['cleanup-only', 'cleanup-after-apply', 'cleanup-after-stage1-failure']) {
+        expect(jobSource(jobName)).not.toMatch(/needs\.resolve-artifact\.result == 'success'/);
+      }
+      // Cada revoke best-effort chequea IMMUTABLE_REF antes de intentar el
+      // deploy — nunca asume que la resolución de artefacto tuvo éxito.
+      const immutableRefGuards = [...source.matchAll(/-n "\$IMMUTABLE_REF"|-z "\$IMMUTABLE_REF"/g)];
+      expect(immutableRefGuards.length).toBeGreaterThanOrEqual(3); // cleanup-after-apply, cleanup-only, cleanup-after-stage1-failure
+    });
+
+    it('P2: verify-prerequisites-instance prueba la postura de red EXACTA estructuradamente (JSON) — nunca ipAddresses[0] por índice — con HOLD_PRODUCTION_DB_NETWORK_POSTURE_DRIFT si algo no coincide', () => {
+      const prereqSource = jobSource('verify-prerequisites-instance');
+      // Solo prosa (comentarios) puede mencionar el patrón viejo, explicando
+      // por qué se corrigió — ninguna línea OPERATIVA (gcloud/--format) lo
+      // usa como argumento real.
+      const operationalPrereqLines = prereqSource
+        .split('\n')
+        .filter((line) => !line.trim().startsWith('#'))
+        .join('\n');
+      expect(operationalPrereqLines).not.toMatch(/ipAddresses\[0\]/);
+      expect(prereqSource).toMatch(/HOLD_PRODUCTION_DB_NETWORK_POSTURE_DRIFT/);
+      expect(prereqSource).toMatch(/ipv4Enabled/);
+      expect(prereqSource).toMatch(/type'\) == 'PRIMARY'/);
+      expect(prereqSource).toMatch(/databaseVersion/);
+      expect(prereqSource).toMatch(/privateNetwork/);
+      expect(prereqSource).toMatch(/len\(private_ips\) != 1/);
+    });
   });
 });
