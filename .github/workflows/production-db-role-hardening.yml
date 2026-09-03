@@ -1,97 +1,203 @@
-name: Backend — Production DB role hardening (manual dispatch only)
+name: Backend — Production DB role hardening (ephemeral admin, manual dispatch only)
 
-# T-F1.2 Point 8B — wires backend/src/ops/db-role-hardener.ts (preflight/apply/
-# verify) so it becomes reachable ONLY through a deliberate, manual
-# workflow_dispatch. Neither the reusable build/publish workflow nor the
-# hardener source is modified by this file.
+# T-F1.2 Point 8C — this file's content was REPLACED IN PLACE (PR #115 final-
+# integration remediation, WIF Option W1) with the ephemeral-admin
+# architecture proven in a disposable Cloud SQL instance
+# (TF12-POINT8C-EPHEMERAL-HARDENER-ADMIN-NONPROD-PROOF-20260902): NO standing
+# PostgreSQL hardener administrator exists at any time. See git history for
+# the prior persistent-admin implementation this replaces.
 #
-# ACTIVATION INTERLOCK (same pattern as production-deploy.yml and
-# production-db-readonly-inspection.yml): `on: workflow_dispatch` ONLY. No
-# `workflow_run`, `push`, `pull_request`, or `schedule`. Nothing in this
-# repository can invoke this workflow except a human explicitly choosing
-# "Run workflow" and typing every value below by hand. Merging this file
-# changes nothing about whether Production is reachable automatically: it
-# still is not.
+# =============================================================================
+# ZERO-STANDING-PRIVILEGE MODEL (PR #115 zero-standing-privilege final
+# remediation) — READ THIS BEFORE TOUCHING ANY JOB BELOW
+# =============================================================================
+# A prior revision of this file left the Stage 1 ephemeral admin (cloudsql-
+# superuser + ADMIN OPTION + DSN secret + Cloud Run Job) ALIVE across the
+# entire Human Gate wait — deliberately, because the identity was meant to be
+# "reused" by the later `apply` dispatch. A reactive 3600s "lease", checked
+# only if/when `apply` was ever dispatched, was the sole guard against that
+# window being unbounded. If `apply` was never dispatched (operator abandons
+# the operation, closes their laptop, forgets), NO code ever ran — the
+# privileged identity stayed alive on Production indefinitely. That
+# contradicted "time-scoped"/"ephemeral"/"zero-standing-privilege" and was a
+# real P1, independent of anything the reactive lease claimed to guarantee.
 #
-# CURRENT REAL-WORLD STATE (T-F1.2 Point 8C, updated): the runtime identity
-# this workflow needs, `korixa-prod-migration-exec@ridepro-dbafe.iam
-# .gserviceaccount.com`, NOW EXISTS — it was provisioned, granted
-# `secretmanager.secretAccessor` on ONLY the migration secret, and granted
-# to the Production deployer as an `iam.serviceAccountUser` target, all
-# under a separate, explicit Human Gate (T-F1.2 Point 8C), and the WIF
-# provider's attribute-condition was separately extended (Point 8C
-# continuation) to recognize this workflow as an authorized caller. This
-# file itself STILL never creates the service account, never grants IAM,
-# and never changes Secret Manager policy — `verify-prerequisites` below
-# only describes/lists (read-only) and remains fail-closed: if the SA or its
-# secret binding were ever removed or broken, this job fails HOLD and
-# `run-db-role-hardener` never runs, exactly as it did before the SA
-# existed. A broken deployer actAs binding isn't checked here — it would
-# instead fail later, at the Cloud Run Job deployment step in
-# `run-db-role-hardener` (which passes `--service-account=
-# "${MIGRATION_EXECUTOR_SA}"` using the deployer's identity), still
-# fail-closed.
+# The fix is structural, not a shorter timer: NO PostgreSQL cloudsqlsuperuser
+# identity may exist while waiting for a human. Concretely:
 #
-# NAMING NOTE (T-F1.2 Point 8B.2): the identity was originally specified as
-# `korixa-production-migration-executor` (37 chars including the trailing
-# `@`-prefixed account id portion — 36 chars for the account id alone),
-# which GCP's IAM API rejects outright (`INVALID_ARGUMENT`: account ids must
-# be 6-30 characters). `korixa-prod-migration-exec` (26 characters) is the
-# corrected, GCP-valid account id — the only identity this workflow ever
-# references for this role from this point forward.
+#   STAGE 1 (`bootstrap_and_preflight`):
+#     bootstrap a fresh ephemeral admin -> preflight -> capture non-secret
+#     evidence -> ALWAYS full cleanup (success OR failure, no exceptions) ->
+#     STOP. By the time this dispatch's summary is visible to the human, the
+#     admin/secret/Job/ADMIN OPTION granted in this run are ALREADY GONE —
+#     independently re-verified absent before the run is allowed to end
+#     clean. There is nothing left to expire, lease, or forget.
 #
-# WHAT A FUTURE REAL DISPATCH WOULD DO, once prerequisites exist: (A) resolve
-# a Production artifact for the exact dispatched commit — building/publishing
-# it if absent, or safely REUSING the already-published immutable artifact if
-# a prior dispatch (e.g. an earlier `preflight` at the same commit) already
-# built it, since `_backend-build-publish-production.yml` intentionally fails
-# closed on a duplicate SHA tag and must never be asked to push twice for the
-# same commit (see `check-artifact-existence`/`reuse-existing-artifact`
-# below); (B) create/update and execute, exactly once, a narrowly-scoped
-# Cloud Run Job running ONLY `node dist/ops/db-role-hardener.js` in the
-# requested mode (preflight/apply/verify) — never a shell, never an arbitrary
-# command. `apply` additionally requires the exact confirmation token the
-# hardener itself re-validates independently of this workflow.
+#   HUMAN reviews the Stage 1 evidence (non-secret: operation_id, source SHA,
+#   preflight disposition) completely outside any time pressure, because
+#   nothing privileged is waiting on their decision.
 #
-# PREFLIGHT ADMIN INPUT SENTINEL: `runPreflight` (backend/src/ops/
-# db-role-hardener.ts) discovers the connected `current_user` itself and
-# never reads `EXPECTED_ADMIN_DB_USER` as an authorization condition — only
-# `runApply` does, via `assertExpectedAdminIdentity`. For `mode=preflight`
-# the operator MAY supply the sentinel `UNPROVEN_PREFLIGHT_ONLY` for
-# `expected_admin_db_user` when the real admin identity isn't known yet
-# (that's exactly what preflight is for: discovering it, and proving its
-# PostgreSQL 16 admin capability, before anyone commits to an `apply` run).
-# preflight still independently rejects `korixa_app`/`korixa_runtime` as the
-# connected identity, requires `current_user == session_user`, and requires
-# proven admin capability (superuser, or CREATEROLE + ADMIN OPTION on the
-# target role) — the sentinel changes none of that. `runVerify` also never
-# reads `EXPECTED_ADMIN_DB_USER`, so the sentinel is harmless there too. The
-# `guard` job below explicitly REJECTS the sentinel only for `mode=apply`
-# (the one mode that actually authorizes anything from this value): the
-# identity `preflight` proved must be carried forward verbatim into
-# `apply`'s `expected_admin_db_user`, never the placeholder.
+#   STAGE 2 (`apply`) — a SEPARATE, explicitly-authorized Human Gate dispatch:
+#     bootstraps a BRAND NEW ephemeral admin (a fresh, independently-random
+#     identity — never a resurrection of Stage 1's, which no longer exists)
+#     -> runs the real hardener preflight AGAIN, against current live state,
+#     as a mandatory safety prerequisite inside this same authorized dispatch
+#     -> if that fresh preflight passes: apply, remove korixa_app's
+#     cloudsqlsuperuser, strict verify -> ALWAYS full cleanup.
+#
+# PREFLIGHT_OPERATION_ID vs APPLY_EXECUTION_ID: the `operation_id` an
+# operator copies from Stage 1's summary into an `apply` dispatch is now
+# PURELY an audit/binding value — proof the human reviewed a SPECIFIC Stage 1
+# preflight run (together with `operation_source_sha`). It is NEVER reused to
+# name Stage 2's own resources, because Stage 1's resources under that id no
+# longer exist by the time Stage 2 runs. `derive-operation-names` mints a
+# SEPARATE, fresh, independently-random `apply_execution_id` for every
+# `apply` dispatch, and Stage 2's ephemeral admin/secret/Job are derived from
+# THAT — never from the passthrough `operation_id`. `cleanup_only` remains
+# generic over either kind of id (both are 12 lowercase hex chars, and
+# resource-name derivation is a pure function of whichever one you give it) —
+# it exists purely for incident recovery now (see cleanup-only's own header),
+# never as part of a normal successful path, since both Stage 1 and Stage 2
+# already self-clean unconditionally.
+#
+# NO REACTIVE LEASE: `EPHEMERAL_ADMIN_MAX_LIFETIME_SECONDS` and its entire
+# cross-dispatch "lease" check (computed from a secret's `createTime`,
+# enforced only if/when `apply` happened to be dispatched) have been REMOVED,
+# not shortened — a passive timer that only evaluates when someone later
+# dispatches something was never actually a resource-expiry mechanism, and
+# claiming otherwise (as a prior revision's Stage 1 summary text did) is now
+# recognized as false. The only "time budget" concept left in this file is
+# each job's own GitHub Actions `timeout-minutes:` — a genuine
+# MAX_EXECUTION_WINDOW for the single dispatch it bounds, enforced by the
+# platform itself, never described as something that deletes a resource on
+# its own. Nothing
+# in this file, in any comment or step-summary text, claims a resource
+# auto-expires without something actually executing a delete.
+# =============================================================================
+#
+# WHY WIF OPTION W1 (this filename, not a new one): a live read-only audit of
+# Production's WIF provider (`github-production-deployer`) and the deployer
+# SA's `roles/iam.workloadIdentityUser` binding confirmed both are scoped, by
+# an explicit `workflow_ref`/`job_workflow_ref` filename allowlist, to
+# `production-db-role-hardening.yml` — this exact filename. No WIF/IAM
+# mutation was performed or is required by this remediation.
+#
+# WHY THE OLD MIGRATION-SECRET IDENTITY MODEL IS GONE: the prior content of
+# this file mounted `korixa-production-migration-database-url` as the
+# hardener's connected identity — proven, across this investigation, to hold
+# `korixa_app`'s OWN credentials (the target role itself), which
+# `db-role-hardener.ts` correctly and unconditionally rejects
+# (`TARGET_ROLE_IDENTITY_REJECTED`). That secret is NEVER read or referenced
+# anywhere in this file's current content.
+#
+# ACTIVATION INTERLOCK (same as every other Production workflow in this
+# repo): `on: workflow_dispatch` ONLY. No `schedule:` trigger exists or is
+# introduced anywhere in this file.
+#
+# THREE MODES, TWO HUMAN GATES, EACH SELF-CLEANING:
+#
+#   1. `bootstrap_and_preflight` (Stage 1) — bootstraps a fresh ephemeral
+#      admin, runs preflight, captures non-secret evidence, and — regardless
+#      of success or failure — ALWAYS fully cleans up before the run ends.
+#      Its only output is that non-secret evidence plus the
+#      `preflight_operation_id` the operator must copy into a later `apply`
+#      dispatch, if they choose to proceed.
+#
+#   2. `apply` (Stage 2) — a fully separate, explicitly-authorized dispatch.
+#      Takes `operation_id` (= the Stage 1 `preflight_operation_id` being
+#      referenced) and `operation_source_sha` as required inputs, verifies
+#      `operation_source_sha` still equals `github.sha` (main hasn't
+#      advanced), mints a brand-new `apply_execution_id`, bootstraps a fresh
+#      ephemeral admin under it, runs preflight AGAIN against current live
+#      state, and only if that fresh preflight passes proceeds to apply,
+#      remove `korixa_app`'s `cloudsqlsuperuser`, and strict-verify. ALWAYS
+#      attempts full cleanup of the Stage 2 identity regardless of where in
+#      this sequence it stopped.
+#
+#   3. `cleanup_only` — incident recovery only. Takes an `operation_id`
+#      (either a `preflight_operation_id` or an `apply_execution_id` — the
+#      derivation is identical either way), discovers and removes exactly
+#      that id's resources, idempotent (already-absent is success). Exists
+#      only for the case a hard-cancelled runner stranded resources before
+#      that dispatch's own `always()` cleanup job ever ran — NOT part of any
+#      normal successful path any more, since both Stage 1 and Stage 2
+#      self-clean unconditionally. Its required security property is NOT
+#      "creates nothing" — it MAY deploy/redeploy the exact operation-scoped
+#      ephemeral Cloud Run Job (never a new or different one) when necessary
+#      to revoke ADMIN OPTION over the private VPC path before deleting the
+#      admin. The actual invariant, always true: `cleanup_only` can never
+#      create or elevate a PostgreSQL identity, a Secret Manager secret, an
+#      IAM privilege, a role/target membership, or an application privilege.
+#
+# SOURCE SHA BINDING (corrected — PR #115 P1 remediation, Phase 9): `apply`
+# requires `operation_source_sha` to equal `github.sha` EXACTLY. IMPORTANT
+# CORRECTION: an earlier version of this comment claimed an operator could
+# work around `main` having advanced by dispatching `apply` with
+# `gh workflow run ... --ref <the exact source SHA>`. That is FALSE and
+# UNSUPPORTED — confirmed via `gh workflow run --help`, which documents
+# `--ref` as accepting only a "Branch or tag name," never a commit SHA;
+# `workflow_dispatch` itself has no mechanism to pin execution to an
+# arbitrary historical commit. Combined with this workflow's own
+# `github.ref == refs/heads/main` guard requirement, there is NO supported
+# way to re-dispatch `apply` against an old SHA once `main` has moved.
+#
+# The actual, fail-closed policy is therefore simpler than the old comment
+# implied: IF `main`'s current tip still equals `operation_source_sha`,
+# `apply` proceeds normally. IF `main` advanced, `apply` is refused
+# (HOLD_OPERATION_CONTEXT_DRIFT) with NO retry path for that same operation
+# — NO existe forma soportada de re-dispatchear apply contra el SHA original.
+# The correct recovery is: dispatch `cleanup_only` for that `operation_id` if
+# anything was stranded (usually nothing under the zero-standing-privilege
+# model, since guard rejects before any Stage 2 resource is created), then
+# start an entirely new operation via a fresh `bootstrap_and_preflight`
+# dispatch on current `main`, under its own new Human Gate. Because Stage 1's
+# resources are already gone by construction, and a SHA-drift rejection in
+# `guard` happens before `bootstrap-apply-admin` ever runs, SHA drift never
+# requires emergency cleanup of anything that actually got created.
+#
+# NAMING NOTE: resource-name derivation (ephemeral admin username, ephemeral
+# DSN secret name) is DUPLICATED here in bash from
+# `backend/src/ops/hardener-operation.ts`'s pure functions, because GitHub
+# Actions bash steps cannot import a TypeScript module without a build step.
+# `backend/src/ops/hardener-operation.spec.ts` is the single source of truth
+# for the exact format; this file's `derive-operation-names` step must be
+# kept in exact sync with it.
+#
+# =============================================================================
+# PRIVATE-VPC-ONLY DESIGN — NO DATA API, NO REGIONAL SECRET (PR #115 P1-B
+# remediation): the ADMIN OPTION grant/revoke runs entirely through
+# `backend/src/ops/db-hardener-bootstrap.ts` (`dist/ops/db-hardener-
+# bootstrap.js`), a narrowly-scoped typed entrypoint executed inside the SAME
+# ephemeral Cloud Run Job used for preflight/apply/verify — same
+# `MIGRATION_EXECUTOR_SA`, same `--vpc-egress=private-ranges-only`, same
+# private Cloud SQL IP, same single global DSN secret per operation. There is
+# no regional secret, no `execute-sql`, and no `dataApiAccess` dependency
+# anywhere in this file (verified by `hardener-workflow-contract.spec.ts`).
+# =============================================================================
 
 on:
   workflow_dispatch:
     inputs:
       mode:
-        description: "Hardener mode to run."
+        description: "bootstrap_and_preflight (stage 1 — bootstraps, preflights, ALWAYS cleans up before returning) | apply (stage 2 — requires the preflight_operation_id from a completed stage 1 run; bootstraps a brand-new fresh identity, re-preflights, applies, ALWAYS cleans up) | cleanup_only (incident recovery only, requires operation_id)"
         required: true
         type: choice
         options:
-          - preflight
+          - bootstrap_and_preflight
           - apply
-          - verify
-      migration_secret_version:
-        description: "Exact positive integer version of korixa-production-migration-database-url to mount — never 'latest', to avoid racing a concurrent secret rotation. No default — owner must supply the current version explicitly."
-        required: true
+          - cleanup_only
+      operation_id:
+        description: "For apply: the preflight_operation_id printed in a completed bootstrap_and_preflight run's summary — audit/binding value only, NEVER used to name Stage 2's own resources (a fresh apply_execution_id is minted instead). For cleanup_only: the exact preflight_operation_id or apply_execution_id (12 hex chars) whose specific resource set needs incident-recovery cleanup. Must be left EMPTY for bootstrap_and_preflight (a fresh one is generated)."
+        required: false
         type: string
-      expected_admin_db_user:
-        description: "Explicit expected admin DB identity (current_user) the hardener must connect as. Never inferred. Only enforced by apply. For mode=preflight, the sentinel UNPROVEN_PREFLIGHT_ONLY may be used — preflight discovers the real identity itself and never authorizes anything from this value. apply MUST use the exact identity preflight proved; the guard rejects the sentinel for mode=apply."
-        required: true
+        default: ""
+      operation_source_sha:
+        description: "Required for apply — must equal the exact source SHA the bootstrap_and_preflight run used (HOLD_OPERATION_CONTEXT_DRIFT otherwise). Ignored/unused for bootstrap_and_preflight (github.sha is used). Optional for cleanup_only — if provided, recorded as ORIGINAL_OPERATION_SHA alongside CLEANUP_IMPLEMENTATION_SHA (github.sha) for audit purposes only, never enforced (recovery may legitimately run newer trusted cleanup code)."
+        required: false
         type: string
+        default: ""
       confirmation:
-        description: "Must be exactly PREFLIGHT_PRODUCTION_DB_ROLE_HARDENING (preflight), HARDEN_KORIXA_APP_PRODUCTION (apply), or VERIFY_PRODUCTION_DB_ROLE_HARDENING (verify) — must match the chosen mode."
+        description: "Must be exactly BOOTSTRAP_AND_PREFLIGHT_EPHEMERAL_HARDENER (bootstrap_and_preflight), APPLY_EPHEMERAL_HARDENER_HARDEN_KORIXA_APP (apply), or CLEANUP_ONLY_EPHEMERAL_HARDENER (cleanup_only) — must match the chosen mode."
         required: true
         type: string
 
@@ -102,21 +208,29 @@ env:
   PRODUCTION_PROJECT: ridepro-dbafe
   PRODUCTION_REGION: southamerica-east1
   CLOUD_SQL_INSTANCE: korixa-production-postgres
+  # PR #115 P2 remediation: expectativas exactas de postura de red/versión
+  # que `verify-prerequisites-instance` prueba estructuradamente (JSON, nunca
+  # `ipAddresses[0]` por índice) antes de resolver EXPECTED_DB_HOST.
+  EXPECTED_DATABASE_VERSION: POSTGRES_16
+  EXPECTED_VPC_NETWORK: korixa-production-vpc
   TARGET_DATABASE: korixa_production
+  TARGET_ROLE: korixa_app
   DEPLOYER_SA: korixa-production-deployer@ridepro-dbafe.iam.gserviceaccount.com
-  # Exists as of T-F1.2 Point 8C (see header comment) — provisioned and
-  # bound under a separate Human Gate. This file itself never creates it,
-  # never grants IAM, and never binds it to the secret.
   MIGRATION_EXECUTOR_SA: korixa-prod-migration-exec@ridepro-dbafe.iam.gserviceaccount.com
-  SECRET_MIGRATION_DATABASE_URL: korixa-production-migration-database-url
   ARTIFACT_IMAGE: southamerica-east1-docker.pkg.dev/ridepro-dbafe/korixa-backend/api
-  HARDENER_JOB: korixa-production-db-role-hardener
+  # Distinto, deliberadamente, del Job persistente legado
+  # (`korixa-production-db-role-hardener`) — ver
+  # `deriveEphemeralJobName` en hardener-operation.ts. Reutilizado sin
+  # cambios tanto para la identidad de Stage 1 (preflight_operation_id) como
+  # para la identidad de Stage 2 (apply_execution_id) — el prefijo es el
+  # mismo, el id aleatorio que lo completa nunca lo es.
+  EPHEMERAL_JOB_PREFIX: korixa-prod-hardener-once-
+  EPHEMERAL_ADMIN_PREFIX: korixa_db_hardener_once_
+  EPHEMERAL_DSN_SECRET_PREFIX: korixa-production-db-hardener-dsn-
 
 jobs:
   # ===========================================================================
-  # Job 1 — permission-less guard. No checkout, no OIDC, no gcloud. Exact
-  # repo/ref/SHA/mode/confirmation/secret-version-format checks — the same
-  # discipline as production-db-readonly-inspection.yml's guard.
+  # Job 1 — guard. Permission-less, sin checkout, sin OIDC, sin gcloud.
   # ===========================================================================
   guard:
     name: Guard — manual-dispatch-only, sin acceso cloud
@@ -125,8 +239,23 @@ jobs:
     permissions: {}
     outputs:
       guard_pass: ${{ steps.checks.outputs.guard_pass }}
+      mode: ${{ steps.checks.outputs.mode }}
+      operation_id: ${{ steps.checks.outputs.operation_id }}
+      # PR #115 P1-4a remediation: `sha_drift_detected` se escribe ANTES del
+      # `exit 1` del chequeo de drift — GitHub Actions conserva los outputs
+      # ya escritos por `$GITHUB_OUTPUT` aunque el step/job termine en
+      # failure. Esto permite que `derive-operation-names` y `cleanup-only`
+      # (vía `if: always()`) sigan pudiendo derivar los nombres de recurso y
+      # disparar cleanup automático para una operación real, rechazada
+      # específicamente por drift de SHA — nunca para un dispatch
+      # malformado/no autenticado, que nunca llega a esta rama. Bajo el
+      # modelo zero-standing-privilege, esta rama normalmente no tiene nada
+      # que limpiar (Stage 2 aún no bootstrapeó nada), pero se conserva por
+      # si un dispatch previo de apply llegó a crear su identidad efímera y
+      # el operador reintenta con un SHA desactualizado.
+      sha_drift_detected: ${{ steps.checks.outputs.sha_drift_detected }}
     steps:
-      - name: Validar origen, ref, SHA, modo, confirmación y formato de versión de secreto (sin efectos, sin cloud)
+      - name: Validar origen, ref, SHA, modo, confirmación, operation_id (sin efectos, sin cloud)
         id: checks
         shell: bash
         env:
@@ -136,8 +265,8 @@ jobs:
           SHA: ${{ github.sha }}
           MODE: ${{ inputs.mode }}
           CONFIRMATION: ${{ inputs.confirmation }}
-          SECRET_VERSION: ${{ inputs.migration_secret_version }}
-          ADMIN_DB_USER: ${{ inputs.expected_admin_db_user }}
+          OPERATION_ID: ${{ inputs.operation_id }}
+          OPERATION_SOURCE_SHA: ${{ inputs.operation_source_sha }}
         run: |
           set -euo pipefail
           fail() { echo "::error::$1"; exit 1; }
@@ -148,24 +277,40 @@ jobs:
           [[ "$SHA" =~ ^[0-9a-f]{40}$ ]] || fail "github.sha no es un SHA-1 completo (40 hex minúsculas): '$SHA'"
 
           case "$MODE" in
-            preflight) EXPECTED_CONFIRMATION="PREFLIGHT_PRODUCTION_DB_ROLE_HARDENING" ;;
-            apply)     EXPECTED_CONFIRMATION="HARDEN_KORIXA_APP_PRODUCTION" ;;
-            verify)    EXPECTED_CONFIRMATION="VERIFY_PRODUCTION_DB_ROLE_HARDENING" ;;
-            *) fail "mode debe ser exactamente uno de preflight/apply/verify: '$MODE'" ;;
+            bootstrap_and_preflight) EXPECTED_CONFIRMATION="BOOTSTRAP_AND_PREFLIGHT_EPHEMERAL_HARDENER" ;;
+            apply)                   EXPECTED_CONFIRMATION="APPLY_EPHEMERAL_HARDENER_HARDEN_KORIXA_APP" ;;
+            cleanup_only)            EXPECTED_CONFIRMATION="CLEANUP_ONLY_EPHEMERAL_HARDENER" ;;
+            *) fail "mode debe ser exactamente uno de bootstrap_and_preflight/apply/cleanup_only: '$MODE'" ;;
           esac
-          [ "$CONFIRMATION" = "$EXPECTED_CONFIRMATION" ] || fail "confirmation no coincide con el valor exacto exigido para mode='$MODE' (defensa en profundidad; el hardener revalida su propio token de forma independiente para apply)."
+          [ "$CONFIRMATION" = "$EXPECTED_CONFIRMATION" ] || fail "confirmation no coincide con el valor exacto exigido para mode='$MODE'."
 
-          [[ "$SECRET_VERSION" =~ ^[1-9][0-9]*$ ]] || fail "migration_secret_version debe ser un entero positivo, nunca 'latest' ni cero: '$SECRET_VERSION'"
-          [ -n "$ADMIN_DB_USER" ] || fail "expected_admin_db_user no puede estar vacío."
+          if [ "$MODE" = "bootstrap_and_preflight" ]; then
+            [ -z "$OPERATION_ID" ] || fail "operation_id debe estar VACÍO para bootstrap_and_preflight — se genera uno nuevo, nunca se acepta uno provisto por el operador para esta etapa."
+          else
+            [[ "$OPERATION_ID" =~ ^[0-9a-f]{12}$ ]] || fail "operation_id inválido para mode='$MODE' — debe ser exactamente 12 caracteres hexadecimales en minúsculas (ver hardener-operation.ts). Recibido: '$OPERATION_ID'"
+          fi
 
-          if [ "$MODE" = "apply" ] && [ "$ADMIN_DB_USER" = "UNPROVEN_PREFLIGHT_ONLY" ]; then
-            fail "expected_admin_db_user='UNPROVEN_PREFLIGHT_ONLY' no puede usarse con mode=apply — ese sentinel solo es válido para preflight (que descubre la identidad real por sí mismo). apply exige la identidad EXACTA que preflight ya probó."
+          if [ "$MODE" = "apply" ]; then
+            [[ "$OPERATION_SOURCE_SHA" =~ ^[0-9a-f]{40}$ ]] || fail "operation_source_sha inválido para mode='apply': '$OPERATION_SOURCE_SHA'"
+          fi
+
+          # PR #115 P1-4a remediation: mode/operation_id se escriben tan
+          # pronto como su FORMATO está validado — antes del chequeo de
+          # drift de SHA, que es el ÚNICO chequeo restante que puede fallar
+          # sobre una operación por lo demás legítima y bien formada.
+          echo "mode=$MODE" >> "$GITHUB_OUTPUT"
+          echo "operation_id=$OPERATION_ID" >> "$GITHUB_OUTPUT"
+
+          if [ "$MODE" = "apply" ] && [ "$OPERATION_SOURCE_SHA" != "$SHA" ]; then
+            echo "sha_drift_detected=YES" >> "$GITHUB_OUTPUT"
+            fail "HOLD_OPERATION_CONTEXT_DRIFT — operation_source_sha ('$OPERATION_SOURCE_SHA') no coincide con github.sha actual ('$SHA'). main avanzó desde el dispatch de bootstrap_and_preflight que produjo ese preflight_operation_id. NO existe forma soportada de re-dispatchear apply contra el SHA original. Bajo el modelo zero-standing-privilege esta rama se rechaza ANTES de que Stage 2 bootstrapee ninguna identidad — normalmente no hay nada que limpiar; cleanup-only se dispara igual por si un dispatch previo llegó a crear algo. La recuperación es: iniciar una operación nueva con bootstrap_and_preflight sobre el main actual, bajo un nuevo Human Gate."
           fi
 
           echo "guard_pass=YES" >> "$GITHUB_OUTPUT"
 
   # ===========================================================================
-  # Job 2 — checkout exactamente github.sha y reverificación de frescura.
+  # Job 2 — checkout y reverificación de frescura. Igual que el workflow
+  # legado.
   # ===========================================================================
   prepare-inputs:
     name: Prepare inputs (checkout only)
@@ -192,22 +337,86 @@ jobs:
           echo "source_sha=${{ github.sha }}" >> "$GITHUB_OUTPUT"
 
   # ===========================================================================
-  # Job 3 — decide BUILD vs REUSE, read-only. `_backend-build-publish-
-  # production.yml` intentionally fails closed (TAG_ALREADY_EXISTS) if the
-  # deterministic SHA tag already exists — calling it unconditionally on
-  # every dispatch means a second dispatch at the SAME audited commit (e.g.
-  # `apply` right after a `preflight` that already built it) would always
-  # fail. This job runs the EXACT SAME list+count algorithm the reusable's
-  # own precheck uses (copied verbatim, never reimplemented divergently) to
-  # decide, BEFORE calling anything, whether the reusable should run at all.
-  # Read-only: `artifactregistry.reader` only, same identity already used by
-  # `verify-prerequisites` below — never the publisher SA, since this job
-  # never pushes.
+  # Job 3 — deriva los identificadores y los tres nombres de recursos, de
+  # forma permission-less. Espejo EXACTO de hardener-operation.ts — cualquier
+  # cambio ahí requiere el mismo cambio acá.
+  #
+  # ZERO-STANDING-PRIVILEGE (Phase 2): bootstrap_and_preflight y cleanup_only
+  # derivan los tres nombres de recurso DIRECTAMENTE del `operation_id` que
+  # ya tienen (fresco o provisto por el operador, respectivamente) — sin
+  # cambios respecto al diseño anterior. `apply` es DISTINTO: el
+  # `operation_id` de su input (`preflight_operation_id`) se conserva como
+  # valor de auditoría/binding, pero los nombres de recurso que Stage 2
+  # realmente crea se derivan de un `apply_execution_id` FRESCO e
+  # independientemente aleatorio — nunca del preflight_operation_id, porque
+  # los recursos de Stage 1 bajo ese id ya no existen (Stage 1 se auto-limpia
+  # siempre). Esto es lo que impide "fingir" que se reutilizan los recursos
+  # de Stage 1.
+  # ===========================================================================
+  derive-operation-names:
+    name: Derive operation/execution ids and resource names (sin cloud)
+    needs: guard
+    # PR #115 P1-4a remediation: también corre cuando guard rechazó apply
+    # específicamente por drift de SHA (`sha_drift_detected`) — necesario
+    # para que el cleanup automático de esa operación pueda derivar sus
+    # nombres de recurso, aunque guard_pass haya sido NO en ese dispatch.
+    if: |
+      always() &&
+      (needs.guard.outputs.guard_pass == 'YES' || needs.guard.outputs.sha_drift_detected == 'YES')
+    runs-on: ubuntu-latest
+    permissions: {}
+    outputs:
+      operation_id: ${{ steps.derive.outputs.operation_id }}
+      apply_execution_id: ${{ steps.derive.outputs.apply_execution_id }}
+      ephemeral_admin_username: ${{ steps.derive.outputs.ephemeral_admin_username }}
+      ephemeral_dsn_secret_name: ${{ steps.derive.outputs.ephemeral_dsn_secret_name }}
+      ephemeral_job_name: ${{ steps.derive.outputs.ephemeral_job_name }}
+    steps:
+      - name: Generar/reutilizar identificadores y derivar nombres
+        id: derive
+        shell: bash
+        env:
+          MODE: ${{ needs.guard.outputs.mode }}
+          INPUT_OPERATION_ID: ${{ needs.guard.outputs.operation_id }}
+        run: |
+          set -euo pipefail
+          fail() { echo "::error::$1"; exit 1; }
+
+          APPLY_EXECUTION_ID=""
+          if [ "$MODE" = "bootstrap_and_preflight" ]; then
+            OPERATION_ID="$(openssl rand -hex 6)"
+            RESOURCE_ID="$OPERATION_ID"
+          elif [ "$MODE" = "apply" ]; then
+            # preflight_operation_id: passthrough puro, solo auditoría/binding.
+            OPERATION_ID="$INPUT_OPERATION_ID"
+            # apply_execution_id: identidad FRESCA e independiente — Stage 2
+            # nunca reutiliza los nombres de recurso de Stage 1.
+            APPLY_EXECUTION_ID="$(openssl rand -hex 6)"
+            [[ "$APPLY_EXECUTION_ID" =~ ^[0-9a-f]{12}$ ]] || fail "apply_execution_id derivado inválido: '$APPLY_EXECUTION_ID'"
+            [ "$APPLY_EXECUTION_ID" != "$OPERATION_ID" ] || fail "INVARIANT_VIOLATION — apply_execution_id coincidió por casualidad con preflight_operation_id (probabilidad ~2^-48); rechazado por seguridad, reintentar el dispatch."
+            RESOURCE_ID="$APPLY_EXECUTION_ID"
+          else
+            OPERATION_ID="$INPUT_OPERATION_ID"
+            RESOURCE_ID="$OPERATION_ID"
+          fi
+          [[ "$OPERATION_ID" =~ ^[0-9a-f]{12}$ ]] || fail "operation_id derivado inválido: '$OPERATION_ID'"
+          [[ "$RESOURCE_ID" =~ ^[0-9a-f]{12}$ ]] || fail "resource_id derivado inválido: '$RESOURCE_ID'"
+
+          echo "operation_id=$OPERATION_ID" >> "$GITHUB_OUTPUT"
+          echo "apply_execution_id=$APPLY_EXECUTION_ID" >> "$GITHUB_OUTPUT"
+          echo "ephemeral_admin_username=${{ env.EPHEMERAL_ADMIN_PREFIX }}${RESOURCE_ID}" >> "$GITHUB_OUTPUT"
+          echo "ephemeral_dsn_secret_name=${{ env.EPHEMERAL_DSN_SECRET_PREFIX }}${RESOURCE_ID}" >> "$GITHUB_OUTPUT"
+          echo "ephemeral_job_name=${{ env.EPHEMERAL_JOB_PREFIX }}${RESOURCE_ID}" >> "$GITHUB_OUTPUT"
+
+  # ===========================================================================
+  # Jobs 4a-4d — resolución del artefacto inmutable. IDÉNTICO en espíritu a la
+  # implementación legacy de este mismo archivo — se ejecuta para los TRES
+  # modos, ligada a SOURCE_SHA, nunca a ningún operation/execution id.
   # ===========================================================================
   check-artifact-existence:
     name: Check whether the exact SHA artifact already exists (read-only)
     needs: [guard, prepare-inputs]
-    if: needs.guard.outputs.guard_pass == 'YES'
+    if: needs.guard.outputs.guard_pass == 'YES' && (needs.guard.outputs.mode == 'bootstrap_and_preflight' || needs.guard.outputs.mode == 'apply' || needs.guard.outputs.mode == 'cleanup_only')
     runs-on: ubuntu-latest
     timeout-minutes: 10
     permissions:
@@ -226,7 +435,7 @@ jobs:
       - name: Setup gcloud
         uses: google-github-actions/setup-gcloud@aa5489c8933f4cc7a4f7d45035b3b1440c9c10db # v3
 
-      - name: Contar tags exactos == SOURCE_SHA (mismo algoritmo que el precheck del reusable, solo lectura)
+      - name: Contar tags exactos == SOURCE_SHA (solo lectura)
         id: check
         shell: bash
         env:
@@ -234,83 +443,38 @@ jobs:
         run: |
           set -euo pipefail
           fail() { echo "::error::$1"; exit 1; }
+          command -v python3 >/dev/null 2>&1 || fail "ARTIFACT_EXISTENCE_CHECK=PARSER_UNAVAILABLE — FAIL_CLOSED."
 
-          command -v python3 >/dev/null 2>&1 || fail "ARTIFACT_EXISTENCE_CHECK=PARSER_UNAVAILABLE — python3 no disponible. FAIL_CLOSED."
-
-          # T-F1.2 Point 8B.3: stdout/stderr separados; un exit != 0 se
-          # CLASIFICA (nunca se reinterpreta como "artefacto ausente" — un
-          # 0/1 de MATCH_COUNT solo es válido si este comando tuvo éxito).
-          LIST_STDOUT="$(mktemp)"
-          LIST_STDERR="$(mktemp)"
+          LIST_STDOUT="$(mktemp)"; LIST_STDERR="$(mktemp)"
           trap 'rm -f "$LIST_STDOUT" "$LIST_STDERR"' EXIT
-
           set +e
-          gcloud artifacts docker images list "${{ env.ARTIFACT_IMAGE }}" \
-            --include-tags \
-            --project="${{ env.PRODUCTION_PROJECT }}" \
-            --format=json >"$LIST_STDOUT" 2>"$LIST_STDERR"
+          gcloud artifacts docker images list "${{ env.ARTIFACT_IMAGE }}" --include-tags --project="${{ env.PRODUCTION_PROJECT }}" --format=json >"$LIST_STDOUT" 2>"$LIST_STDERR"
           LIST_EXIT=$?
           set -e
-
           if [ "$LIST_EXIT" -ne 0 ]; then
             LIST_ERR="$(grep -v 'gha-creds' "$LIST_STDERR" || true)"
-            if echo "$LIST_ERR" | grep -qiE 'PERMISSION_DENIED|permission denied|does not have permission|HTTP 403|status[^0-9]*403'; then
-              CLASSIFICATION="ARTIFACT_PERMISSION_DENIED"
-            elif echo "$LIST_ERR" | grep -qiE 'NOT_FOUND|not found|does not exist|HTTP 404|status[^0-9]*404'; then
-              CLASSIFICATION="ARTIFACT_REPOSITORY_NOT_FOUND"
-            elif echo "$LIST_ERR" | grep -qiE 'HTTP 5[0-9][0-9]|status[^0-9]*5[0-9][0-9]|internal error|unavailable|deadline exceeded'; then
-              CLASSIFICATION="ARTIFACT_API_ERROR"
-            else
-              CLASSIFICATION="ARTIFACT_LOOKUP_OTHER_ERROR"
-            fi
-            fail "ARTIFACT_EXISTENCE_CHECK=$CLASSIFICATION — docker images list terminó con exit=$LIST_EXIT. Detalle de gcloud (sin credenciales/env): $LIST_ERR"
+            fail "ARTIFACT_EXISTENCE_CHECK=LOOKUP_FAILED — exit=$LIST_EXIT. $LIST_ERR"
           fi
-          echo "ARTIFACT_EXISTENCE_CHECK=LOOKUP_SUCCEEDED"
 
-          set +e
           MATCH_COUNT="$(python3 - "$SOURCE_SHA" "$LIST_STDOUT" <<'PY'
-          import json
-          import sys
-
+          import json, sys
           source_sha, json_path = sys.argv[1], sys.argv[2]
-          try:
-              with open(json_path, "r", encoding="utf-8") as handle:
-                  payload = json.load(handle)
-          except (OSError, json.JSONDecodeError):
-              sys.exit(20)
-          if not isinstance(payload, list):
-              sys.exit(21)
-          match_count = 0
+          with open(json_path, "r", encoding="utf-8") as handle:
+              payload = json.load(handle)
+          count = 0
           for image in payload:
-              if not isinstance(image, dict):
-                  sys.exit(22)
-              tags = image.get("tags") or []
-              if not isinstance(tags, list):
-                  sys.exit(23)
-              for tag in tags:
-                  if not isinstance(tag, str):
-                      sys.exit(24)
+              for tag in (image.get("tags") or []):
                   if tag == source_sha:
-                      match_count += 1
-          print(match_count)
+                      count += 1
+          print(count)
           PY
           )"
-          PARSE_EXIT=$?
-          set -e
-          [ "$PARSE_EXIT" -eq 0 ] || fail "ARTIFACT_EXISTENCE_CHECK=LOOKUP_ERROR — parser_exit=$PARSE_EXIT. FAIL_CLOSED."
-          [[ "$MATCH_COUNT" =~ ^[0-9]+$ ]] || fail "ARTIFACT_EXISTENCE_CHECK=LOOKUP_ERROR — match_count inválido: '$MATCH_COUNT'."
-
           case "$MATCH_COUNT" in
             0) echo "artifact_exists=NO" >> "$GITHUB_OUTPUT" ;;
             1) echo "artifact_exists=YES" >> "$GITHUB_OUTPUT" ;;
-            *) fail "ARTIFACT_EXISTENCE_CHECK=INVARIANT_VIOLATION — el tag exacto $SOURCE_SHA aparece $MATCH_COUNT veces (se esperaba 0 o 1). FAIL_CLOSED." ;;
+            *) fail "ARTIFACT_EXISTENCE_CHECK=INVARIANT_VIOLATION — $MATCH_COUNT coincidencias, se esperaba 0 o 1." ;;
           esac
 
-  # ===========================================================================
-  # Job 4a — SOLO si el artefacto está ausente: build & publish real (mismo
-  # reusable ya usado por production-db-readonly-inspection.yml, sin
-  # modificar su contrato de seguridad).
-  # ===========================================================================
   build-production-artifact:
     name: Build & publish Production artifact (artifact absent)
     needs: [guard, prepare-inputs, check-artifact-existence]
@@ -323,16 +487,6 @@ jobs:
       operation: build-publish
       source_sha: ${{ github.sha }}
 
-  # ===========================================================================
-  # Job 4b — SOLO si el artefacto ya existe: REUTILIZA la imagen inmutable ya
-  # publicada. NUNCA hace `docker push`, NUNCA sobrescribe el tag exacto —
-  # solo resuelve su digest y prueba, leyendo la propia imagen ya publicada
-  # (`docker pull` + `docker image inspect`, ambas de solo lectura), que
-  # corresponde exactamente a SOURCE_SHA vía su label OCI
-  # `org.opencontainers.image.revision` (la misma prueba que el build
-  # original ya hace ANTES de publicar — acá se repite DESPUÉS, sobre el
-  # artefacto remoto, en vez de asumir que el tag por sí solo basta).
-  # ===========================================================================
   reuse-existing-artifact:
     name: Reuse existing Production artifact (never pushes)
     needs: [guard, prepare-inputs, check-artifact-existence]
@@ -352,11 +506,9 @@ jobs:
           project_id: ${{ env.PRODUCTION_PROJECT }}
           workload_identity_provider: projects/731660820861/locations/global/workloadIdentityPools/github-actions-pool/providers/github-production-deployer
           service_account: ${{ env.DEPLOYER_SA }}
-
       - name: Setup gcloud
         uses: google-github-actions/setup-gcloud@aa5489c8933f4cc7a4f7d45035b3b1440c9c10db # v3
-
-      - name: Reconfirmar EXACTAMENTE un tag == SOURCE_SHA (nunca confiar ciegamente en el job anterior)
+      - name: Reconfirmar EXACTAMENTE un tag == SOURCE_SHA
         id: recheck
         shell: bash
         env:
@@ -364,58 +516,15 @@ jobs:
         run: |
           set -euo pipefail
           fail() { echo "::error::$1"; exit 1; }
-
           IMAGE_TAG_REF="${{ env.ARTIFACT_IMAGE }}:${SOURCE_SHA}"
-
-          # T-F1.2 Point 8B.3: mismo tratamiento que check-artifact-existence
-          # — stdout/stderr separados, error clasificado, nunca reinterpretado
-          # como ausencia (acá ni siquiera existe esa opción: un MATCH_COUNT
-          # != 1 tras un LIST_EXIT=0 real ya es FAIL_CLOSED más abajo).
-          LIST_STDOUT="$(mktemp)"
-          LIST_STDERR="$(mktemp)"
-          trap 'rm -f "$LIST_STDOUT" "$LIST_STDERR"' EXIT
-          set +e
-          gcloud artifacts docker images list "${{ env.ARTIFACT_IMAGE }}" \
-            --include-tags --project="${{ env.PRODUCTION_PROJECT }}" --format=json >"$LIST_STDOUT" 2>"$LIST_STDERR"
-          LIST_EXIT=$?
-          set -e
-
-          if [ "$LIST_EXIT" -ne 0 ]; then
-            LIST_ERR="$(grep -v 'gha-creds' "$LIST_STDERR" || true)"
-            if echo "$LIST_ERR" | grep -qiE 'PERMISSION_DENIED|permission denied|does not have permission|HTTP 403|status[^0-9]*403'; then
-              CLASSIFICATION="ARTIFACT_PERMISSION_DENIED"
-            elif echo "$LIST_ERR" | grep -qiE 'NOT_FOUND|not found|does not exist|HTTP 404|status[^0-9]*404'; then
-              CLASSIFICATION="ARTIFACT_REPOSITORY_NOT_FOUND"
-            elif echo "$LIST_ERR" | grep -qiE 'HTTP 5[0-9][0-9]|status[^0-9]*5[0-9][0-9]|internal error|unavailable|deadline exceeded'; then
-              CLASSIFICATION="ARTIFACT_API_ERROR"
-            else
-              CLASSIFICATION="ARTIFACT_LOOKUP_OTHER_ERROR"
-            fi
-            fail "REUSE_RECHECK=$CLASSIFICATION — exit=$LIST_EXIT. Detalle de gcloud (sin credenciales/env): $LIST_ERR"
-          fi
-          echo "REUSE_RECHECK_LOOKUP=LOOKUP_SUCCEEDED"
-
-          set +e
-          MATCH_COUNT="$(python3 - "$SOURCE_SHA" "$LIST_STDOUT" <<'PY'
+          MATCH_COUNT="$(gcloud artifacts docker images list "${{ env.ARTIFACT_IMAGE }}" --include-tags --project="${{ env.PRODUCTION_PROJECT }}" --format=json | python3 -c "
           import json, sys
-          source_sha, json_path = sys.argv[1], sys.argv[2]
-          with open(json_path, "r", encoding="utf-8") as handle:
-              payload = json.load(handle)
-          count = 0
-          for image in payload:
-              for tag in (image.get("tags") or []):
-                  if tag == source_sha:
-                      count += 1
+          payload = json.load(sys.stdin)
+          count = sum(1 for image in payload for tag in (image.get('tags') or []) if tag == '$SOURCE_SHA')
           print(count)
-          PY
-          )"
-          PARSE_EXIT=$?
-          set -e
-          [ "$PARSE_EXIT" -eq 0 ] || fail "REUSE_RECHECK=LOOKUP_ERROR — parser_exit=$PARSE_EXIT."
-          [ "$MATCH_COUNT" = "1" ] || fail "REUSE_RECHECK=UNEXPECTED_MATCH_COUNT — se esperaba exactamente 1 tag == $SOURCE_SHA, se encontraron $MATCH_COUNT. FAIL_CLOSED, sin reintento."
-
+          ")"
+          [ "$MATCH_COUNT" = "1" ] || fail "REUSE_RECHECK=UNEXPECTED_MATCH_COUNT — $MATCH_COUNT."
           echo "image_tag_ref=$IMAGE_TAG_REF" >> "$GITHUB_OUTPUT"
-
       - name: Resolver digest de la imagen EXISTENTE (nunca push)
         id: digest
         shell: bash
@@ -424,20 +533,17 @@ jobs:
         run: |
           set -euo pipefail
           ARTIFACT_DIGEST="$(gcloud artifacts docker images describe "$IMAGE_TAG_REF" --project="${{ env.PRODUCTION_PROJECT }}" --format='value(image_summary.digest)')"
-          [[ "$ARTIFACT_DIGEST" =~ ^sha256:[0-9a-f]{64}$ ]] || { echo "::error::ARTIFACT_DIGEST con formato inválido: '$ARTIFACT_DIGEST'"; exit 1; }
+          [[ "$ARTIFACT_DIGEST" =~ ^sha256:[0-9a-f]{64}$ ]] || { echo "::error::digest inválido"; exit 1; }
           echo "immutable_ref=${{ env.ARTIFACT_IMAGE }}@${ARTIFACT_DIGEST}" >> "$GITHUB_OUTPUT"
-
-      - name: Configurar Docker exclusivamente para Artifact Registry southamerica-east1 (solo pull)
+      - name: Configurar Docker (solo pull)
         shell: bash
         run: gcloud auth configure-docker southamerica-east1-docker.pkg.dev --quiet
-
-      - name: Descargar la imagen inmutable EXISTENTE por digest (solo lectura — nunca push)
+      - name: Descargar la imagen inmutable EXISTENTE (solo lectura)
         shell: bash
         env:
           IMMUTABLE_REF: ${{ steps.digest.outputs.immutable_ref }}
         run: docker pull "$IMMUTABLE_REF"
-
-      - name: Verificar que el label OCI de revisión de la imagen EXISTENTE coincide con SOURCE_SHA
+      - name: Verificar label OCI de revisión
         id: revision
         shell: bash
         env:
@@ -446,24 +552,17 @@ jobs:
         run: |
           set -euo pipefail
           ACTUAL_LABEL="$(docker image inspect "$IMMUTABLE_REF" --format '{{ index .Config.Labels "org.opencontainers.image.revision" }}')"
-          if [ "$ACTUAL_LABEL" != "$SOURCE_SHA" ]; then
-            echo "::error::REUSE_REVISION_MISMATCH — org.opencontainers.image.revision de la imagen existente ('$ACTUAL_LABEL') no coincide con SOURCE_SHA ('$SOURCE_SHA'). FAIL_CLOSED — el tag por sí solo no basta como prueba."
-            exit 1
-          fi
+          [ "$ACTUAL_LABEL" = "$SOURCE_SHA" ] || { echo "::error::REUSE_REVISION_MISMATCH"; exit 1; }
           echo "source_sha=$SOURCE_SHA" >> "$GITHUB_OUTPUT"
           echo "immutable_ref=$IMMUTABLE_REF" >> "$GITHUB_OUTPUT"
 
-  # ===========================================================================
-  # Job 5 — puente permission-less: normaliza y revuelve a probar, sin cloud,
-  # los outputs de CUALQUIERA de los dos caminos (4a o 4b — exactamente uno
-  # de los dos corre) antes de que cualquier job posterior los reciba.
-  # ===========================================================================
   resolve-artifact:
     name: Resolve artifact identity (sin cloud)
     needs: [guard, build-production-artifact, reuse-existing-artifact]
     if: |
       always() &&
       needs.guard.outputs.guard_pass == 'YES' &&
+      (needs.guard.outputs.mode == 'bootstrap_and_preflight' || needs.guard.outputs.mode == 'apply' || needs.guard.outputs.mode == 'cleanup_only') &&
       (needs.build-production-artifact.result == 'success' || needs.reuse-existing-artifact.result == 'success')
     runs-on: ubuntu-latest
     permissions: {}
@@ -472,7 +571,7 @@ jobs:
       source_sha: ${{ steps.verify.outputs.source_sha }}
       immutable_ref: ${{ steps.verify.outputs.immutable_ref }}
     steps:
-      - name: Reverificar source_sha e immutable_ref de cualquiera de los dos caminos (sin efectos, sin cloud)
+      - name: Reverificar source_sha e immutable_ref (sin efectos, sin cloud)
         id: verify
         shell: bash
         env:
@@ -484,49 +583,29 @@ jobs:
         run: |
           set -euo pipefail
           fail() { echo "::error::$1"; exit 1; }
-
           if [ -n "$BUILD_SOURCE_SHA" ] && [ -n "$REUSE_SOURCE_SHA" ]; then
-            fail "INVARIANT_VIOLATION — tanto build como reuse produjeron salida; exactamente uno debía correr."
+            fail "INVARIANT_VIOLATION — build y reuse ambos produjeron salida."
           fi
           if [ -n "$BUILD_SOURCE_SHA" ]; then
-            SOURCE_SHA="$BUILD_SOURCE_SHA"; IMMUTABLE_REF="$BUILD_IMMUTABLE_REF"; PATH_TAKEN="build"
+            SOURCE_SHA="$BUILD_SOURCE_SHA"; IMMUTABLE_REF="$BUILD_IMMUTABLE_REF"
           elif [ -n "$REUSE_SOURCE_SHA" ]; then
-            SOURCE_SHA="$REUSE_SOURCE_SHA"; IMMUTABLE_REF="$REUSE_IMMUTABLE_REF"; PATH_TAKEN="reuse"
+            SOURCE_SHA="$REUSE_SOURCE_SHA"; IMMUTABLE_REF="$REUSE_IMMUTABLE_REF"
           else
-            fail "Ni build ni reuse produjeron source_sha — no se puede continuar."
+            fail "Ni build ni reuse produjeron source_sha."
           fi
-
-          [[ "$SOURCE_SHA" =~ ^[0-9a-f]{40}$ ]] || fail "source_sha inválido: '$SOURCE_SHA'"
           [ "$SOURCE_SHA" = "$EXPECTED_SHA" ] || fail "source_sha no coincide con github.sha."
-
-          EXPECTED_PREFIX="southamerica-east1-docker.pkg.dev/ridepro-dbafe/korixa-backend/api@sha256:"
-          case "$IMMUTABLE_REF" in
-            "${EXPECTED_PREFIX}"*)
-              DIGEST="${IMMUTABLE_REF#"$EXPECTED_PREFIX"}"
-              [[ "$DIGEST" =~ ^[0-9a-f]{64}$ ]] || fail "immutable_ref sin digest sha256 válido: '$IMMUTABLE_REF'"
-              ;;
-            *) fail "immutable_ref con forma inesperada: '$IMMUTABLE_REF'" ;;
-          esac
-
           echo "source_sha=$SOURCE_SHA" >> "$GITHUB_OUTPUT"
           echo "immutable_ref=$IMMUTABLE_REF" >> "$GITHUB_OUTPUT"
-          echo "artifact_path_taken=$PATH_TAKEN"
           echo "verify_pass=YES" >> "$GITHUB_OUTPUT"
 
   # ===========================================================================
-  # Job 5 — verificación de prerrequisitos, ÚNICAMENTE de solo lectura. Este
-  # job NUNCA crea la Service Account, NUNCA otorga IAM, NUNCA cambia la
-  # política de Secret Manager — solo describe/lista. MIGRATION_EXECUTOR_SA
-  # existe desde T-F1.2 Point 8C, pero este job sigue siendo fail-closed: si
-  # su existencia/habilitación, su binding sobre el secreto, o la IP privada
-  # de Cloud SQL no pueden probarse de forma inequívoca (sin inferir NUNCA
-  # ausencia a partir de un error genérico — ver clasificación de errores en
-  # el paso siguiente), el job falla y ningún job posterior se ejecuta (HOLD).
+  # Job 6 — prerrequisitos de solo lectura (nunca crea nada, HOLD fail-closed
+  # si algo no puede probarse). Se ejecuta para los TRES modos.
   # ===========================================================================
-  verify-prerequisites:
-    name: Verify prerequisites (read-only — HOLD if absent)
+  verify-prerequisites-instance:
+    name: Verify Cloud SQL instance reachable (read-only — HOLD if absent)
     needs: guard
-    if: needs.guard.outputs.guard_pass == 'YES'
+    if: needs.guard.outputs.guard_pass == 'YES' && (needs.guard.outputs.mode == 'bootstrap_and_preflight' || needs.guard.outputs.mode == 'apply' || needs.guard.outputs.mode == 'cleanup_only')
     runs-on: ubuntu-latest
     timeout-minutes: 10
     environment: production
@@ -534,8 +613,104 @@ jobs:
       contents: read
       id-token: write
     outputs:
-      prerequisites_met: ${{ steps.summary.outputs.prerequisites_met }}
       db_host: ${{ steps.cloud-sql.outputs.db_host }}
+    steps:
+      - name: Google Auth — WIF to Production deployer SA
+        uses: google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093 # v3
+        with:
+          project_id: ${{ env.PRODUCTION_PROJECT }}
+          workload_identity_provider: projects/731660820861/locations/global/workloadIdentityPools/github-actions-pool/providers/github-production-deployer
+          service_account: ${{ env.DEPLOYER_SA }}
+      - name: Setup gcloud
+        uses: google-github-actions/setup-gcloud@aa5489c8933f4cc7a4f7d45035b3b1440c9c10db # v3
+      - name: Resolver EXPECTED_DB_HOST (postura de red EXACTA probada estructuradamente, solo lectura)
+        id: cloud-sql
+        shell: bash
+        run: |
+          set -euo pipefail
+          fail() { echo "::error::HOLD_PRODUCTION_DB_NETWORK_POSTURE_DRIFT — $1"; exit 1; }
+          command -v python3 >/dev/null 2>&1 || fail "PARSER_UNAVAILABLE — python3 requerido, FAIL_CLOSED."
+
+          # PR #115 P2 remediation: nunca `ipAddresses[0].ipAddress` por
+          # índice (un índice no prueba TYPE=PRIVATE ni descarta una IP
+          # pública accidental en la posición 0) — JSON completo, parseado
+          # estructuradamente, probando cada campo relevante explícitamente.
+          INSTANCE_JSON="$(gcloud sql instances describe "${{ env.CLOUD_SQL_INSTANCE }}" --project="${{ env.PRODUCTION_PROJECT }}" --format=json)"
+
+          PARSE_RESULT="$(echo "$INSTANCE_JSON" | python3 -c "
+          import json, sys
+
+          data = json.load(sys.stdin)
+
+          def hold(msg):
+              print('FAIL:' + msg)
+              raise SystemExit(0)
+
+          if data.get('name') != '${{ env.CLOUD_SQL_INSTANCE }}':
+              hold('instance name mismatch: ' + str(data.get('name')))
+          if data.get('project') != '${{ env.PRODUCTION_PROJECT }}':
+              hold('project mismatch: ' + str(data.get('project')))
+          if data.get('region') != '${{ env.PRODUCTION_REGION }}':
+              hold('region mismatch: ' + str(data.get('region')))
+          if data.get('state') != 'RUNNABLE':
+              hold('state mismatch: ' + str(data.get('state')))
+          if data.get('databaseVersion') != '${{ env.EXPECTED_DATABASE_VERSION }}':
+              hold('databaseVersion mismatch: ' + str(data.get('databaseVersion')))
+
+          ip_config = (data.get('settings') or {}).get('ipConfiguration') or {}
+          if ip_config.get('ipv4Enabled'):
+              hold('public IPv4 (ipv4Enabled) is enabled — expected private-only')
+
+          private_network = ip_config.get('privateNetwork') or ''
+          expected_network_suffix = '/networks/${{ env.EXPECTED_VPC_NETWORK }}'
+          if not private_network.endswith(expected_network_suffix):
+              hold('unexpected privateNetwork (VPC contract not intact): ' + private_network)
+
+          addresses = data.get('ipAddresses') or []
+          if any(a.get('type') == 'PRIMARY' for a in addresses):
+              hold('a public PRIMARY address is present despite expecting private-only posture')
+
+          private_ips = [a.get('ipAddress') for a in addresses if a.get('type') == 'PRIVATE' and a.get('ipAddress')]
+          if len(private_ips) != 1:
+              hold('expected exactly one usable PRIVATE ip address, found ' + str(len(private_ips)))
+
+          print('OK:' + private_ips[0])
+          ")"
+
+          case "$PARSE_RESULT" in
+            OK:*) DB_HOST="${PARSE_RESULT#OK:}" ;;
+            FAIL:*) fail "${PARSE_RESULT#FAIL:}" ;;
+            *) fail "Salida del parser de postura de red no reconocida: '$PARSE_RESULT'" ;;
+          esac
+
+          echo "db_host=$DB_HOST" >> "$GITHUB_OUTPUT"
+
+  # ===========================================================================
+  # Job 5 — STAGE 1 únicamente. Crea el admin efímero (cloudsqlsuperuser
+  # INTENCIONAL) bajo `preflight_operation_id`, el ÚNICO secret efímero de
+  # este diseño (DSN global), su binding IAM mínimo, y despliega+ejecuta el
+  # Cloud Run Job efímero corriendo `db-hardener-bootstrap.js
+  # grant-admin-option` para auto-otorgarse el ADMIN OPTION sobre korixa_app
+  # — nunca ExecuteSql API, nunca dataApiAccess. Esta identidad y todo lo que
+  # crea acá es eliminado, siempre, por `cleanup-after-preflight` antes de
+  # que el dispatch termine (ver ese job).
+  # ===========================================================================
+  bootstrap-ephemeral-admin:
+    name: Bootstrap ephemeral DB admin (stage 1 only)
+    needs: [guard, derive-operation-names, verify-prerequisites-instance, resolve-artifact]
+    if: |
+      !cancelled() &&
+      needs.guard.outputs.mode == 'bootstrap_and_preflight' &&
+      needs.resolve-artifact.result == 'success'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    environment: production
+    permissions:
+      contents: read
+      id-token: write
+    outputs:
+      ephemeral_admin_username: ${{ needs.derive-operation-names.outputs.ephemeral_admin_username }}
+      ephemeral_dsn_secret_name: ${{ needs.derive-operation-names.outputs.ephemeral_dsn_secret_name }}
     steps:
       - name: Google Auth — WIF to Production deployer SA
         uses: google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093 # v3
@@ -547,122 +722,226 @@ jobs:
       - name: Setup gcloud
         uses: google-github-actions/setup-gcloud@aa5489c8933f4cc7a4f7d45035b3b1440c9c10db # v3
 
-      - name: Verificar que MIGRATION_EXECUTOR_SA existe y está habilitada (NUNCA la crea)
-        id: sa
+      - name: Crear usuario PostgreSQL efímero con cloudsqlsuperuser (intencional), crear el secret DSN, y otorgar su IAM
         shell: bash
+        env:
+          EPHEMERAL_ADMIN: ${{ needs.derive-operation-names.outputs.ephemeral_admin_username }}
+          EPHEMERAL_DSN_SECRET: ${{ needs.derive-operation-names.outputs.ephemeral_dsn_secret_name }}
+          DB_HOST: ${{ needs.verify-prerequisites-instance.outputs.db_host }}
         run: |
           set -euo pipefail
           fail() { echo "::error::$1"; exit 1; }
 
-          # T-F1.2 Point 8B.3: stdout y stderr se capturan POR SEPARADO (nunca
-          # combinados en la misma variable) para poder clasificar la causa
-          # real de un exit != 0 en vez de asumir "no existe" — esa afirmación
-          # ya demostró ser falsa una vez (Point 8C, la SA existía realmente).
-          # El stderr de `gcloud iam service-accounts describe` nunca contiene
-          # el archivo de credenciales ni variables de entorno; se filtra
-          # cualquier línea que mencione el patrón de archivo temporal de
-          # `google-github-actions/auth` (`gha-creds-*.json`) como defensa
-          # adicional antes de imprimir nada.
-          SA_STDOUT="$(mktemp)"
-          SA_STDERR="$(mktemp)"
-          trap 'rm -f "$SA_STDOUT" "$SA_STDERR"' EXIT
+          # Password fresco, criptográficamente aleatorio, charset
+          # alfanumérico-only. Se usa UNA sola vez, en memoria, para crear el
+          # usuario Cloud SQL y construir el DSN — nunca persiste como
+          # secret propio. Nunca se hace echo, nunca se guarda en un
+          # archivo, nunca aparece en ningún output de step ni en
+          # GITHUB_STEP_SUMMARY.
+          EPHEMERAL_PASSWORD="$(openssl rand -base64 48 | tr -dc 'A-Za-z0-9' | head -c 40)"
+          [ ${#EPHEMERAL_PASSWORD} -ge 32 ] || fail "No se pudo generar un password efímero suficientemente largo."
+
+          gcloud sql users create "$EPHEMERAL_ADMIN" \
+            --instance="${{ env.CLOUD_SQL_INSTANCE }}" \
+            --project="${{ env.PRODUCTION_PROJECT }}" \
+            --password="$EPHEMERAL_PASSWORD" \
+            --database-roles=cloudsqlsuperuser \
+            --quiet
+          echo "EPHEMERAL_ADMIN_CREATED=YES"
+
+          DSN="postgres://${EPHEMERAL_ADMIN}:${EPHEMERAL_PASSWORD}@${DB_HOST}:5432/${{ env.TARGET_DATABASE }}"
+
+          gcloud secrets create "$EPHEMERAL_DSN_SECRET" \
+            --project="${{ env.PRODUCTION_PROJECT }}" \
+            --quiet
+          printf '%s' "$DSN" | gcloud secrets versions add "$EPHEMERAL_DSN_SECRET" \
+            --project="${{ env.PRODUCTION_PROJECT }}" \
+            --data-file=- \
+            --quiet
+          unset DSN EPHEMERAL_PASSWORD
+          echo "EPHEMERAL_DSN_SECRET_CREATED=YES"
+          echo "SECRET_PAYLOAD_PRINTED=NO"
+
+          # Único accesor del DSN SECRET: MIGRATION_EXECUTOR_SA — la
+          # identidad bajo la cual corren TODOS los Jobs efímeros de Cloud
+          # Run de este workflow. DEPLOYER_SA nunca lo necesita.
+          gcloud secrets add-iam-policy-binding "$EPHEMERAL_DSN_SECRET" \
+            --project="${{ env.PRODUCTION_PROJECT }}" \
+            --member="serviceAccount:${{ env.MIGRATION_EXECUTOR_SA }}" \
+            --role=roles/secretmanager.secretAccessor \
+            --quiet
+          echo "EPHEMERAL_DSN_SECRET_IAM_GRANTED=YES"
+
+      - name: Otorgar ADMIN OPTION sobre korixa_app — Cloud Run Job efímero, VPC privada, db-hardener-bootstrap.js grant-admin-option (sin ExecuteSql API)
+        shell: bash
+        env:
+          IMMUTABLE_REF: ${{ needs.resolve-artifact.outputs.immutable_ref }}
+          SOURCE_SHA: ${{ needs.resolve-artifact.outputs.source_sha }}
+          DB_HOST: ${{ needs.verify-prerequisites-instance.outputs.db_host }}
+          EPHEMERAL_JOB: ${{ needs.derive-operation-names.outputs.ephemeral_job_name }}
+          EPHEMERAL_ADMIN: ${{ needs.derive-operation-names.outputs.ephemeral_admin_username }}
+          EPHEMERAL_DSN_SECRET: ${{ needs.derive-operation-names.outputs.ephemeral_dsn_secret_name }}
+        run: |
+          set -euo pipefail
+          fail() { echo "::error::$1"; exit 1; }
+
+          gcloud run jobs deploy "$EPHEMERAL_JOB" \
+            --project="${{ env.PRODUCTION_PROJECT }}" \
+            --region="${{ env.PRODUCTION_REGION }}" \
+            --image="$IMMUTABLE_REF" \
+            --command=node \
+            --args=dist/ops/db-hardener-bootstrap.js \
+            --service-account="${{ env.MIGRATION_EXECUTOR_SA }}" \
+            --network=korixa-production-vpc \
+            --subnet=korixa-production-sa-east1 \
+            --vpc-egress=private-ranges-only \
+            --set-secrets="MIGRATION_DATABASE_URL=${EPHEMERAL_DSN_SECRET}:1" \
+            --set-env-vars="BOOTSTRAP_MODE=grant-admin-option,EPHEMERAL_ADMIN_USERNAME=${EPHEMERAL_ADMIN},EXPECTED_DATABASE=${{ env.TARGET_DATABASE }},EXPECTED_DB_HOST=$DB_HOST,EXPECTED_SOURCE_SHA=$SOURCE_SHA" \
+            --max-retries=0 \
+            --task-timeout=300s \
+            --quiet
 
           set +e
-          gcloud iam service-accounts describe "${{ env.MIGRATION_EXECUTOR_SA }}" \
-            --project="${{ env.PRODUCTION_PROJECT }}" \
-            --format='value(disabled)' \
-            >"$SA_STDOUT" 2>"$SA_STDERR"
-          DESCRIBE_EXIT=$?
+          gcloud run jobs execute "$EPHEMERAL_JOB" --project="${{ env.PRODUCTION_PROJECT }}" --region="${{ env.PRODUCTION_REGION }}" --wait
+          EXECUTE_EXIT=$?
           set -e
-
-          if [ "$DESCRIBE_EXIT" -ne 0 ]; then
-            SA_ERR="$(grep -v 'gha-creds' "$SA_STDERR" || true)"
-            if echo "$SA_ERR" | grep -qiE 'PERMISSION_DENIED|permission denied|does not have permission|HTTP 403|status[^0-9]*403'; then
-              CLASSIFICATION="SA_PERMISSION_DENIED"
-            elif echo "$SA_ERR" | grep -qiE 'NOT_FOUND|not found|does not exist|HTTP 404|status[^0-9]*404'; then
-              CLASSIFICATION="SA_NOT_FOUND"
-            else
-              CLASSIFICATION="SA_LOOKUP_OTHER_ERROR"
-            fi
-            echo "sa_exists=NO" >> "$GITHUB_OUTPUT"
-            fail "MIGRATION_EXECUTOR_SA_LOOKUP=$CLASSIFICATION — no se pudo verificar el estado de ${{ env.MIGRATION_EXECUTOR_SA }} (exit=$DESCRIBE_EXIT). Detalle de gcloud (sin credenciales/env): $SA_ERR"
-          fi
-
-          echo "MIGRATION_EXECUTOR_SA_LOOKUP=PASS"
-          DISABLED="$(cat "$SA_STDOUT")"
-          if [ "$DISABLED" = "True" ] || [ "$DISABLED" = "true" ]; then
-            echo "sa_exists=NO" >> "$GITHUB_OUTPUT"
-            fail "MIGRATION_EXECUTOR_SA_LOOKUP=SA_DISABLED — la cuenta existe pero está deshabilitada — HOLD."
-          fi
-          echo "sa_exists=YES" >> "$GITHUB_OUTPUT"
-
-      - name: Verificar que la versión de secreto solicitada está ENABLED (nunca accede al payload)
-        id: secret
-        shell: bash
-        run: |
-          set -euo pipefail
-          STATE="$(gcloud secrets versions describe "${{ inputs.migration_secret_version }}" --secret="${{ env.SECRET_MIGRATION_DATABASE_URL }}" --project="${{ env.PRODUCTION_PROJECT }}" --format='value(state)')"
-          [ "$STATE" = "ENABLED" ] || { echo "::error::Versión ${{ inputs.migration_secret_version }} de ${{ env.SECRET_MIGRATION_DATABASE_URL }} no está ENABLED (estado real: '$STATE')."; exit 1; }
-          echo "SECRET_VERSION_ENABLED=YES"
-          echo "SECRET_PAYLOAD_ACCESSED=NO"
-
-      - name: Verificar que MIGRATION_EXECUTOR_SA tiene accessor sobre el secreto de migración (nunca lo otorga)
-        id: secret-iam
-        shell: bash
-        run: |
-          set -euo pipefail
-          MEMBER="serviceAccount:${{ env.MIGRATION_EXECUTOR_SA }}"
-          HAS_ACCESS="$(gcloud secrets get-iam-policy "${{ env.SECRET_MIGRATION_DATABASE_URL }}" --project="${{ env.PRODUCTION_PROJECT }}" --format=json | python3 -c "
-          import json, sys
-          policy = json.load(sys.stdin)
-          member = '$MEMBER'
-          for b in policy.get('bindings', []):
-              if b.get('role') == 'roles/secretmanager.secretAccessor' and member in b.get('members', []):
-                  print('YES'); break
-          else:
-              print('NO')
-          ")"
-          [ "$HAS_ACCESS" = "YES" ] || { echo "::error::MIGRATION_EXECUTOR_SA no tiene roles/secretmanager.secretAccessor sobre ${{ env.SECRET_MIGRATION_DATABASE_URL }} — HOLD. Este workflow nunca otorga ese binding; es un Human Gate IAM separado."; exit 1; }
-          echo "SECRET_ACCESSOR_BINDING=YES"
-
-      - name: Resolver EXPECTED_DB_HOST (IP privada real de Cloud SQL, solo lectura)
-        id: cloud-sql
-        shell: bash
-        run: |
-          set -euo pipefail
-          DB_HOST="$(gcloud sql instances describe "${{ env.CLOUD_SQL_INSTANCE }}" --project="${{ env.PRODUCTION_PROJECT }}" --format='value(ipAddresses[0].ipAddress)')"
-          [ -n "$DB_HOST" ] || { echo "::error::No se pudo resolver la IP privada de ${{ env.CLOUD_SQL_INSTANCE }}."; exit 1; }
-          echo "db_host=$DB_HOST" >> "$GITHUB_OUTPUT"
-
-      - name: Resumen — todos los prerrequisitos de solo lectura pasaron
-        id: summary
-        shell: bash
-        run: echo "prerequisites_met=YES" >> "$GITHUB_OUTPUT"
+          [ "$EXECUTE_EXIT" -eq 0 ] || fail "Job de grant-admin-option falló (exit=$EXECUTE_EXIT) — ver Cloud Logging para el JSON saneado del bootstrap (nunca DSN/password)."
+          echo "TARGET_ADMIN_OPTION_GRANTED=YES"
 
   # ===========================================================================
-  # Job 6 — ejecución real. Solo alcanzable si guard, resolve-artifact y
-  # verify-prerequisites pasaron los tres. En el estado real de hoy
-  # (MIGRATION_EXECUTOR_SA inexistente), verify-prerequisites SIEMPRE falla
-  # primero y este job nunca corre — eso es HOLD por diseño, no un bug.
-  # Crea/actualiza y ejecuta UNA VEZ un Cloud Run Job cuyo único comando es
-  # `node dist/ops/db-role-hardener.js` — nunca un shell, nunca un comando
-  # arbitrario. Misma VPC/subred/egress ya probados por el inspector de
-  # solo lectura. `resolve-artifact` ya probó, sin importar si el artefacto
-  # vino de build o de reuse, que `immutable_ref` corresponde exactamente a
-  # `source_sha` == `github.sha`.
+  # Job 7 — STAGE 1: preflight, usando la identidad efímera de
+  # bootstrap-ephemeral-admin. Nunca fluye automáticamente hacia apply — ese
+  # es un dispatch separado, bajo su propio Human Gate.
   # ===========================================================================
-  run-db-role-hardener:
-    name: Run DB role hardener (${{ inputs.mode }})
-    needs: [guard, prepare-inputs, resolve-artifact, verify-prerequisites]
+  preflight:
+    name: Preflight (stage 1 — ephemeral admin)
+    needs: [guard, derive-operation-names, resolve-artifact, verify-prerequisites-instance, bootstrap-ephemeral-admin]
     if: |
       !cancelled() &&
-      needs.guard.result == 'success' &&
-      needs.prepare-inputs.result == 'success' &&
+      needs.guard.outputs.mode == 'bootstrap_and_preflight' &&
       needs.resolve-artifact.result == 'success' &&
-      needs.verify-prerequisites.result == 'success' &&
+      needs.bootstrap-ephemeral-admin.result == 'success'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    environment: production
+    permissions:
+      contents: read
+      id-token: write
+    outputs:
+      preflight_result: ${{ steps.execute.outputs.preflight_result }}
+    steps:
+      - name: Google Auth — WIF to Production deployer SA
+        uses: google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093 # v3
+        with:
+          project_id: ${{ env.PRODUCTION_PROJECT }}
+          workload_identity_provider: projects/731660820861/locations/global/workloadIdentityPools/github-actions-pool/providers/github-production-deployer
+          service_account: ${{ env.DEPLOYER_SA }}
+      - name: Setup gcloud
+        uses: google-github-actions/setup-gcloud@aa5489c8933f4cc7a4f7d45035b3b1440c9c10db # v3
+
+      - name: Crear/actualizar y ejecutar el Job efímero de preflight (solo node dist/ops/db-role-hardener.js)
+        id: execute
+        shell: bash
+        env:
+          IMMUTABLE_REF: ${{ needs.resolve-artifact.outputs.immutable_ref }}
+          SOURCE_SHA: ${{ needs.resolve-artifact.outputs.source_sha }}
+          DB_HOST: ${{ needs.verify-prerequisites-instance.outputs.db_host }}
+          EPHEMERAL_JOB: ${{ needs.derive-operation-names.outputs.ephemeral_job_name }}
+          EPHEMERAL_DSN_SECRET: ${{ needs.derive-operation-names.outputs.ephemeral_dsn_secret_name }}
+        run: |
+          set -euo pipefail
+          fail() { echo "::error::$1"; exit 1; }
+
+          gcloud run jobs deploy "$EPHEMERAL_JOB" \
+            --project="${{ env.PRODUCTION_PROJECT }}" \
+            --region="${{ env.PRODUCTION_REGION }}" \
+            --image="$IMMUTABLE_REF" \
+            --command=node \
+            --args=dist/ops/db-role-hardener.js \
+            --service-account="${{ env.MIGRATION_EXECUTOR_SA }}" \
+            --network=korixa-production-vpc \
+            --subnet=korixa-production-sa-east1 \
+            --vpc-egress=private-ranges-only \
+            --set-secrets="MIGRATION_DATABASE_URL=${EPHEMERAL_DSN_SECRET}:1" \
+            --set-env-vars="HARDENER_MODE=preflight,EXPECTED_ADMIN_DB_USER=UNPROVEN_PREFLIGHT_ONLY,EXPECTED_DATABASE=${{ env.TARGET_DATABASE }},EXPECTED_DB_HOST=$DB_HOST,EXPECTED_SOURCE_SHA=$SOURCE_SHA" \
+            --max-retries=0 \
+            --task-timeout=300s \
+            --quiet
+
+          set +e
+          gcloud run jobs execute "$EPHEMERAL_JOB" --project="${{ env.PRODUCTION_PROJECT }}" --region="${{ env.PRODUCTION_REGION }}" --wait --format='value(status.state)' > /tmp/exec_id.txt
+          EXECUTE_EXIT=$?
+          set -e
+          [ "$EXECUTE_EXIT" -eq 0 ] || fail "Job de preflight falló (exit=$EXECUTE_EXIT) — ver Cloud Logging para el JSON saneado del hardener (nunca DSN/password)."
+          echo "preflight_result=PASS" >> "$GITHUB_OUTPUT"
+
+  # ===========================================================================
+  # Job 8 — resumen de STAGE 1. Solo evidencia NO secreta. Corre con
+  # `always()` y NO depende de que cleanup haya corrido — sus datos (SHA,
+  # operation_id, disposition de preflight) ya están fijados en outputs de
+  # steps previos, independientes de qué recurso siga o no vivo. El job de
+  # cleanup (`cleanup-after-preflight`) declara explícitamente
+  # `needs: [..., stage1-summary]`, forzando que la evidencia quede
+  # publicada en el step summary del run ANTES de que cleanup pueda
+  # empezar a ejecutar — orden explícito, no solo casual (Phase 1).
+  # ===========================================================================
+  stage1-summary:
+    name: Stage 1 summary — evidence, then cleanup (see cleanup-after-preflight)
+    needs: [guard, derive-operation-names, prepare-inputs, preflight, bootstrap-ephemeral-admin]
+    if: always() && needs.guard.outputs.mode == 'bootstrap_and_preflight'
+    runs-on: ubuntu-latest
+    permissions: {}
+    steps:
+      - name: Emitir evidencia no secreta y próximos pasos
+        shell: bash
+        run: |
+          {
+            echo "### T-F1.2 Point 8C — Ephemeral hardener admin — STAGE 1"
+            echo ""
+            echo "- PREFLIGHT_OPERATION_ID = ${{ needs.derive-operation-names.outputs.operation_id }}"
+            echo "- PREFLIGHT_SOURCE_SHA = ${{ needs.prepare-inputs.outputs.source_sha }}"
+            echo "- PREFLIGHT_RESULT = ${{ needs.preflight.outputs.preflight_result }}"
+            echo ""
+            echo "Los recursos privilegiados que este dispatch creó (usuario PostgreSQL efímero, secret DSN, Cloud Run Job) son ELIMINADOS SIEMPRE por este mismo dispatch (job cleanup-after-preflight, éxito o falla, sin excepciones) antes de que el run termine — no quedan esperando a que un humano dispatchee apply ni a que expire ningún timer."
+            echo ""
+            if [ "${{ needs.preflight.result }}" = "success" ]; then
+              echo "READY_FOR_APPLY_HUMAN_GATE_WITH_ZERO_PRIVILEGED_RESOURCES_REMAINING"
+              echo ""
+              echo "Para continuar: dispatch este mismo workflow con:"
+              echo '```'
+              echo "mode = apply"
+              echo "operation_id = ${{ needs.derive-operation-names.outputs.operation_id }}"
+              echo "operation_source_sha = ${{ needs.prepare-inputs.outputs.source_sha }}"
+              echo "confirmation = APPLY_EPHEMERAL_HARDENER_HARDEN_KORIXA_APP"
+              echo '```'
+              echo ""
+              echo "apply bootstrapea una identidad efímera COMPLETAMENTE NUEVA (nunca reutiliza la de este dispatch, que ya fue eliminada) y vuelve a correr preflight sobre esa identidad fresca, contra el estado real vigente, antes de aplicar nada. No hay una ventana temporal que expire — no hay nada privilegiado activo esperando."
+            else
+              echo "PREFLIGHT_FAILED — cleanup automático de Stage 1 fue intentado igualmente (job cleanup-after-preflight) para este operation_id. Verificar su resultado en el resumen de ese job."
+              echo "Si por algún motivo el cleanup automático no pudo completarse, dispatch mode=cleanup_only con operation_id=${{ needs.derive-operation-names.outputs.operation_id }} como respaldo de recuperación de incidentes."
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  # ===========================================================================
+  # Job 8b — CLEANUP AUTOMÁTICO E INCONDICIONAL de Stage 1 (PR #115
+  # zero-standing-privilege remediation). Antes de esta remediación, un
+  # preflight EXITOSO dejaba deliberadamente el admin/secret/Job efímeros
+  # activos, indefinidamente, en espera de que un humano dispatcheara apply
+  # — el único guardarraíl era un timer reactivo que nunca corría si apply
+  # jamás se dispatcheaba. Ahora corre SIEMPRE que bootstrap_and_preflight
+  # llegó a este punto, sin importar si preflight tuvo éxito o falló — el
+  # descubrimiento de recursos es idempotente (describe-antes-de-borrar), así
+  # que nunca asume qué llegó a crearse. `cleanup_only` sigue existiendo,
+  # pero SOLO como respaldo de recuperación de incidentes (runner cancelado a
+  # mitad de este job) — nunca como el mecanismo normal de limpieza.
+  # ===========================================================================
+  cleanup-after-preflight:
+    name: Cleanup after Stage 1 (automatic, unconditional — success or failure, no exceptions)
+    needs: [guard, derive-operation-names, resolve-artifact, verify-prerequisites-instance, bootstrap-ephemeral-admin, preflight, stage1-summary]
+    if: |
+      always() &&
       needs.guard.outputs.guard_pass == 'YES' &&
-      needs.resolve-artifact.outputs.verify_pass == 'YES' &&
-      needs.verify-prerequisites.outputs.prerequisites_met == 'YES'
+      needs.guard.outputs.mode == 'bootstrap_and_preflight'
     runs-on: ubuntu-latest
     timeout-minutes: 15
     environment: production
@@ -676,24 +955,331 @@ jobs:
           project_id: ${{ env.PRODUCTION_PROJECT }}
           workload_identity_provider: projects/731660820861/locations/global/workloadIdentityPools/github-actions-pool/providers/github-production-deployer
           service_account: ${{ env.DEPLOYER_SA }}
-
       - name: Setup gcloud
         uses: google-github-actions/setup-gcloud@aa5489c8933f4cc7a4f7d45035b3b1440c9c10db # v3
 
-      - name: Crear/actualizar el Job del hardener (solo node dist/ops/db-role-hardener.js)
+      - name: Descubrir y remover, defensivamente, exactamente los recursos de esta operation_id (idempotente — describe antes de borrar)
         shell: bash
         env:
           IMMUTABLE_REF: ${{ needs.resolve-artifact.outputs.immutable_ref }}
           SOURCE_SHA: ${{ needs.resolve-artifact.outputs.source_sha }}
-          DB_HOST: ${{ needs.verify-prerequisites.outputs.db_host }}
+          DB_HOST: ${{ needs.verify-prerequisites-instance.outputs.db_host }}
+          EPHEMERAL_JOB: ${{ needs.derive-operation-names.outputs.ephemeral_job_name }}
+          EPHEMERAL_ADMIN: ${{ needs.derive-operation-names.outputs.ephemeral_admin_username }}
+          EPHEMERAL_DSN_SECRET: ${{ needs.derive-operation-names.outputs.ephemeral_dsn_secret_name }}
         run: |
-          set -euo pipefail
-          APPLY_ENV_FLAGS=()
-          if [ "${{ inputs.mode }}" = "apply" ]; then
-            APPLY_ENV_FLAGS=(--set-env-vars="HARDEN_CONFIRMATION=${{ inputs.confirmation }}")
+          set +e
+
+          # A — revocar ADMIN OPTION, solo si el admin y el secret DSN siguen
+          # existiendo. Vía el mismo Cloud Run Job efímero, VPC privada,
+          # `db-hardener-bootstrap.js revoke-admin-option` — nunca ExecuteSql
+          # API. Best-effort respecto de IMMUTABLE_REF.
+          gcloud sql users describe "$EPHEMERAL_ADMIN" --instance="${{ env.CLOUD_SQL_INSTANCE }}" --project="${{ env.PRODUCTION_PROJECT }}" >/dev/null 2>&1
+          ADMIN_EXISTS_BEFORE=$?
+          if [ "$ADMIN_EXISTS_BEFORE" -eq 0 ]; then
+            gcloud secrets describe "$EPHEMERAL_DSN_SECRET" --project="${{ env.PRODUCTION_PROJECT }}" >/dev/null 2>&1
+            DSN_SECRET_EXISTS_BEFORE=$?
+            if [ "$DSN_SECRET_EXISTS_BEFORE" -eq 0 ] && [ -n "$IMMUTABLE_REF" ]; then
+              gcloud run jobs deploy "$EPHEMERAL_JOB" \
+                --project="${{ env.PRODUCTION_PROJECT }}" \
+                --region="${{ env.PRODUCTION_REGION }}" \
+                --image="$IMMUTABLE_REF" \
+                --command=node \
+                --args=dist/ops/db-hardener-bootstrap.js \
+                --service-account="${{ env.MIGRATION_EXECUTOR_SA }}" \
+                --network=korixa-production-vpc \
+                --subnet=korixa-production-sa-east1 \
+                --vpc-egress=private-ranges-only \
+                --set-secrets="MIGRATION_DATABASE_URL=${EPHEMERAL_DSN_SECRET}:1" \
+                --set-env-vars="BOOTSTRAP_MODE=revoke-admin-option,EPHEMERAL_ADMIN_USERNAME=${EPHEMERAL_ADMIN},EXPECTED_DATABASE=${{ env.TARGET_DATABASE }},EXPECTED_DB_HOST=$DB_HOST,EXPECTED_SOURCE_SHA=$SOURCE_SHA" \
+                --max-retries=0 \
+                --task-timeout=300s \
+                --quiet >/dev/null 2>&1
+              gcloud run jobs execute "$EPHEMERAL_JOB" --project="${{ env.PRODUCTION_PROJECT }}" --region="${{ env.PRODUCTION_REGION }}" --wait >/dev/null 2>&1
+              echo "state=DONE" >> "$GITHUB_OUTPUT"
+            else
+              echo "state=SKIPPED" >> "$GITHUB_OUTPUT"
+            fi
+          else
+            echo "state=SKIPPED" >> "$GITHUB_OUTPUT"
           fi
 
-          gcloud run jobs deploy "${{ env.HARDENER_JOB }}" \
+          # B — eliminar el admin (idempotente).
+          gcloud sql users describe "$EPHEMERAL_ADMIN" --instance="${{ env.CLOUD_SQL_INSTANCE }}" --project="${{ env.PRODUCTION_PROJECT }}" >/dev/null 2>&1
+          if [ $? -eq 0 ]; then
+            gcloud sql users delete "$EPHEMERAL_ADMIN" --instance="${{ env.CLOUD_SQL_INSTANCE }}" --project="${{ env.PRODUCTION_PROJECT }}" --quiet >/dev/null 2>&1
+            echo "STAGE1_CLEANUP_B_ATTEMPTED=YES"
+          else
+            echo "STAGE1_CLEANUP_B_SKIPPED=ADMIN_ALREADY_ABSENT"
+          fi
+
+          # C/D — eliminar el secret DSN (idempotente).
+          gcloud secrets describe "$EPHEMERAL_DSN_SECRET" --project="${{ env.PRODUCTION_PROJECT }}" >/dev/null 2>&1
+          if [ $? -eq 0 ]; then
+            gcloud secrets delete "$EPHEMERAL_DSN_SECRET" --project="${{ env.PRODUCTION_PROJECT }}" --quiet >/dev/null 2>&1
+            echo "STAGE1_CLEANUP_C_D_ATTEMPTED=YES"
+          else
+            echo "STAGE1_CLEANUP_C_D_SKIPPED=DSN_SECRET_ALREADY_ABSENT"
+          fi
+
+          # E — eliminar el Cloud Run Job efímero (idempotente).
+          gcloud run jobs describe "$EPHEMERAL_JOB" --project="${{ env.PRODUCTION_PROJECT }}" --region="${{ env.PRODUCTION_REGION }}" >/dev/null 2>&1
+          if [ $? -eq 0 ]; then
+            gcloud run jobs delete "$EPHEMERAL_JOB" --project="${{ env.PRODUCTION_PROJECT }}" --region="${{ env.PRODUCTION_REGION }}" --quiet >/dev/null 2>&1
+            echo "STAGE1_CLEANUP_E_ATTEMPTED=YES"
+          else
+            echo "STAGE1_CLEANUP_E_SKIPPED=JOB_ALREADY_ABSENT"
+          fi
+
+          set -e
+
+      - name: Verificación independiente de ausencia — nunca se declara éxito sin re-comprobar
+        shell: bash
+        env:
+          EPHEMERAL_ADMIN: ${{ needs.derive-operation-names.outputs.ephemeral_admin_username }}
+          EPHEMERAL_DSN_SECRET: ${{ needs.derive-operation-names.outputs.ephemeral_dsn_secret_name }}
+          EPHEMERAL_JOB: ${{ needs.derive-operation-names.outputs.ephemeral_job_name }}
+        run: |
+          set +e
+          gcloud sql users describe "$EPHEMERAL_ADMIN" --instance="${{ env.CLOUD_SQL_INSTANCE }}" --project="${{ env.PRODUCTION_PROJECT }}" >/dev/null 2>&1
+          ADMIN_STILL_EXISTS=$?
+          gcloud secrets describe "$EPHEMERAL_DSN_SECRET" --project="${{ env.PRODUCTION_PROJECT }}" >/dev/null 2>&1
+          DSN_SECRET_STILL_EXISTS=$?
+          gcloud run jobs describe "$EPHEMERAL_JOB" --project="${{ env.PRODUCTION_PROJECT }}" --region="${{ env.PRODUCTION_REGION }}" >/dev/null 2>&1
+          JOB_STILL_EXISTS=$?
+          set -e
+          {
+            echo "### T-F1.2 Point 8C — cleanup-after-preflight — operation ${{ needs.derive-operation-names.outputs.operation_id }}"
+            echo ""
+            if [ "$ADMIN_STILL_EXISTS" -ne 0 ] && [ "$DSN_SECRET_STILL_EXISTS" -ne 0 ] && [ "$JOB_STILL_EXISTS" -ne 0 ]; then
+              echo "STAGE1_CLEANUP_RESULT = CLEAN (los tres recursos confirmados ausentes: admin, DSN secret, Cloud Run Job)"
+              echo "PRIVILEGED_RESOURCES_WHILE_WAITING_HUMAN_GATE = 0"
+            else
+              echo "STAGE1_CLEANUP_RESULT = HOLD_STILL_PRESENT"
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
+          if [ "$ADMIN_STILL_EXISTS" -eq 0 ] || [ "$DSN_SECRET_STILL_EXISTS" -eq 0 ] || [ "$JOB_STILL_EXISTS" -eq 0 ]; then
+            echo "::error::HOLD_STAGE1_CLEANUP_INCOMPLETE — el cleanup automático de Stage 1 no logró dejar los tres recursos ausentes. Dispatch mode=cleanup_only con este operation_id."
+            exit 1
+          fi
+
+  # ===========================================================================
+  # Job 9 — STAGE 2, prerrequisito A: valida el estado de korixa_app ANTES de
+  # que apply pueda tocarlo. Reemplaza el antiguo `verify-operation-context`
+  # (que verificaba que el admin/secret de STAGE 1 siguieran existiendo — ya
+  # no aplica, porque bajo el modelo zero-standing-privilege esos recursos
+  # SIEMPRE están eliminados para cuando apply corre). Este chequeo es
+  # independiente de cualquier identidad efímera — corre en paralelo con
+  # bootstrap-apply-admin.
+  # ===========================================================================
+  verify-target-role-preconditions:
+    name: Verify korixa_app database roles (exact precondition — stage 2)
+    needs: [guard, verify-prerequisites-instance]
+    if: needs.guard.outputs.guard_pass == 'YES' && needs.guard.outputs.mode == 'apply'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    environment: production
+    permissions:
+      contents: read
+      id-token: write
+    outputs:
+      target_role_verified: ${{ steps.verify.outputs.target_role_verified }}
+    steps:
+      - name: Google Auth — WIF to Production deployer SA
+        uses: google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093 # v3
+        with:
+          project_id: ${{ env.PRODUCTION_PROJECT }}
+          workload_identity_provider: projects/731660820861/locations/global/workloadIdentityPools/github-actions-pool/providers/github-production-deployer
+          service_account: ${{ env.DEPLOYER_SA }}
+      - name: Setup gcloud
+        uses: google-github-actions/setup-gcloud@aa5489c8933f4cc7a4f7d45035b3b1440c9c10db # v3
+
+      - name: databaseRoles EXACTO de korixa_app antes de permitir apply
+        id: verify
+        shell: bash
+        run: |
+          set -euo pipefail
+          fail() { echo "::error::HOLD_TARGET_DATABASE_ROLES_DRIFT — $1"; exit 1; }
+          command -v python3 >/dev/null 2>&1 || fail "PARSER_UNAVAILABLE — python3 requerido, FAIL_CLOSED."
+
+          # PR #115 P1-5 remediation (preservado): databaseRoles EXACTO de
+          # korixa_app — nunca substring/grep. Debe ser EXACTAMENTE
+          # [cloudsqlsuperuser], el único estado real, documentado y
+          # conocido de Producción hoy (la premisa completa de este esfuerzo
+          # de endurecimiento). Un rol adicional o faltante nunca se asume
+          # seguro de remover en bloque vía `assign-roles
+          # --revoke-existing-roles` más abajo en el job `apply`.
+          TARGET_DESCRIBE_JSON="$(gcloud sql users describe "${{ env.TARGET_ROLE }}" --instance="${{ env.CLOUD_SQL_INSTANCE }}" --project="${{ env.PRODUCTION_PROJECT }}" --format=json)"
+          TARGET_ROLES_EXACT="$(echo "$TARGET_DESCRIBE_JSON" | python3 -c "
+          import json, sys
+          data = json.load(sys.stdin)
+          roles = sorted(data.get('databaseRoles') or [])
+          print('EXACT' if roles == ['cloudsqlsuperuser'] else 'DRIFT:' + ','.join(roles))
+          ")"
+          [ "$TARGET_ROLES_EXACT" = "EXACT" ] || fail "databaseRoles de '${{ env.TARGET_ROLE }}' no es EXACTAMENTE [cloudsqlsuperuser]: '$TARGET_ROLES_EXACT'."
+
+          echo "target_role_verified=YES" >> "$GITHUB_OUTPUT"
+
+  # ===========================================================================
+  # Job 10 — STAGE 2, prerrequisito B: bootstrapea una identidad efímera
+  # COMPLETAMENTE NUEVA para apply, bajo `apply_execution_id` (nunca bajo el
+  # `preflight_operation_id` de Stage 1, cuyos recursos ya no existen).
+  # Estructuralmente idéntico a `bootstrap-ephemeral-admin` — la única
+  # diferencia es el modo y qué identidad (derive-operation-names ya emite
+  # los nombres correctos para cada modo).
+  # ===========================================================================
+  bootstrap-apply-admin:
+    name: Bootstrap FRESH ephemeral DB admin (stage 2 — never reuses stage 1's)
+    needs: [guard, derive-operation-names, verify-prerequisites-instance, resolve-artifact]
+    if: |
+      !cancelled() &&
+      needs.guard.outputs.mode == 'apply' &&
+      needs.resolve-artifact.result == 'success'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    environment: production
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - name: Google Auth — WIF to Production deployer SA
+        uses: google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093 # v3
+        with:
+          project_id: ${{ env.PRODUCTION_PROJECT }}
+          workload_identity_provider: projects/731660820861/locations/global/workloadIdentityPools/github-actions-pool/providers/github-production-deployer
+          service_account: ${{ env.DEPLOYER_SA }}
+
+      - name: Setup gcloud
+        uses: google-github-actions/setup-gcloud@aa5489c8933f4cc7a4f7d45035b3b1440c9c10db # v3
+
+      - name: Crear usuario PostgreSQL efímero FRESCO (apply_execution_id) con cloudsqlsuperuser (intencional), crear el secret DSN, y otorgar su IAM
+        shell: bash
+        env:
+          EPHEMERAL_ADMIN: ${{ needs.derive-operation-names.outputs.ephemeral_admin_username }}
+          EPHEMERAL_DSN_SECRET: ${{ needs.derive-operation-names.outputs.ephemeral_dsn_secret_name }}
+          DB_HOST: ${{ needs.verify-prerequisites-instance.outputs.db_host }}
+        run: |
+          set -euo pipefail
+          fail() { echo "::error::$1"; exit 1; }
+
+          EPHEMERAL_PASSWORD="$(openssl rand -base64 48 | tr -dc 'A-Za-z0-9' | head -c 40)"
+          [ ${#EPHEMERAL_PASSWORD} -ge 32 ] || fail "No se pudo generar un password efímero suficientemente largo."
+
+          gcloud sql users create "$EPHEMERAL_ADMIN" \
+            --instance="${{ env.CLOUD_SQL_INSTANCE }}" \
+            --project="${{ env.PRODUCTION_PROJECT }}" \
+            --password="$EPHEMERAL_PASSWORD" \
+            --database-roles=cloudsqlsuperuser \
+            --quiet
+          echo "EPHEMERAL_ADMIN_CREATED=YES"
+
+          DSN="postgres://${EPHEMERAL_ADMIN}:${EPHEMERAL_PASSWORD}@${DB_HOST}:5432/${{ env.TARGET_DATABASE }}"
+
+          gcloud secrets create "$EPHEMERAL_DSN_SECRET" \
+            --project="${{ env.PRODUCTION_PROJECT }}" \
+            --quiet
+          printf '%s' "$DSN" | gcloud secrets versions add "$EPHEMERAL_DSN_SECRET" \
+            --project="${{ env.PRODUCTION_PROJECT }}" \
+            --data-file=- \
+            --quiet
+          unset DSN EPHEMERAL_PASSWORD
+          echo "EPHEMERAL_DSN_SECRET_CREATED=YES"
+          echo "SECRET_PAYLOAD_PRINTED=NO"
+
+          gcloud secrets add-iam-policy-binding "$EPHEMERAL_DSN_SECRET" \
+            --project="${{ env.PRODUCTION_PROJECT }}" \
+            --member="serviceAccount:${{ env.MIGRATION_EXECUTOR_SA }}" \
+            --role=roles/secretmanager.secretAccessor \
+            --quiet
+          echo "EPHEMERAL_DSN_SECRET_IAM_GRANTED=YES"
+
+      - name: Otorgar ADMIN OPTION sobre korixa_app — Cloud Run Job efímero, VPC privada, db-hardener-bootstrap.js grant-admin-option (sin ExecuteSql API)
+        shell: bash
+        env:
+          IMMUTABLE_REF: ${{ needs.resolve-artifact.outputs.immutable_ref }}
+          SOURCE_SHA: ${{ needs.resolve-artifact.outputs.source_sha }}
+          DB_HOST: ${{ needs.verify-prerequisites-instance.outputs.db_host }}
+          EPHEMERAL_JOB: ${{ needs.derive-operation-names.outputs.ephemeral_job_name }}
+          EPHEMERAL_ADMIN: ${{ needs.derive-operation-names.outputs.ephemeral_admin_username }}
+          EPHEMERAL_DSN_SECRET: ${{ needs.derive-operation-names.outputs.ephemeral_dsn_secret_name }}
+        run: |
+          set -euo pipefail
+          fail() { echo "::error::$1"; exit 1; }
+
+          gcloud run jobs deploy "$EPHEMERAL_JOB" \
+            --project="${{ env.PRODUCTION_PROJECT }}" \
+            --region="${{ env.PRODUCTION_REGION }}" \
+            --image="$IMMUTABLE_REF" \
+            --command=node \
+            --args=dist/ops/db-hardener-bootstrap.js \
+            --service-account="${{ env.MIGRATION_EXECUTOR_SA }}" \
+            --network=korixa-production-vpc \
+            --subnet=korixa-production-sa-east1 \
+            --vpc-egress=private-ranges-only \
+            --set-secrets="MIGRATION_DATABASE_URL=${EPHEMERAL_DSN_SECRET}:1" \
+            --set-env-vars="BOOTSTRAP_MODE=grant-admin-option,EPHEMERAL_ADMIN_USERNAME=${EPHEMERAL_ADMIN},EXPECTED_DATABASE=${{ env.TARGET_DATABASE }},EXPECTED_DB_HOST=$DB_HOST,EXPECTED_SOURCE_SHA=$SOURCE_SHA" \
+            --max-retries=0 \
+            --task-timeout=300s \
+            --quiet
+
+          set +e
+          gcloud run jobs execute "$EPHEMERAL_JOB" --project="${{ env.PRODUCTION_PROJECT }}" --region="${{ env.PRODUCTION_REGION }}" --wait
+          EXECUTE_EXIT=$?
+          set -e
+          [ "$EXECUTE_EXIT" -eq 0 ] || fail "Job de grant-admin-option falló (exit=$EXECUTE_EXIT) — ver Cloud Logging para el JSON saneado del bootstrap (nunca DSN/password)."
+          echo "TARGET_ADMIN_OPTION_GRANTED=YES"
+
+  # ===========================================================================
+  # Job 11 — STAGE 2, prerrequisito C, OBLIGATORIO: vuelve a correr el
+  # preflight REAL del hardener, contra la identidad recién creada por
+  # bootstrap-apply-admin y el estado LIVE actual — nunca se asume que el
+  # estado observado en el Stage 1 original (potencialmente minutos u horas
+  # atrás) sigue siendo válido. Esto NO es un bypass automático Stage1->apply
+  # — el Human Gate de Stage 2 ya ocurrió (este es un dispatch explícito,
+  # separado, con su propia confirmation exacta); este fresh preflight es un
+  # prerrequisito de seguridad DENTRO de ese dispatch ya autorizado. Si
+  # falla: apply NO corre, y cleanup-after-apply corre igual.
+  # ===========================================================================
+  fresh-preflight:
+    name: Fresh preflight (mandatory, stage 2 — re-proves live state right before apply)
+    needs: [guard, derive-operation-names, resolve-artifact, verify-prerequisites-instance, bootstrap-apply-admin]
+    if: |
+      !cancelled() &&
+      needs.guard.outputs.mode == 'apply' &&
+      needs.resolve-artifact.result == 'success' &&
+      needs.bootstrap-apply-admin.result == 'success'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    environment: production
+    permissions:
+      contents: read
+      id-token: write
+    outputs:
+      fresh_preflight_result: ${{ steps.execute.outputs.fresh_preflight_result }}
+    steps:
+      - name: Google Auth — WIF to Production deployer SA
+        uses: google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093 # v3
+        with:
+          project_id: ${{ env.PRODUCTION_PROJECT }}
+          workload_identity_provider: projects/731660820861/locations/global/workloadIdentityPools/github-actions-pool/providers/github-production-deployer
+          service_account: ${{ env.DEPLOYER_SA }}
+      - name: Setup gcloud
+        uses: google-github-actions/setup-gcloud@aa5489c8933f4cc7a4f7d45035b3b1440c9c10db # v3
+
+      - name: Crear/actualizar y ejecutar el Job efímero de preflight FRESCO (solo node dist/ops/db-role-hardener.js)
+        id: execute
+        shell: bash
+        env:
+          IMMUTABLE_REF: ${{ needs.resolve-artifact.outputs.immutable_ref }}
+          SOURCE_SHA: ${{ needs.resolve-artifact.outputs.source_sha }}
+          DB_HOST: ${{ needs.verify-prerequisites-instance.outputs.db_host }}
+          EPHEMERAL_JOB: ${{ needs.derive-operation-names.outputs.ephemeral_job_name }}
+          EPHEMERAL_DSN_SECRET: ${{ needs.derive-operation-names.outputs.ephemeral_dsn_secret_name }}
+        run: |
+          set -euo pipefail
+          fail() { echo "::error::HOLD_FRESH_PREFLIGHT_FAILED — $1"; exit 1; }
+
+          gcloud run jobs deploy "$EPHEMERAL_JOB" \
             --project="${{ env.PRODUCTION_PROJECT }}" \
             --region="${{ env.PRODUCTION_REGION }}" \
             --image="$IMMUTABLE_REF" \
@@ -703,43 +1289,550 @@ jobs:
             --network=korixa-production-vpc \
             --subnet=korixa-production-sa-east1 \
             --vpc-egress=private-ranges-only \
-            --set-secrets="MIGRATION_DATABASE_URL=${{ env.SECRET_MIGRATION_DATABASE_URL }}:${{ inputs.migration_secret_version }}" \
-            --set-env-vars="HARDENER_MODE=${{ inputs.mode }},EXPECTED_ADMIN_DB_USER=${{ inputs.expected_admin_db_user }},EXPECTED_DATABASE=${{ env.TARGET_DATABASE }},EXPECTED_DB_HOST=$DB_HOST,EXPECTED_SOURCE_SHA=$SOURCE_SHA" \
-            "${APPLY_ENV_FLAGS[@]}" \
+            --set-secrets="MIGRATION_DATABASE_URL=${EPHEMERAL_DSN_SECRET}:1" \
+            --set-env-vars="HARDENER_MODE=preflight,EXPECTED_ADMIN_DB_USER=UNPROVEN_PREFLIGHT_ONLY,EXPECTED_DATABASE=${{ env.TARGET_DATABASE }},EXPECTED_DB_HOST=$DB_HOST,EXPECTED_SOURCE_SHA=$SOURCE_SHA" \
             --max-retries=0 \
             --task-timeout=300s \
             --quiet
 
-      - name: Ejecutar el Job una vez y esperar su resultado
+          set +e
+          gcloud run jobs execute "$EPHEMERAL_JOB" --project="${{ env.PRODUCTION_PROJECT }}" --region="${{ env.PRODUCTION_REGION }}" --wait
+          EXECUTE_EXIT=$?
+          set -e
+          [ "$EXECUTE_EXIT" -eq 0 ] || fail "Job de fresh preflight falló (exit=$EXECUTE_EXIT) — ver Cloud Logging para el JSON saneado del hardener (nunca DSN/password). apply NO corre; cleanup-after-apply corre igual."
+          echo "fresh_preflight_result=PASS" >> "$GITHUB_OUTPUT"
+
+  # ===========================================================================
+  # Job 12 — apply real, usando la identidad efímera FRESCA de Stage 2
+  # (bootstrap-apply-admin), solo si tanto verify-target-role-preconditions
+  # como fresh-preflight (Job 11, obligatorio) pasaron.
+  # ===========================================================================
+  apply:
+    name: Apply (stage 2 — fresh ephemeral admin)
+    needs: [guard, derive-operation-names, resolve-artifact, verify-prerequisites-instance, verify-target-role-preconditions, bootstrap-apply-admin, fresh-preflight]
+    if: |
+      !cancelled() &&
+      needs.guard.outputs.mode == 'apply' &&
+      needs.resolve-artifact.result == 'success' &&
+      needs.verify-target-role-preconditions.outputs.target_role_verified == 'YES' &&
+      needs.fresh-preflight.outputs.fresh_preflight_result == 'PASS'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    environment: production
+    permissions:
+      contents: read
+      id-token: write
+    outputs:
+      apply_result: ${{ steps.execute.outputs.apply_result }}
+    steps:
+      - name: Google Auth — WIF to Production deployer SA
+        uses: google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093 # v3
+        with:
+          project_id: ${{ env.PRODUCTION_PROJECT }}
+          workload_identity_provider: projects/731660820861/locations/global/workloadIdentityPools/github-actions-pool/providers/github-production-deployer
+          service_account: ${{ env.DEPLOYER_SA }}
+      - name: Setup gcloud
+        uses: google-github-actions/setup-gcloud@aa5489c8933f4cc7a4f7d45035b3b1440c9c10db # v3
+
+      - name: Crear/actualizar y ejecutar el Job efímero de apply (solo node dist/ops/db-role-hardener.js)
+        id: execute
+        shell: bash
+        env:
+          IMMUTABLE_REF: ${{ needs.resolve-artifact.outputs.immutable_ref }}
+          SOURCE_SHA: ${{ needs.resolve-artifact.outputs.source_sha }}
+          DB_HOST: ${{ needs.verify-prerequisites-instance.outputs.db_host }}
+          EPHEMERAL_JOB: ${{ needs.derive-operation-names.outputs.ephemeral_job_name }}
+          EPHEMERAL_DSN_SECRET: ${{ needs.derive-operation-names.outputs.ephemeral_dsn_secret_name }}
+          EPHEMERAL_ADMIN: ${{ needs.derive-operation-names.outputs.ephemeral_admin_username }}
+        run: |
+          set -euo pipefail
+          fail() { echo "::error::$1"; exit 1; }
+
+          gcloud run jobs deploy "$EPHEMERAL_JOB" \
+            --project="${{ env.PRODUCTION_PROJECT }}" \
+            --region="${{ env.PRODUCTION_REGION }}" \
+            --image="$IMMUTABLE_REF" \
+            --command=node \
+            --args=dist/ops/db-role-hardener.js \
+            --service-account="${{ env.MIGRATION_EXECUTOR_SA }}" \
+            --network=korixa-production-vpc \
+            --subnet=korixa-production-sa-east1 \
+            --vpc-egress=private-ranges-only \
+            --set-secrets="MIGRATION_DATABASE_URL=${EPHEMERAL_DSN_SECRET}:1" \
+            --set-env-vars="HARDENER_MODE=apply,EXPECTED_ADMIN_DB_USER=${EPHEMERAL_ADMIN},EXPECTED_DATABASE=${{ env.TARGET_DATABASE }},EXPECTED_DB_HOST=$DB_HOST,EXPECTED_SOURCE_SHA=$SOURCE_SHA,HARDEN_CONFIRMATION=HARDEN_KORIXA_APP_PRODUCTION" \
+            --max-retries=0 \
+            --task-timeout=300s \
+            --quiet
+
+          set +e
+          gcloud run jobs execute "$EPHEMERAL_JOB" --project="${{ env.PRODUCTION_PROJECT }}" --region="${{ env.PRODUCTION_REGION }}" --wait
+          EXECUTE_EXIT=$?
+          set -e
+          [ "$EXECUTE_EXIT" -eq 0 ] || fail "Job de apply falló (exit=$EXECUTE_EXIT) — ver Cloud Logging para el JSON saneado del hardener."
+          echo "apply_result=HARDENED" >> "$GITHUB_OUTPUT"
+
+  # ===========================================================================
+  # Job 13 — remoción de cloudsqlsuperuser de korixa_app. SOLO vía Cloud SQL
+  # Admin API (assign-roles --revoke-existing-roles) — NUNCA SQL REVOKE,
+  # probado ineficaz contra este rol específico en la investigación de
+  # cleanroom (TF12-POINT8C-CLOUDSQL-CREATEROLE-ESCALATION-CLEANROOM-PROOF).
+  # ===========================================================================
+  remove-target-cloudsqlsuperuser:
+    name: Remove korixa_app cloudsqlsuperuser (Admin API only)
+    needs: [guard, apply]
+    if: needs.guard.outputs.mode == 'apply' && needs.apply.result == 'success'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    environment: production
+    permissions:
+      contents: read
+      id-token: write
+    outputs:
+      removal_result: ${{ steps.remove.outputs.removal_result }}
+    steps:
+      - name: Google Auth — WIF to Production deployer SA
+        uses: google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093 # v3
+        with:
+          project_id: ${{ env.PRODUCTION_PROJECT }}
+          workload_identity_provider: projects/731660820861/locations/global/workloadIdentityPools/github-actions-pool/providers/github-production-deployer
+          service_account: ${{ env.DEPLOYER_SA }}
+      - name: Setup gcloud
+        uses: google-github-actions/setup-gcloud@aa5489c8933f4cc7a4f7d45035b3b1440c9c10db # v3
+
+      - name: assign-roles --revoke-existing-roles sobre korixa_app, luego verificar en ambas capas
+        id: remove
         shell: bash
         run: |
           set -euo pipefail
-          gcloud run jobs execute "${{ env.HARDENER_JOB }}" \
+          fail() { echo "::error::$1"; exit 1; }
+
+          gcloud sql users assign-roles "${{ env.TARGET_ROLE }}" \
+            --instance="${{ env.CLOUD_SQL_INSTANCE }}" \
+            --project="${{ env.PRODUCTION_PROJECT }}" \
+            --type=BUILT_IN \
+            --revoke-existing-roles \
+            --quiet
+
+          REMAINING_ROLES="$(gcloud sql users describe "${{ env.TARGET_ROLE }}" --instance="${{ env.CLOUD_SQL_INSTANCE }}" --project="${{ env.PRODUCTION_PROJECT }}" --format='value(databaseRoles)')"
+          [ -z "$REMAINING_ROLES" ] || fail "TARGET_CLOUDSQLSUPERUSER_REMOVAL_FAILED — databaseRoles todavía contiene: '$REMAINING_ROLES' (metadata Cloud SQL)."
+
+          echo "removal_result=PASS" >> "$GITHUB_OUTPUT"
+
+  # ===========================================================================
+  # Job 14 — verify real (DB-level, vía el propio hardener) — confirma tanto
+  # el estado SQL como la ausencia de cloudsqlsuperuser leída directamente
+  # del catálogo de Postgres, no solo de la metadata de Cloud SQL.
+  # ===========================================================================
+  verify:
+    name: Verify (stage 2 — fresh ephemeral admin, still alive)
+    needs: [guard, derive-operation-names, resolve-artifact, verify-prerequisites-instance, remove-target-cloudsqlsuperuser]
+    if: needs.guard.outputs.mode == 'apply' && needs.remove-target-cloudsqlsuperuser.result == 'success'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    environment: production
+    permissions:
+      contents: read
+      id-token: write
+    outputs:
+      verify_disposition_ok: ${{ steps.execute.outputs.verify_disposition_ok }}
+    steps:
+      - name: Google Auth — WIF to Production deployer SA
+        uses: google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093 # v3
+        with:
+          project_id: ${{ env.PRODUCTION_PROJECT }}
+          workload_identity_provider: projects/731660820861/locations/global/workloadIdentityPools/github-actions-pool/providers/github-production-deployer
+          service_account: ${{ env.DEPLOYER_SA }}
+      - name: Setup gcloud
+        uses: google-github-actions/setup-gcloud@aa5489c8933f4cc7a4f7d45035b3b1440c9c10db # v3
+
+      - name: Ejecutar el Job efímero en modo verify y confirmar SQL_AND_CLOUDSQL_FULLY_HARDENED
+        id: execute
+        shell: bash
+        env:
+          IMMUTABLE_REF: ${{ needs.resolve-artifact.outputs.immutable_ref }}
+          SOURCE_SHA: ${{ needs.resolve-artifact.outputs.source_sha }}
+          DB_HOST: ${{ needs.verify-prerequisites-instance.outputs.db_host }}
+          EPHEMERAL_JOB: ${{ needs.derive-operation-names.outputs.ephemeral_job_name }}
+          EPHEMERAL_DSN_SECRET: ${{ needs.derive-operation-names.outputs.ephemeral_dsn_secret_name }}
+        run: |
+          set -euo pipefail
+          fail() { echo "::error::HOLD_VERIFY_NOT_FULLY_HARDENED — $1"; exit 1; }
+
+          gcloud run jobs deploy "$EPHEMERAL_JOB" \
             --project="${{ env.PRODUCTION_PROJECT }}" \
             --region="${{ env.PRODUCTION_REGION }}" \
-            --wait
+            --image="$IMMUTABLE_REF" \
+            --command=node \
+            --args=dist/ops/db-role-hardener.js \
+            --service-account="${{ env.MIGRATION_EXECUTOR_SA }}" \
+            --network=korixa-production-vpc \
+            --subnet=korixa-production-sa-east1 \
+            --vpc-egress=private-ranges-only \
+            --set-secrets="MIGRATION_DATABASE_URL=${EPHEMERAL_DSN_SECRET}:1" \
+            --set-env-vars="HARDENER_MODE=verify,EXPECTED_ADMIN_DB_USER=ignored-by-verify,EXPECTED_DATABASE=${{ env.TARGET_DATABASE }},EXPECTED_DB_HOST=$DB_HOST,EXPECTED_SOURCE_SHA=$SOURCE_SHA" \
+            --max-retries=0 \
+            --task-timeout=300s \
+            --quiet
 
-      - name: Emitir resumen (el propio hardener ya sanea su stdout — nunca DSN/password)
+          set +e
+          gcloud run jobs execute "$EPHEMERAL_JOB" --project="${{ env.PRODUCTION_PROJECT }}" --region="${{ env.PRODUCTION_REGION }}" --wait
+          EXECUTE_EXIT=$?
+          set -e
+          # PR #115 P1-1 remediation (preservado): `db-role-hardener.js` en
+          # mode=verify tiene un gate ESTRICTO machine-enforced
+          # (`assertVerifyFullyHardened`) — el proceso Node SIEMPRE sale con
+          # exit != 0 salvo que el disposition sea EXACTAMENTE
+          # SQL_AND_CLOUDSQL_FULLY_HARDENED. Este EXECUTE_EXIT ya no es solo
+          # "el Job corrió sin excepciones" — es la prueba real y suficiente
+          # de fully-hardened. Nunca se depende de inspección humana de
+          # Cloud Logging para decidir OPERATION_OK.
+          [ "$EXECUTE_EXIT" -eq 0 ] || fail "Job de verify falló o el disposition no es SQL_AND_CLOUDSQL_FULLY_HARDENED (exit=$EXECUTE_EXIT) — ver Cloud Logging para el JSON saneado (nunca DSN/password) con el disposition exacto."
+
+          echo "verify_disposition_ok=YES" >> "$GITHUB_OUTPUT"
+
+  # ===========================================================================
+  # Job 15 — CLEANUP de Stage 2, siempre intentado. Corre para CUALQUIER
+  # dispatch mode=apply con guard_pass=YES — no depende de que
+  # verify-target-role-preconditions, fresh-preflight, apply,
+  # remove-target-cloudsqlsuperuser o verify hayan tenido éxito; tampoco
+  # depende de que resolve-artifact haya tenido éxito (la eliminación del
+  # admin/secret/Job nunca debe bloquearse por una falla de Artifact
+  # Registry; el revoke vía Cloud Run Job es best-effort).
+  # ===========================================================================
+  cleanup-after-apply:
+    name: Cleanup (always attempted after apply — stage 2's fresh identity)
+    needs: [guard, derive-operation-names, resolve-artifact, verify-prerequisites-instance, verify-target-role-preconditions, bootstrap-apply-admin, fresh-preflight, apply, remove-target-cloudsqlsuperuser, verify]
+    if: always() && needs.guard.outputs.guard_pass == 'YES' && needs.guard.outputs.mode == 'apply'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    environment: production
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - name: Google Auth — WIF to Production deployer SA
+        uses: google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093 # v3
+        with:
+          project_id: ${{ env.PRODUCTION_PROJECT }}
+          workload_identity_provider: projects/731660820861/locations/global/workloadIdentityPools/github-actions-pool/providers/github-production-deployer
+          service_account: ${{ env.DEPLOYER_SA }}
+      - name: Setup gcloud
+        uses: google-github-actions/setup-gcloud@aa5489c8933f4cc7a4f7d45035b3b1440c9c10db # v3
+
+      - name: Estado A — revocar ADMIN OPTION temporal (mientras el admin efímero todavía existe) — Cloud Run Job efímero, VPC privada, db-hardener-bootstrap.js revoke-admin-option (sin ExecuteSql API)
+        id: revoke-admin-option
         shell: bash
+        env:
+          IMMUTABLE_REF: ${{ needs.resolve-artifact.outputs.immutable_ref }}
+          SOURCE_SHA: ${{ needs.resolve-artifact.outputs.source_sha }}
+          DB_HOST: ${{ needs.verify-prerequisites-instance.outputs.db_host }}
+          EPHEMERAL_JOB: ${{ needs.derive-operation-names.outputs.ephemeral_job_name }}
+          EPHEMERAL_ADMIN: ${{ needs.derive-operation-names.outputs.ephemeral_admin_username }}
+          EPHEMERAL_DSN_SECRET: ${{ needs.derive-operation-names.outputs.ephemeral_dsn_secret_name }}
         run: |
-          # T-F1.2 Point 8B.3: este paso solo se alcanza si "Ejecutar el Job
-          # una vez y esperar su resultado" (arriba) terminó con exit=0 —
-          # `set -euo pipefail` detiene el workflow antes de aquí si la
-          # ejecución del Job falló. Por construcción, llegar acá prueba que
-          # el Job corrió hasta el final, y el Job SIEMPRE lee
-          # MIGRATION_DATABASE_URL como parte de su contrato de entorno
-          # (`readRequiredEnv`) — así que "SECRET_PAYLOAD_ACCESSED = NO"
-          # sería falso acá. El operador (este workflow/humano) nunca ve ese
-          # valor — solo el proceso Node dentro del Job, en runtime, dentro
-          # de la red privada de Cloud Run.
+          set +e
+          gcloud secrets describe "$EPHEMERAL_DSN_SECRET" --project="${{ env.PRODUCTION_PROJECT }}" >/dev/null 2>&1
+          DSN_SECRET_EXISTS=$?
+          if [ "$DSN_SECRET_EXISTS" -ne 0 ]; then
+            echo "DSN secret efímero ya ausente — nada que revocar vía él."
+            REVOKE_EXIT=0
+          elif [ -z "$IMMUTABLE_REF" ]; then
+            echo "IMMUTABLE_REF no disponible (falla de resolución de artefacto) — revoke salteado, cleanup continúa igual."
+            REVOKE_EXIT=1
+          else
+            gcloud run jobs deploy "$EPHEMERAL_JOB" \
+              --project="${{ env.PRODUCTION_PROJECT }}" \
+              --region="${{ env.PRODUCTION_REGION }}" \
+              --image="$IMMUTABLE_REF" \
+              --command=node \
+              --args=dist/ops/db-hardener-bootstrap.js \
+              --service-account="${{ env.MIGRATION_EXECUTOR_SA }}" \
+              --network=korixa-production-vpc \
+              --subnet=korixa-production-sa-east1 \
+              --vpc-egress=private-ranges-only \
+              --set-secrets="MIGRATION_DATABASE_URL=${EPHEMERAL_DSN_SECRET}:1" \
+              --set-env-vars="BOOTSTRAP_MODE=revoke-admin-option,EPHEMERAL_ADMIN_USERNAME=${EPHEMERAL_ADMIN},EXPECTED_DATABASE=${{ env.TARGET_DATABASE }},EXPECTED_DB_HOST=$DB_HOST,EXPECTED_SOURCE_SHA=$SOURCE_SHA" \
+              --max-retries=0 \
+              --task-timeout=300s \
+              --quiet
+            gcloud run jobs execute "$EPHEMERAL_JOB" --project="${{ env.PRODUCTION_PROJECT }}" --region="${{ env.PRODUCTION_REGION }}" --wait
+            REVOKE_EXIT=$?
+          fi
+          set -e
+          if [ "$REVOKE_EXIT" -eq 0 ]; then
+            echo "state=DONE" >> "$GITHUB_OUTPUT"
+          else
+            echo "state=FAILED" >> "$GITHUB_OUTPUT"
+            echo "::warning::Cleanup A (revoke ADMIN OPTION) falló — se continúa igual con B-E, nunca se detiene el cleanup ante un solo fallo parcial."
+          fi
+
+      - name: Estado B — eliminar el usuario PostgreSQL efímero (idempotente — ausente ya es éxito)
+        id: delete-admin
+        shell: bash
+        env:
+          EPHEMERAL_ADMIN: ${{ needs.derive-operation-names.outputs.ephemeral_admin_username }}
+        run: |
+          set +e
+          gcloud sql users describe "$EPHEMERAL_ADMIN" --instance="${{ env.CLOUD_SQL_INSTANCE }}" --project="${{ env.PRODUCTION_PROJECT }}" >/dev/null 2>&1
+          EXISTS=$?
+          if [ "$EXISTS" -ne 0 ]; then
+            echo "Admin efímero ya ausente — cleanup idempotente, éxito."
+            echo "state=DONE" >> "$GITHUB_OUTPUT"
+          else
+            gcloud sql users delete "$EPHEMERAL_ADMIN" --instance="${{ env.CLOUD_SQL_INSTANCE }}" --project="${{ env.PRODUCTION_PROJECT }}" --quiet
+            DELETE_EXIT=$?
+            set -e
+            if [ "$DELETE_EXIT" -eq 0 ]; then
+              echo "state=DONE" >> "$GITHUB_OUTPUT"
+            else
+              echo "state=FAILED" >> "$GITHUB_OUTPUT"
+              echo "::error::Cleanup B (delete ephemeral admin) falló — HOLD requerido, no se oculta detrás del resultado de apply."
+            fi
+          fi
+
+      - name: Estado C/D — eliminar el DSN SECRET (global) efímero (elimina también su binding IAM implícitamente, ya que el recurso desaparece)
+        id: delete-dsn-secret
+        shell: bash
+        env:
+          EPHEMERAL_DSN_SECRET: ${{ needs.derive-operation-names.outputs.ephemeral_dsn_secret_name }}
+        run: |
+          set +e
+          gcloud secrets describe "$EPHEMERAL_DSN_SECRET" --project="${{ env.PRODUCTION_PROJECT }}" >/dev/null 2>&1
+          EXISTS=$?
+          if [ "$EXISTS" -ne 0 ]; then
+            echo "DSN secret efímero ya ausente — cleanup idempotente, éxito."
+            echo "state=DONE" >> "$GITHUB_OUTPUT"
+          else
+            gcloud secrets delete "$EPHEMERAL_DSN_SECRET" --project="${{ env.PRODUCTION_PROJECT }}" --quiet
+            DELETE_EXIT=$?
+            set -e
+            if [ "$DELETE_EXIT" -eq 0 ]; then
+              echo "state=DONE" >> "$GITHUB_OUTPUT"
+            else
+              echo "state=FAILED" >> "$GITHUB_OUTPUT"
+              echo "::error::Cleanup C/D (delete ephemeral DSN secret) falló — HOLD requerido."
+            fi
+          fi
+
+      - name: "Estado E — eliminar el Cloud Run Job efímero (idempotente — ausente ya es éxito)"
+        id: delete-job
+        shell: bash
+        env:
+          EPHEMERAL_JOB: ${{ needs.derive-operation-names.outputs.ephemeral_job_name }}
+        run: |
+          set +e
+          gcloud run jobs describe "$EPHEMERAL_JOB" --project="${{ env.PRODUCTION_PROJECT }}" --region="${{ env.PRODUCTION_REGION }}" >/dev/null 2>&1
+          EXISTS=$?
+          if [ "$EXISTS" -ne 0 ]; then
+            echo "Cloud Run Job efímero ya ausente — cleanup idempotente, éxito."
+            echo "state=DONE" >> "$GITHUB_OUTPUT"
+          else
+            gcloud run jobs delete "$EPHEMERAL_JOB" --project="${{ env.PRODUCTION_PROJECT }}" --region="${{ env.PRODUCTION_REGION }}" --quiet
+            DELETE_EXIT=$?
+            set -e
+            if [ "$DELETE_EXIT" -eq 0 ]; then
+              echo "state=DONE" >> "$GITHUB_OUTPUT"
+            else
+              echo "state=FAILED" >> "$GITHUB_OUTPUT"
+              echo "::error::Cleanup E (delete ephemeral Cloud Run Job) falló — HOLD requerido."
+            fi
+          fi
+
+      - name: Estado F — verificación independiente de ausencia (admin + secret DSN + Cloud Run Job)
+        id: independent-verify
+        shell: bash
+        env:
+          EPHEMERAL_ADMIN: ${{ needs.derive-operation-names.outputs.ephemeral_admin_username }}
+          EPHEMERAL_DSN_SECRET: ${{ needs.derive-operation-names.outputs.ephemeral_dsn_secret_name }}
+          EPHEMERAL_JOB: ${{ needs.derive-operation-names.outputs.ephemeral_job_name }}
+        run: |
+          set +e
+          gcloud sql users describe "$EPHEMERAL_ADMIN" --instance="${{ env.CLOUD_SQL_INSTANCE }}" --project="${{ env.PRODUCTION_PROJECT }}" >/dev/null 2>&1
+          ADMIN_STILL_EXISTS=$?
+          gcloud secrets describe "$EPHEMERAL_DSN_SECRET" --project="${{ env.PRODUCTION_PROJECT }}" >/dev/null 2>&1
+          DSN_SECRET_STILL_EXISTS=$?
+          gcloud run jobs describe "$EPHEMERAL_JOB" --project="${{ env.PRODUCTION_PROJECT }}" --region="${{ env.PRODUCTION_REGION }}" >/dev/null 2>&1
+          JOB_STILL_EXISTS=$?
+          set -e
+          if [ "$ADMIN_STILL_EXISTS" -eq 0 ] || [ "$DSN_SECRET_STILL_EXISTS" -eq 0 ] || [ "$JOB_STILL_EXISTS" -eq 0 ]; then
+            echo "independent_absence_verified=NO" >> "$GITHUB_OUTPUT"
+          else
+            echo "independent_absence_verified=YES" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Clasificar resultado final — nunca esconder un cleanup incompleto detrás de "la operación falló"
+        if: always()
+        shell: bash
+        env:
+          APPLY_RESULT: ${{ needs.apply.result }}
+          REMOVE_RESULT: ${{ needs.remove-target-cloudsqlsuperuser.result }}
+          VERIFY_RESULT: ${{ needs.verify.result }}
+          ADMIN_OPTION_STATE: ${{ steps.revoke-admin-option.outputs.state }}
+          DELETE_ADMIN_STATE: ${{ steps.delete-admin.outputs.state }}
+          DELETE_DSN_SECRET_STATE: ${{ steps.delete-dsn-secret.outputs.state }}
+          DELETE_JOB_STATE: ${{ steps.delete-job.outputs.state }}
+          INDEPENDENT_VERIFIED: ${{ steps.independent-verify.outputs.independent_absence_verified }}
+        run: |
+          OPERATION_OK="NO"
+          if [ "$APPLY_RESULT" = "success" ] && [ "$REMOVE_RESULT" = "success" ] && [ "$VERIFY_RESULT" = "success" ]; then
+            OPERATION_OK="YES"
+          fi
+
+          CLEANUP_OK="NO"
+          if [ "$ADMIN_OPTION_STATE" = "DONE" ] && [ "$DELETE_ADMIN_STATE" = "DONE" ] && [ "$DELETE_DSN_SECRET_STATE" = "DONE" ] && [ "$DELETE_JOB_STATE" = "DONE" ] && [ "$INDEPENDENT_VERIFIED" = "YES" ]; then
+            CLEANUP_OK="YES"
+          fi
+
           {
-            echo "### T-F1.2 Point 8 — Production DB role hardening (${{ inputs.mode }})"
-            echo ""
-            echo "- SOURCE_SHA = ${{ needs.resolve-artifact.outputs.source_sha }}"
-            echo "- MODE = ${{ inputs.mode }}"
-            echo "- MIGRATION_SECRET_VERSION = ${{ inputs.migration_secret_version }}"
-            echo "- SECRET_PAYLOAD_ACCESSED_BY_JOB_AT_RUNTIME = YES"
-            echo "- SECRET_PAYLOAD_EXPOSED_TO_OPERATOR = NO"
-            echo "- SECRET_PAYLOAD_PRINTED = NO"
-            echo "- Ver logs del Job (${{ env.HARDENER_JOB }}) en Cloud Logging para el JSON estructurado de salida."
+            echo "### T-F1.2 Point 8C — Ephemeral hardener admin — CLEANUP RESULT (stage 2)"
+            echo "- OPERATION_OK = $OPERATION_OK"
+            echo "- CLEANUP_OK = $CLEANUP_OK"
           } >> "$GITHUB_STEP_SUMMARY"
+
+          if [ "$OPERATION_OK" = "NO" ] && [ "$CLEANUP_OK" = "NO" ]; then
+            echo "::error::HOLD_OPERATION_FAILED_AND_PRIVILEGED_CLEANUP_INCOMPLETE — máxima severidad operacional. Dispatch mode=cleanup_only con este apply_execution_id INMEDIATAMENTE."
+            exit 1
+          fi
+          if [ "$CLEANUP_OK" = "NO" ]; then
+            echo "::error::HOLD_CLEANUP_INCOMPLETE — la operación SQL pudo haber tenido éxito, pero recursos privilegiados siguen activos. Dispatch mode=cleanup_only con este apply_execution_id."
+            exit 1
+          fi
+          if [ "$OPERATION_OK" = "NO" ]; then
+            echo "::warning::La operación falló pero el cleanup se completó — ningún recurso privilegiado quedó huérfano."
+          fi
+
+  # ===========================================================================
+  # Job 16 — CLEANUP_ONLY. Recuperación de incidentes ÚNICAMENTE (PR #115
+  # zero-standing-privilege remediation): ya NO forma parte de ningún camino
+  # normal exitoso — tanto Stage 1 (cleanup-after-preflight) como Stage 2
+  # (cleanup-after-apply) se auto-limpian siempre, incondicionalmente. Este
+  # job existe solo para el caso en que un runner fue cancelado a la fuerza
+  # (fuera del período de gracia de GitHub Actions) a mitad de uno de esos
+  # jobs de cleanup, o una salida de plataforma similar, y algo quedó
+  # varado. Genérico sobre CUALQUIER id de 12 hex — preflight_operation_id o
+  # apply_execution_id, la derivación de nombres es idéntica para ambos.
+  # ===========================================================================
+  cleanup-only:
+    name: Cleanup only (incident recovery ONLY — never part of the normal path)
+    needs: [guard, derive-operation-names, resolve-artifact, verify-prerequisites-instance]
+    if: |
+      always() &&
+      needs.derive-operation-names.result == 'success' &&
+      ((needs.guard.outputs.guard_pass == 'YES' && needs.guard.outputs.mode == 'cleanup_only') ||
+       needs.guard.outputs.sha_drift_detected == 'YES')
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    environment: production
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - name: Google Auth — WIF to Production deployer SA
+        uses: google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093 # v3
+        with:
+          project_id: ${{ env.PRODUCTION_PROJECT }}
+          workload_identity_provider: projects/731660820861/locations/global/workloadIdentityPools/github-actions-pool/providers/github-production-deployer
+          service_account: ${{ env.DEPLOYER_SA }}
+      - name: Setup gcloud
+        uses: google-github-actions/setup-gcloud@aa5489c8933f4cc7a4f7d45035b3b1440c9c10db # v3
+
+      - name: Descubrir y remover, defensivamente, exactamente los recursos de esta operation_id (nunca crea nada salvo — si el admin todavía existe — el Cloud Run Job efímero, necesario para revocar por el camino VPC privado)
+        shell: bash
+        env:
+          IMMUTABLE_REF: ${{ needs.resolve-artifact.outputs.immutable_ref }}
+          SOURCE_SHA: ${{ needs.resolve-artifact.outputs.source_sha }}
+          DB_HOST: ${{ needs.verify-prerequisites-instance.outputs.db_host }}
+          EPHEMERAL_JOB: ${{ needs.derive-operation-names.outputs.ephemeral_job_name }}
+          EPHEMERAL_ADMIN: ${{ needs.derive-operation-names.outputs.ephemeral_admin_username }}
+          EPHEMERAL_DSN_SECRET: ${{ needs.derive-operation-names.outputs.ephemeral_dsn_secret_name }}
+        run: |
+          set +e
+
+          gcloud sql users describe "$EPHEMERAL_ADMIN" --instance="${{ env.CLOUD_SQL_INSTANCE }}" --project="${{ env.PRODUCTION_PROJECT }}" >/dev/null 2>&1
+          ADMIN_EXISTS_BEFORE=$?
+          if [ "$ADMIN_EXISTS_BEFORE" -eq 0 ]; then
+            gcloud secrets describe "$EPHEMERAL_DSN_SECRET" --project="${{ env.PRODUCTION_PROJECT }}" >/dev/null 2>&1
+            DSN_SECRET_EXISTS_BEFORE=$?
+            if [ "$DSN_SECRET_EXISTS_BEFORE" -eq 0 ] && [ -n "$IMMUTABLE_REF" ]; then
+              gcloud run jobs deploy "$EPHEMERAL_JOB" \
+                --project="${{ env.PRODUCTION_PROJECT }}" \
+                --region="${{ env.PRODUCTION_REGION }}" \
+                --image="$IMMUTABLE_REF" \
+                --command=node \
+                --args=dist/ops/db-hardener-bootstrap.js \
+                --service-account="${{ env.MIGRATION_EXECUTOR_SA }}" \
+                --network=korixa-production-vpc \
+                --subnet=korixa-production-sa-east1 \
+                --vpc-egress=private-ranges-only \
+                --set-secrets="MIGRATION_DATABASE_URL=${EPHEMERAL_DSN_SECRET}:1" \
+                --set-env-vars="BOOTSTRAP_MODE=revoke-admin-option,EPHEMERAL_ADMIN_USERNAME=${EPHEMERAL_ADMIN},EXPECTED_DATABASE=${{ env.TARGET_DATABASE }},EXPECTED_DB_HOST=$DB_HOST,EXPECTED_SOURCE_SHA=$SOURCE_SHA" \
+                --max-retries=0 \
+                --task-timeout=300s \
+                --quiet >/dev/null 2>&1
+              gcloud run jobs execute "$EPHEMERAL_JOB" --project="${{ env.PRODUCTION_PROJECT }}" --region="${{ env.PRODUCTION_REGION }}" --wait >/dev/null 2>&1
+              echo "CLEANUP_A_ATTEMPTED=YES"
+            elif [ "$DSN_SECRET_EXISTS_BEFORE" -ne 0 ]; then
+              echo "CLEANUP_A_SKIPPED=DSN_SECRET_ALREADY_ABSENT (nada que revocar vía él)"
+            else
+              echo "CLEANUP_A_SKIPPED=ARTIFACT_UNAVAILABLE (no bloquea B/C-D/E)"
+            fi
+            # B — eliminar el admin.
+            gcloud sql users delete "$EPHEMERAL_ADMIN" --instance="${{ env.CLOUD_SQL_INSTANCE }}" --project="${{ env.PRODUCTION_PROJECT }}" --quiet >/dev/null 2>&1
+            echo "CLEANUP_B_ATTEMPTED=YES"
+          else
+            echo "CLEANUP_A_B_SKIPPED=ADMIN_ALREADY_ABSENT"
+          fi
+
+          # C/D — eliminar el DSN secret (global).
+          gcloud secrets describe "$EPHEMERAL_DSN_SECRET" --project="${{ env.PRODUCTION_PROJECT }}" >/dev/null 2>&1
+          DSN_SECRET_EXISTS_BEFORE=$?
+          if [ "$DSN_SECRET_EXISTS_BEFORE" -eq 0 ]; then
+            gcloud secrets delete "$EPHEMERAL_DSN_SECRET" --project="${{ env.PRODUCTION_PROJECT }}" --quiet >/dev/null 2>&1
+            echo "CLEANUP_C_D_ATTEMPTED=YES"
+          else
+            echo "CLEANUP_C_D_SKIPPED=DSN_SECRET_ALREADY_ABSENT"
+          fi
+
+          # E — eliminar el Cloud Run Job efímero.
+          gcloud run jobs describe "$EPHEMERAL_JOB" --project="${{ env.PRODUCTION_PROJECT }}" --region="${{ env.PRODUCTION_REGION }}" >/dev/null 2>&1
+          JOB_EXISTS_BEFORE=$?
+          if [ "$JOB_EXISTS_BEFORE" -eq 0 ]; then
+            gcloud run jobs delete "$EPHEMERAL_JOB" --project="${{ env.PRODUCTION_PROJECT }}" --region="${{ env.PRODUCTION_REGION }}" --quiet >/dev/null 2>&1
+            echo "CLEANUP_E_ATTEMPTED=YES"
+          else
+            echo "CLEANUP_E_SKIPPED=JOB_ALREADY_ABSENT"
+          fi
+
+          set -e
+
+      - name: Verificación independiente de ausencia — nunca se declara éxito sin re-comprobar
+        shell: bash
+        env:
+          EPHEMERAL_ADMIN: ${{ needs.derive-operation-names.outputs.ephemeral_admin_username }}
+          EPHEMERAL_DSN_SECRET: ${{ needs.derive-operation-names.outputs.ephemeral_dsn_secret_name }}
+          EPHEMERAL_JOB: ${{ needs.derive-operation-names.outputs.ephemeral_job_name }}
+        run: |
+          set +e
+          gcloud sql users describe "$EPHEMERAL_ADMIN" --instance="${{ env.CLOUD_SQL_INSTANCE }}" --project="${{ env.PRODUCTION_PROJECT }}" >/dev/null 2>&1
+          ADMIN_STILL_EXISTS=$?
+          gcloud secrets describe "$EPHEMERAL_DSN_SECRET" --project="${{ env.PRODUCTION_PROJECT }}" >/dev/null 2>&1
+          DSN_SECRET_STILL_EXISTS=$?
+          gcloud run jobs describe "$EPHEMERAL_JOB" --project="${{ env.PRODUCTION_PROJECT }}" --region="${{ env.PRODUCTION_REGION }}" >/dev/null 2>&1
+          JOB_STILL_EXISTS=$?
+          set -e
+          {
+            echo "### T-F1.2 Point 8C — cleanup_only — operation ${{ needs.derive-operation-names.outputs.operation_id }}"
+            echo ""
+            echo "- ORIGINAL_OPERATION_SHA = ${{ inputs.operation_source_sha != '' && inputs.operation_source_sha || 'NOT_PROVIDED_BY_OPERATOR' }} (audit-only, never enforced for cleanup_only — recovery may legitimately run newer trusted cleanup code)"
+            echo "- CLEANUP_IMPLEMENTATION_SHA = ${{ github.sha }}"
+            echo ""
+            if [ "$ADMIN_STILL_EXISTS" -ne 0 ] && [ "$DSN_SECRET_STILL_EXISTS" -ne 0 ] && [ "$JOB_STILL_EXISTS" -ne 0 ]; then
+              echo "CLEANUP_ONLY_RESULT = CLEAN (los tres recursos confirmados ausentes: admin, DSN secret, Cloud Run Job)"
+            else
+              echo "CLEANUP_ONLY_RESULT = HOLD_STILL_PRESENT"
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
+          if [ "$ADMIN_STILL_EXISTS" -eq 0 ] || [ "$DSN_SECRET_STILL_EXISTS" -eq 0 ] || [ "$JOB_STILL_EXISTS" -eq 0 ]; then
+            echo "::error::HOLD_PRIVILEGED_CLEANUP_INCOMPLETE — CLEANUP_ONLY no logró dejar los tres recursos ausentes — reintentar o escalar."
+            exit 1
+          fi

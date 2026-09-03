@@ -167,6 +167,7 @@ export type HardenerErrorCode =
   | 'GRANT_SCHEMA_FAILED'
   | 'HOLD_POST_STATE_MISMATCH'
   | 'RUNTIME_DRIFT_DURING_TRANSACTION'
+  | 'HOLD_VERIFY_NOT_FULLY_HARDENED'
   | 'UNEXPECTED_HARDENER_ERROR';
 
 export class HardenerError extends Error {
@@ -888,6 +889,28 @@ export async function runVerify(env: HardenerEnv): Promise<VerifyResult> {
 }
 
 // =============================================================================
+// Verify gate ESTRICTO, machine-enforced (PR #115 P1-1 remediation) —
+// `runVerify` en sí mismo sigue siendo un primitivo de REPORTE de solo
+// lectura (nunca lanza solo por un disposition no fully-hardened — esa es
+// una propiedad deliberada, útil para inspección humana vía Cloud Logging).
+// La orquestación de Producción, sin embargo, NUNCA puede depender de
+// inspección humana para decidir OPERATION_OK — este wrapper es el único
+// punto que traduce "disposition != SQL_AND_CLOUDSQL_FULLY_HARDENED" en un
+// fallo real (exit != 0), sin duplicar ningún SQL de verificación: reusa el
+// `disposition` que `runVerify` ya computó.
+// =============================================================================
+
+export function assertVerifyFullyHardened(result: VerifyResult): void {
+  if (result.disposition !== 'SQL_AND_CLOUDSQL_FULLY_HARDENED') {
+    throw new HardenerError(
+      'HOLD_VERIFY_NOT_FULLY_HARDENED',
+      `verify strict gate: disposition '${result.disposition}' no es SQL_AND_CLOUDSQL_FULLY_HARDENED — la orquestación de Producción nunca declara OPERATION_OK sobre un estado parcial, sin importar que el propio Job haya corrido sin errores de conexión/SQL.`,
+      { disposition: result.disposition },
+    );
+  }
+}
+
+// =============================================================================
 // Dispatcher — única función invocada por el entrypoint CLI real.
 // =============================================================================
 
@@ -909,8 +932,18 @@ if (require.main === module) {
   runHardener()
     .then((result) => {
       // Único punto de salida de evidencia — JSON estructurado, campos
-      // aprobados únicamente. Nunca MIGRATION_DATABASE_URL cruda.
+      // aprobados únicamente. Nunca MIGRATION_DATABASE_URL cruda. Se
+      // imprime SIEMPRE, incluso si el gate estricto de abajo va a fallar
+      // el proceso — la evidencia completa debe quedar en Cloud Logging
+      // sin importar el disposition.
       process.stdout.write(`${JSON.stringify(result, null, 2)}\n`);
+      // PR #115 P1-1 remediation: `verify` NUNCA sale con exit 0 salvo
+      // disposition EXACTAMENTE SQL_AND_CLOUDSQL_FULLY_HARDENED — la
+      // orquestación de Producción depende de este exit code, nunca de
+      // inspección humana de Cloud Logging, para decidir OPERATION_OK.
+      if (result.mode === 'verify') {
+        assertVerifyFullyHardened(result);
+      }
       process.exitCode = 0;
     })
     .catch((error: unknown) => {
