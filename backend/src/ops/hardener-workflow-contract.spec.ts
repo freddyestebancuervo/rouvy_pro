@@ -1,5 +1,10 @@
 import * as fs from 'fs';
 import * as path from 'path';
+import {
+  ALL_REQUIRED_DEPLOYER_PERMISSIONS,
+  READINESS_GATE_META_PERMISSIONS,
+  FORBIDDEN_DEPLOYER_PERMISSIONS,
+} from './production-hardener-required-permissions';
 
 /**
  * T-F1.2 Point 8C — contrato estático del workflow efímero. Parsea el YAML
@@ -613,6 +618,179 @@ describe('production-db-role-hardening.yml — contrato estructural', () => {
       // separado (operation_id + operation_source_sha copiados a mano) —
       // nunca un job del mismo run que encadene automáticamente.
       expect(jobNeeds('bootstrap-apply-admin')).not.toContain('preflight');
+    });
+  });
+
+  // ===========================================================================
+  // TF12-POINT8C-IAM-P1 remediation — el run real 33718581473 falló con
+  // HTTP 403 en `gcloud sql users create`: DEPLOYER_SA nunca tuvo ningún
+  // permiso de mutación de Cloud SQL users/Secret Manager, y ninguna
+  // auditoría previa lo había verificado (todas comparaban IAM contra sí
+  // mismo en el tiempo — drift — nunca contra lo que el workflow realmente
+  // necesita — suficiencia). Estos tests prueban que el nuevo job
+  // `verify-deployer-permissions` existe, corre ANTES de cualquier
+  // mutación real, y que su manifiesto embebido en bash coincide EXACTO
+  // con `production-hardener-required-permissions.ts` — nunca dos listas
+  // mantenidas independientemente.
+  // ===========================================================================
+  describe('TF12-POINT8C-IAM-P1 remediation — verify-deployer-permissions gate', () => {
+    function extractBashArray(jobText: string, varName: string): string[] {
+      const re = new RegExp(`${varName}=\\(([\\s\\S]*?)\\)`, 'm');
+      const match = re.exec(jobText);
+      if (!match) throw new Error(`No se encontró el array bash '${varName}' en el job.`);
+      return [...match[1]!.matchAll(/"([^"]+)"/g)].map((m) => m[1]!);
+    }
+
+    it('TEST_1/TEST_2: el array bash REQUIRED_PERMISSIONS del gate coincide EXACTAMENTE (mismo conjunto, sin orden importar) con ALL_REQUIRED_DEPLOYER_PERMISSIONS + READINESS_GATE_META_PERMISSIONS de production-hardener-required-permissions.ts', () => {
+      const gateSource = jobSource('verify-deployer-permissions');
+      const bashRequired = extractBashArray(gateSource, 'REQUIRED_PERMISSIONS');
+      const expected = [...ALL_REQUIRED_DEPLOYER_PERMISSIONS, ...READINESS_GATE_META_PERMISSIONS];
+      expect(bashRequired.sort()).toEqual([...expected].sort());
+      expect(bashRequired).toHaveLength(12);
+    });
+
+    it('el array bash incluye cloudsql.user lifecycle (create/delete/update/get) — nunca cloudsql.users.list', () => {
+      const gateSource = jobSource('verify-deployer-permissions');
+      const bashRequired = extractBashArray(gateSource, 'REQUIRED_PERMISSIONS');
+      expect(bashRequired).toEqual(
+        expect.arrayContaining(['cloudsql.users.create', 'cloudsql.users.delete', 'cloudsql.users.update', 'cloudsql.users.get']),
+      );
+      expect(bashRequired).not.toContain('cloudsql.users.list');
+    });
+
+    it('TEST_5: secretmanager.versions.access está explícitamente prohibido — el array bash FORBIDDEN_PERMISSIONS del gate lo incluye y coincide con FORBIDDEN_DEPLOYER_PERMISSIONS', () => {
+      const gateSource = jobSource('verify-deployer-permissions');
+      const bashForbidden = extractBashArray(gateSource, 'FORBIDDEN_PERMISSIONS');
+      expect(bashForbidden).toEqual([...FORBIDDEN_DEPLOYER_PERMISSIONS]);
+      expect(bashForbidden).toContain('secretmanager.versions.access');
+      // También nunca aparece como REQUERIDO.
+      const bashRequired = extractBashArray(gateSource, 'REQUIRED_PERMISSIONS');
+      expect(bashRequired).not.toContain('secretmanager.versions.access');
+    });
+
+    it('TEST_4: cloudsql.users.update está en el manifiesto ANTES de que Stage 2 pueda aplicar — verify-deployer-permissions corre también para mode=apply, no solo bootstrap_and_preflight', () => {
+      const gateSource = jobSource('verify-deployer-permissions');
+      expect(gateSource).toMatch(/mode == 'bootstrap_and_preflight' \|\| needs\.guard\.outputs\.mode == 'apply'/);
+      const bashRequired = extractBashArray(gateSource, 'REQUIRED_PERMISSIONS');
+      expect(bashRequired).toContain('cloudsql.users.update');
+    });
+
+    it('el gate corre ANTES de bootstrap-ephemeral-admin y bootstrap-apply-admin — ambos lo declaran en needs y exigen needs.verify-deployer-permissions.result == \'success\'', () => {
+      expect(jobNeeds('bootstrap-ephemeral-admin')).toContain('verify-deployer-permissions');
+      expect(jobNeeds('bootstrap-apply-admin')).toContain('verify-deployer-permissions');
+      expect(jobSource('bootstrap-ephemeral-admin')).toMatch(/needs\.verify-deployer-permissions\.result == 'success'/);
+      expect(jobSource('bootstrap-apply-admin')).toMatch(/needs\.verify-deployer-permissions\.result == 'success'/);
+    });
+
+    it('el gate nunca bloquea cleanup — ningún job de cleanup (cleanup-after-preflight/cleanup-after-apply/cleanup-only) depende de verify-deployer-permissions', () => {
+      for (const cleanupJob of ['cleanup-after-preflight', 'cleanup-after-apply', 'cleanup-only']) {
+        expect(jobNeeds(cleanupJob)).not.toContain('verify-deployer-permissions');
+        expect(jobSource(cleanupJob)).not.toMatch(/needs\.verify-deployer-permissions/);
+      }
+    });
+
+    it('el gate es de solo lectura — únicamente gcloud projects get-iam-policy y gcloud iam roles describe, nunca un verbo de mutación', () => {
+      const gateSource = jobSource('verify-deployer-permissions');
+      expect(gateSource).toMatch(/gcloud projects get-iam-policy/);
+      expect(gateSource).toMatch(/gcloud iam roles describe/);
+      expect(gateSource).not.toMatch(/gcloud [a-z-]+ (create|delete|update|add|set-iam-policy|add-iam-policy-binding)/);
+    });
+
+    it('TEST_6: roles/cloudsql.admin y roles/secretmanager.admin nunca se mencionan operacionalmente en el workflow — el rol propuesto es siempre el custom role, nunca uno de estos dos predefinidos', () => {
+      const operationalLines = source.split('\n').filter((line) => !line.trim().startsWith('#'));
+      expect(operationalLines.some((line) => /roles\/cloudsql\.admin/.test(line))).toBe(false);
+      expect(operationalLines.some((line) => /roles\/secretmanager\.admin/.test(line))).toBe(false);
+    });
+
+    it('TEST_9: las llamadas de mutación de Cloud SQL users / Secret Manager en todo el workflow siempre autentican vía el mismo bloque WIF de DEPLOYER_SA — nunca una identidad distinta', () => {
+      // Cada job que ejecuta `gcloud sql users create|delete|assign-roles` o
+      // `gcloud secrets create|delete|add-iam-policy-binding|versions add`
+      // debe tener el bloque de auth a DEPLOYER_SA como su único paso de
+      // autenticación GCP.
+      const jobsWithControlPlaneMutations = [
+        'bootstrap-ephemeral-admin',
+        'bootstrap-apply-admin',
+        'remove-target-cloudsqlsuperuser',
+        'cleanup-after-preflight',
+        'cleanup-after-apply',
+        'cleanup-only',
+      ];
+      for (const jobName of jobsWithControlPlaneMutations) {
+        const jobText = jobSource(jobName);
+        expect(jobText).toMatch(/service_account: \$\{\{ env\.DEPLOYER_SA \}\}/);
+        expect(jobText).not.toMatch(/service_account: \$\{\{ env\.MIGRATION_EXECUTOR_SA \}\}/);
+      }
+    });
+
+    it('TEST_10: MIGRATION_EXECUTOR_SA nunca recibe un rol de proyecto en este workflow — únicamente aparece como --service-account de los Cloud Run Jobs efímeros y en add-iam-policy-binding del secret DSN (resource-scoped, por operación)', () => {
+      expect(source).not.toMatch(/gcloud projects add-iam-policy-binding[\s\S]*?MIGRATION_EXECUTOR_SA/);
+      const migrationExecutorMentions = [...source.matchAll(/MIGRATION_EXECUTOR_SA/g)];
+      expect(migrationExecutorMentions.length).toBeGreaterThan(0);
+      // Todo mention operacional de MIGRATION_EXECUTOR_SA vive dentro de
+      // `--service-account=` (Cloud Run) o `--member="serviceAccount:...MIGRATION_EXECUTOR_SA"` (IAM binding sobre el secret efímero, nunca sobre el proyecto).
+      const operationalLines = source.split('\n').filter((line) => !line.trim().startsWith('#') && line.includes('MIGRATION_EXECUTOR_SA'));
+      for (const line of operationalLines) {
+        expect(/--service-account="\$\{\{ env\.MIGRATION_EXECUTOR_SA \}\}"|member="serviceAccount:\$\{\{ env\.MIGRATION_EXECUTOR_SA \}\}"|MIGRATION_EXECUTOR_SA: korixa-prod-migration-exec@/.test(line)).toBe(true);
+      }
+    });
+
+    it('TEST_11: el gate declara, en su propio comentario, el contrato de meta-permissions que necesita para leerse a sí mismo (resourcemanager.projects.getIamPolicy + iam.roles.get) — nunca las asume implícitamente', () => {
+      const gateSource = jobSource('verify-deployer-permissions');
+      expect(gateSource).toMatch(/resourcemanager\.projects\.getIamPolicy/);
+      expect(gateSource).toMatch(/iam\.roles\.get/i);
+      expect(gateSource).toMatch(/falta resourcemanager\.projects\.getIamPolicy en DEPLOYER_SA/);
+    });
+
+    it('TEST_12: el manifiesto tiene un conteo exacto y documentado — 12, nunca un número mágico sin explicar', () => {
+      expect(ALL_REQUIRED_DEPLOYER_PERMISSIONS.length + READINESS_GATE_META_PERMISSIONS.length).toBe(12);
+      const gateSource = jobSource('verify-deployer-permissions');
+      expect(gateSource).toMatch(/12 permisos/);
+    });
+
+    it('el gate nunca vuelca la política IAM completa ni la lista completa de permisos de un rol a los logs — solo nombres de permisos individuales ya comparados', () => {
+      const gateSource = jobSource('verify-deployer-permissions');
+      expect(gateSource).not.toMatch(/cat "\$PROJECT_POLICY_JSON"/);
+      expect(gateSource).not.toMatch(/echo "\$PROJECT_POLICY_JSON"/);
+      expect(gateSource).not.toMatch(/gcloud iam roles describe.*--format=json/);
+    });
+
+    it('HOLD_INSUFFICIENT_DEPLOYER_PERMISSIONS es el código de fallo fail-closed cuando falta cualquier permiso requerido', () => {
+      const gateSource = jobSource('verify-deployer-permissions');
+      expect(gateSource).toMatch(/HOLD_INSUFFICIENT_DEPLOYER_PERMISSIONS/);
+      expect(gateSource).toMatch(/set -euo pipefail/);
+    });
+
+    it('el gate nunca confía ciegamente en un binding de rol CONDICIONAL — un binding con `condition` se excluye de DEPLOYER_ROLES y dispara HOLD por separado (Fase 8 red team: evita un falso PASS)', () => {
+      const gateSource = jobSource('verify-deployer-permissions');
+      expect(gateSource).toMatch(/CONDITIONAL_ROLES/);
+      expect(gateSource).toMatch(/b\.get\('condition'\)/);
+      expect(gateSource).toMatch(/not b\.get\('condition'\)/);
+    });
+
+    it('TEST_1/TEST_8 (tripwire de mutaciones futuras): todo comando `gcloud sql`/`gcloud secrets` operativo del workflow completo es, o bien un verbo read-only ya cubierto (describe/list), o bien un verbo de mutación ya representado en REQUIRED_PERMISSIONS — cualquier verbo nuevo, no clasificado, rompe este test hasta que se actualice el manifiesto', () => {
+      const KNOWN_READONLY_VERBS = [/gcloud sql users describe/, /gcloud sql instances describe/, /gcloud sql databases list/, /gcloud secrets describe/, /gcloud secrets versions list/, /gcloud secrets get-iam-policy/, /gcloud run jobs (describe|list)/, /gcloud run jobs executions describe/, /gcloud iam roles describe/, /gcloud projects get-iam-policy/, /gcloud artifacts docker images (list|describe)/, /gcloud auth configure-docker/, /gcloud config get-value/];
+      const KNOWN_MUTATING_VERBS = [
+        /gcloud sql users create/,
+        /gcloud sql users delete/,
+        /gcloud sql users assign-roles/,
+        /gcloud secrets create/,
+        /gcloud secrets delete/,
+        /gcloud secrets versions add/,
+        /gcloud secrets add-iam-policy-binding/,
+        /gcloud run jobs deploy/,
+        /gcloud run jobs execute/,
+        /gcloud run jobs delete/,
+      ];
+      const operationalLines = source.split('\n').filter((line) => !line.trim().startsWith('#') && /gcloud (sql|secrets)\b/.test(line));
+      expect(operationalLines.length).toBeGreaterThan(10); // sanity — el archivo realmente tiene muchas de estas líneas
+      const unclassified = operationalLines.filter(
+        (line) => !KNOWN_READONLY_VERBS.some((re) => re.test(line)) && !KNOWN_MUTATING_VERBS.some((re) => re.test(line)),
+      );
+      if (unclassified.length > 0) {
+        throw new Error(
+          `Comando(s) gcloud sql/secrets no clasificado(s) — actualizar el manifiesto (production-hardener-required-permissions.ts) y este test:\n${unclassified.join('\n')}`,
+        );
+      }
     });
   });
 });

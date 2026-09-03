@@ -599,6 +599,158 @@ jobs:
           echo "verify_pass=YES" >> "$GITHUB_OUTPUT"
 
   # ===========================================================================
+  # Job 5b — TF12-POINT8C-IAM-P1 remediation. Gate de readiness de solo
+  # lectura: prueba, ANTES de cualquier mutación real, que DEPLOYER_SA tiene
+  # exactamente los permisos IAM que bootstrap-ephemeral-admin/
+  # bootstrap-apply-admin están por ejercer. Existe porque el run real
+  # 33718581473 falló con HTTP 403 en `gcloud sql users create` —
+  # DEPLOYER_SA nunca tuvo ningún permiso de mutación de Cloud SQL users ni
+  # de Secret Manager, y ninguna auditoría previa lo había verificado
+  # (todas verificaban "el IAM no cambió", nunca "el IAM alcanza"). Este job
+  # cierra esa brecha de PROCESO, no solo la brecha de IAM puntual.
+  #
+  # El conjunto exacto de 12 permisos (10 operativos + 2 meta-permissions
+  # que este mismo job necesita para poder leerse a sí mismo) es un espejo
+  # bash de `backend/src/ops/production-hardener-required-permissions.ts`
+  # — igual disciplina de duplicación documentada que
+  # `derive-operation-names` respecto de `hardener-operation.ts`.
+  # `hardener-workflow-contract.spec.ts` prueba que ambas listas coinciden
+  # exactamente.
+  #
+  # Solo lectura: `gcloud projects get-iam-policy` + `gcloud iam roles
+  # describe` (ambos GET, nunca mutan nada). Nunca vuelca la política IAM
+  # completa (que incluye todos los `members` de cada binding, no solo
+  # DEPLOYER_SA) ni la lista completa de permisos de cada rol a los logs —
+  # solo los nombres de los permisos REQUERIDOS que resultaron faltantes o
+  # prohibidos, nunca más que eso.
+  #
+  # EXPECTATIVA ACTUAL: este job DEBE fallar contra el estado real de
+  # Producción hasta que el Human Gate de remediación IAM
+  # (IAM_CUSTOM_ROLE_CREATE_AND_GRANT) se aplique — eso es exactamente lo
+  # que se espera y lo correcto, no un defecto de este job.
+  # ===========================================================================
+  verify-deployer-permissions:
+    name: Verify DEPLOYER_SA has required Cloud SQL/Secret Manager permissions (read-only — HOLD if insufficient)
+    needs: guard
+    if: needs.guard.outputs.guard_pass == 'YES' && (needs.guard.outputs.mode == 'bootstrap_and_preflight' || needs.guard.outputs.mode == 'apply')
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    environment: production
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - name: Google Auth — WIF to Production deployer SA
+        uses: google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093 # v3
+        with:
+          project_id: ${{ env.PRODUCTION_PROJECT }}
+          workload_identity_provider: projects/731660820861/locations/global/workloadIdentityPools/github-actions-pool/providers/github-production-deployer
+          service_account: ${{ env.DEPLOYER_SA }}
+      - name: Setup gcloud
+        uses: google-github-actions/setup-gcloud@aa5489c8933f4cc7a4f7d45035b3b1440c9c10db # v3
+
+      - name: Leer roles otorgados a DEPLOYER_SA y comparar su expansión de permisos contra el manifiesto requerido (solo lectura)
+        shell: bash
+        run: |
+          set -euo pipefail
+          fail() { echo "::error::HOLD_INSUFFICIENT_DEPLOYER_PERMISSIONS — $1"; exit 1; }
+          command -v python3 >/dev/null 2>&1 || fail "PARSER_UNAVAILABLE — python3 requerido, FAIL_CLOSED."
+
+          # Espejo bash EXACTO de ALL_REQUIRED_DEPLOYER_PERMISSIONS +
+          # READINESS_GATE_META_PERMISSIONS en
+          # production-hardener-required-permissions.ts (12 permisos —
+          # probado idéntico por hardener-workflow-contract.spec.ts).
+          REQUIRED_PERMISSIONS=(
+            "cloudsql.users.create"
+            "cloudsql.users.delete"
+            "cloudsql.users.get"
+            "cloudsql.users.update"
+            "secretmanager.secrets.create"
+            "secretmanager.secrets.delete"
+            "secretmanager.secrets.get"
+            "secretmanager.secrets.getIamPolicy"
+            "secretmanager.secrets.setIamPolicy"
+            "secretmanager.versions.add"
+            "iam.roles.get"
+            "resourcemanager.projects.getIamPolicy"
+          )
+          FORBIDDEN_PERMISSIONS=(
+            "secretmanager.versions.access"
+          )
+
+          PROJECT_POLICY_JSON="$(mktemp)"
+          trap 'rm -f "$PROJECT_POLICY_JSON" "${ALL_GRANTED:-}"' EXIT
+          set +e
+          gcloud projects get-iam-policy "${{ env.PRODUCTION_PROJECT }}" --format=json >"$PROJECT_POLICY_JSON" 2>/dev/null
+          POLICY_READ_EXIT=$?
+          set -e
+          [ "$POLICY_READ_EXIT" -eq 0 ] || fail "No se pudo leer la política IAM del proyecto — falta resourcemanager.projects.getIamPolicy en DEPLOYER_SA (meta-permission que este mismo gate necesita para auto-verificarse)."
+
+          DEPLOYER_MEMBER="serviceAccount:${{ env.DEPLOYER_SA }}"
+          # Fail-closed ante bindings CONDICIONALES (Fase 8 red team): un
+          # binding con `condition` puede evaluar false en el momento real
+          # de la mutación aunque el rol aparezca "otorgado" en la política
+          # ahora mismo — nunca se cuenta como suficiente sin evaluar la
+          # condición, lo cual este gate no intenta hacer (fuera de alcance:
+          # evaluar CEL contra el contexto real de la request). Un binding
+          # condicional se reporta aparte y NUNCA contribuye permisos a
+          # DEPLOYER_ROLES — un HOLD por esto es la respuesta correcta, no
+          # un falso PASS.
+          CONDITIONAL_ROLES="$(python3 -c "
+          import json
+          with open('$PROJECT_POLICY_JSON', encoding='utf-8') as handle:
+              policy = json.load(handle)
+          member = '$DEPLOYER_MEMBER'
+          roles = sorted({b['role'] for b in policy.get('bindings', []) if member in (b.get('members') or []) and b.get('condition')})
+          print('\n'.join(roles))
+          ")"
+          if [ -n "$CONDITIONAL_ROLES" ]; then
+            fail "DEPLOYER_SA tiene al menos un binding de rol CONDICIONAL a nivel de proyecto ($(echo "$CONDITIONAL_ROLES" | tr '\n' ',' | sed 's/,$//')) — este gate nunca evalúa condiciones CEL, así que nunca puede confiar en que ese rol esté realmente activo en el momento de la mutación real. Revisar manualmente si ese binding cubre alguno de los 12 permisos requeridos."
+          fi
+
+          DEPLOYER_ROLES="$(python3 -c "
+          import json
+          with open('$PROJECT_POLICY_JSON', encoding='utf-8') as handle:
+              policy = json.load(handle)
+          member = '$DEPLOYER_MEMBER'
+          roles = sorted({b['role'] for b in policy.get('bindings', []) if member in (b.get('members') or []) and not b.get('condition')})
+          print('\n'.join(roles))
+          ")"
+          [ -n "$DEPLOYER_ROLES" ] || fail "DEPLOYER_SA no tiene ningún binding de rol INCONDICIONAL a nivel de proyecto — no se puede otorgar el manifiesto requerido sin al menos un rol."
+
+          ALL_GRANTED="$(mktemp)"
+          while IFS= read -r role; do
+            [ -z "$role" ] && continue
+            if [[ "$role" == roles/* ]]; then
+              gcloud iam roles describe "$role" --format="value(includedPermissions)" 2>/dev/null | tr ';' '\n' >> "$ALL_GRANTED" || true
+            else
+              ROLE_ID="${role##*/}"
+              gcloud iam roles describe "$ROLE_ID" --project="${{ env.PRODUCTION_PROJECT }}" --format="value(includedPermissions)" 2>/dev/null | tr ';' '\n' >> "$ALL_GRANTED" || true
+            fi
+          done <<< "$DEPLOYER_ROLES"
+          sort -u -o "$ALL_GRANTED" "$ALL_GRANTED"
+
+          MISSING=()
+          for permission in "${REQUIRED_PERMISSIONS[@]}"; do
+            grep -qxF "$permission" "$ALL_GRANTED" || MISSING+=("$permission")
+          done
+
+          FORBIDDEN_PRESENT=()
+          for permission in "${FORBIDDEN_PERMISSIONS[@]}"; do
+            grep -qxF "$permission" "$ALL_GRANTED" && FORBIDDEN_PRESENT+=("$permission")
+          done
+
+          if [ "${#FORBIDDEN_PRESENT[@]}" -gt 0 ]; then
+            fail "DEPLOYER_SA tiene otorgado un permiso explícitamente prohibido: ${FORBIDDEN_PRESENT[*]} — nunca debe tener acceso de lectura de payload de secretos. Revisar el/los rol(es) que lo otorgan antes de continuar."
+          fi
+
+          if [ "${#MISSING[@]}" -gt 0 ]; then
+            fail "DEPLOYER_SA carece de ${#MISSING[@]} permiso(s) requerido(s): ${MISSING[*]} — dispatch bloqueado hasta que el Human Gate de remediación IAM (crear/otorgar el rol custom korixaProductionDbHardenerOrchestrator) se aplique."
+          fi
+
+          echo "DEPLOYER_PERMISSIONS_SUFFICIENT=YES"
+
+  # ===========================================================================
   # Job 6 — prerrequisitos de solo lectura (nunca crea nada, HOLD fail-closed
   # si algo no puede probarse). Se ejecuta para los TRES modos.
   # ===========================================================================
@@ -697,11 +849,12 @@ jobs:
   # ===========================================================================
   bootstrap-ephemeral-admin:
     name: Bootstrap ephemeral DB admin (stage 1 only)
-    needs: [guard, derive-operation-names, verify-prerequisites-instance, resolve-artifact]
+    needs: [guard, derive-operation-names, verify-prerequisites-instance, resolve-artifact, verify-deployer-permissions]
     if: |
       !cancelled() &&
       needs.guard.outputs.mode == 'bootstrap_and_preflight' &&
-      needs.resolve-artifact.result == 'success'
+      needs.resolve-artifact.result == 'success' &&
+      needs.verify-deployer-permissions.result == 'success'
     runs-on: ubuntu-latest
     timeout-minutes: 10
     environment: production
@@ -1130,11 +1283,12 @@ jobs:
   # ===========================================================================
   bootstrap-apply-admin:
     name: Bootstrap FRESH ephemeral DB admin (stage 2 — never reuses stage 1's)
-    needs: [guard, derive-operation-names, verify-prerequisites-instance, resolve-artifact]
+    needs: [guard, derive-operation-names, verify-prerequisites-instance, resolve-artifact, verify-deployer-permissions]
     if: |
       !cancelled() &&
       needs.guard.outputs.mode == 'apply' &&
-      needs.resolve-artifact.result == 'success'
+      needs.resolve-artifact.result == 'success' &&
+      needs.verify-deployer-permissions.result == 'success'
     runs-on: ubuntu-latest
     timeout-minutes: 10
     environment: production
