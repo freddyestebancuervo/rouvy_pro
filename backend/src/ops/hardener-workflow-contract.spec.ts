@@ -79,7 +79,7 @@ describe('production-db-role-hardening.yml — contrato estructural', () => {
     expect(jobNeeds('apply')).not.toContain('verify-operation-context');
     expect(applyBlock).toMatch(/needs\.verify-target-role-preconditions\.outputs\.target_role_verified == 'YES'/);
     expect(applyBlock).toMatch(/needs\.fresh-preflight\.outputs\.fresh_preflight_result == 'PASS'/);
-    expect(source).not.toMatch(/\n  verify-operation-context:\n/);
+    expect(source).not.toMatch(/\n {2}verify-operation-context:\n/);
   });
 
   it('Phase 7 — bootstrap_and_preflight nunca tiene una arista needs hacia apply/remove-target-cloudsqlsuperuser', () => {
@@ -384,7 +384,7 @@ describe('production-db-role-hardening.yml — contrato estructural', () => {
         expect.arrayContaining(['bootstrap-ephemeral-admin', 'preflight', 'stage1-summary']),
       );
       // No queda ningún job con el nombre antiguo (condicional a la falla).
-      expect(source).not.toMatch(/\n  cleanup-after-stage1-failure:\n/);
+      expect(source).not.toMatch(/\n {2}cleanup-after-stage1-failure:\n/);
     });
 
     it('P1-3 (SUPERSEDED por la remediación zero-standing-privilege — ver el describe block dedicado más abajo): el lease reactivo cross-dispatch fue ELIMINADO, no acortado — no queda ninguna referencia operativa a EPHEMERAL_ADMIN_MAX_LIFETIME_SECONDS/HOLD_OPERATION_LEASE_EXPIRED/createTime como mecanismo de expiración', () => {
@@ -430,7 +430,7 @@ describe('production-db-role-hardening.yml — contrato estructural', () => {
       expect(targetRolePreconditionsSource).toMatch(/HOLD_TARGET_DATABASE_ROLES_DRIFT/);
       const exactChecks = [...targetRolePreconditionsSource.matchAll(/roles == \['cloudsqlsuperuser'\]/g)];
       expect(exactChecks.length).toBe(1); // solo korixa_app — el admin efímero se crea fresco, sin ventana de drift
-      expect(source).not.toMatch(/\n  verify-operation-context:\n/);
+      expect(source).not.toMatch(/\n {2}verify-operation-context:\n/);
       // Ambos jobs de bootstrap crean el admin con el rol exacto explícito.
       for (const jobName of ['bootstrap-ephemeral-admin', 'bootstrap-apply-admin']) {
         expect(jobSource(jobName)).toMatch(/--database-roles=cloudsqlsuperuser/);
@@ -448,7 +448,7 @@ describe('production-db-role-hardening.yml — contrato estructural', () => {
       for (const jobName of ['cleanup-only', 'cleanup-after-apply', 'cleanup-after-preflight']) {
         expect(jobSource(jobName)).not.toMatch(/needs\.resolve-artifact\.result == 'success'/);
       }
-      expect(source).not.toMatch(/\n  cleanup-after-stage1-failure:\n/);
+      expect(source).not.toMatch(/\n {2}cleanup-after-stage1-failure:\n/);
       // Cada revoke best-effort chequea IMMUTABLE_REF antes de intentar el
       // deploy — nunca asume que la resolución de artefacto tuvo éxito.
       const immutableRefGuards = [...source.matchAll(/-n "\$IMMUTABLE_REF"|-z "\$IMMUTABLE_REF"/g)];
