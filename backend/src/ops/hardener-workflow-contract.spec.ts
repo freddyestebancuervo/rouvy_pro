@@ -262,13 +262,13 @@ describe('production-db-role-hardening.yml — contrato estructural', () => {
       expect(allMentions).toHaveLength(1);
     });
 
-    it('11. el Cloud Run Job efímero se elimina Y se re-verifica ausente EN AMBOS jobs de cleanup (Phase 7 remediación — antes nunca se eliminaba)', () => {
+    it('11. el Cloud Run Job efímero se elimina Y se re-verifica ausente (ABSENT_CONFIRMED, TF12-POINT8C-IAM-P1) EN AMBOS jobs de cleanup (Phase 7 remediación — antes nunca se eliminaba)', () => {
       expect(cleanupAfterApplySource).toMatch(/gcloud run jobs delete "\$EPHEMERAL_JOB"/);
       expect(cleanupAfterApplySource).toMatch(/gcloud run jobs describe "\$EPHEMERAL_JOB"/);
-      expect(cleanupAfterApplySource).toMatch(/JOB_STILL_EXISTS/);
+      expect(cleanupAfterApplySource).toMatch(/JOB_STATE/);
       expect(cleanupOnlySource).toMatch(/gcloud run jobs delete "\$EPHEMERAL_JOB"/);
       expect(cleanupOnlySource).toMatch(/gcloud run jobs describe "\$EPHEMERAL_JOB"/);
-      expect(cleanupOnlySource).toMatch(/JOB_STILL_EXISTS/);
+      expect(cleanupOnlySource).toMatch(/JOB_STATE/);
     });
 
     it('12. resolve-artifact y verify-prerequisites-instance ahora también corren para cleanup_only (necesario para poder ejecutar el Cloud Run Job de revoke)', () => {
@@ -384,7 +384,11 @@ describe('production-db-role-hardening.yml — contrato estructural', () => {
       expect(stage1CleanupSource).toMatch(/gcloud sql users delete "\$EPHEMERAL_ADMIN"/);
       expect(stage1CleanupSource).toMatch(/gcloud secrets delete "\$EPHEMERAL_DSN_SECRET"/);
       expect(stage1CleanupSource).toMatch(/gcloud run jobs delete "\$EPHEMERAL_JOB"/);
-      expect(stage1CleanupSource).toMatch(/ADMIN_STILL_EXISTS/);
+      // TF12-POINT8C-IAM-P1 remediation (P1-A): la variable de existencia
+      // se renombró de ADMIN_STILL_EXISTS a ADMIN_STATE (clasificador
+      // EXISTS/ABSENT_CONFIRMED/LOOKUP_FAILED — ver describe block
+      // dedicado más abajo).
+      expect(stage1CleanupSource).toMatch(/ADMIN_STATE/);
       expect(jobNeeds('cleanup-after-preflight')).toEqual(
         expect.arrayContaining(['bootstrap-ephemeral-admin', 'preflight', 'stage1-summary']),
       );
@@ -562,8 +566,10 @@ describe('production-db-role-hardening.yml — contrato estructural', () => {
       expect(idx).toBeGreaterThan(-1);
       const precedingText = cleanupSource.slice(0, idx);
       // Solo se llega a esa línea dentro de la rama que confirmó las tres
-      // ausencias (ADMIN/DSN/JOB) — nunca incondicionalmente.
-      expect(precedingText).toMatch(/ADMIN_STILL_EXISTS" -ne 0 \] && \[ "\$DSN_SECRET_STILL_EXISTS" -ne 0 \] && \[ "\$JOB_STILL_EXISTS" -ne 0 \]/);
+      // ausencias como ABSENT_CONFIRMED (ADMIN/DSN/JOB) — nunca
+      // incondicionalmente, y nunca a partir de un LOOKUP_FAILED genérico
+      // (TF12-POINT8C-IAM-P1 remediation, P1-A).
+      expect(precedingText).toMatch(/ADMIN_STATE" = "ABSENT_CONFIRMED" \] && \[ "\$DSN_SECRET_STATE" = "ABSENT_CONFIRMED" \] && \[ "\$JOB_STATE" = "ABSENT_CONFIRMED" \]/);
     });
 
     it('10. ningún comentario/texto afirma que un timer/lease reactivo elimina recursos por sí solo — el único concepto de tiempo restante es timeout-minutes (MAX_EXECUTION_WINDOW real, de plataforma, nunca un mecanismo de borrado)', () => {
@@ -646,7 +652,7 @@ describe('production-db-role-hardening.yml — contrato estructural', () => {
       const bashRequired = extractBashArray(gateSource, 'REQUIRED_PERMISSIONS');
       const expected = [...ALL_REQUIRED_DEPLOYER_PERMISSIONS, ...READINESS_GATE_META_PERMISSIONS];
       expect(bashRequired.sort()).toEqual([...expected].sort());
-      expect(bashRequired).toHaveLength(12);
+      expect(bashRequired).toHaveLength(13);
     });
 
     it('el array bash incluye cloudsql.user lifecycle (create/delete/update/get) — nunca cloudsql.users.list', () => {
@@ -722,35 +728,62 @@ describe('production-db-role-hardening.yml — contrato estructural', () => {
       }
     });
 
-    it('TEST_10: MIGRATION_EXECUTOR_SA nunca recibe un rol de proyecto en este workflow — únicamente aparece como --service-account de los Cloud Run Jobs efímeros y en add-iam-policy-binding del secret DSN (resource-scoped, por operación)', () => {
+    it('TEST_10: MIGRATION_EXECUTOR_SA nunca recibe un rol/binding NUEVO de proyecto en este workflow — nunca aparece como member de un gcloud projects/iam add-iam-policy-binding ni de un gcloud iam service-accounts add-iam-policy-binding (solo se LEE su política, vía get-iam-policy — P1-B — o se otorga sobre el secret DSN efímero, resource-scoped, por operación)', () => {
       expect(source).not.toMatch(/gcloud projects add-iam-policy-binding[\s\S]*?MIGRATION_EXECUTOR_SA/);
+      expect(source).not.toMatch(/gcloud iam service-accounts add-iam-policy-binding[\s\S]*?MIGRATION_EXECUTOR_SA/);
       const migrationExecutorMentions = [...source.matchAll(/MIGRATION_EXECUTOR_SA/g)];
       expect(migrationExecutorMentions.length).toBeGreaterThan(0);
-      // Todo mention operacional de MIGRATION_EXECUTOR_SA vive dentro de
-      // `--service-account=` (Cloud Run) o `--member="serviceAccount:...MIGRATION_EXECUTOR_SA"` (IAM binding sobre el secret efímero, nunca sobre el proyecto).
-      const operationalLines = source.split('\n').filter((line) => !line.trim().startsWith('#') && line.includes('MIGRATION_EXECUTOR_SA'));
+    });
+
+    it('el nuevo step de reprueba de actAs (P1-B) solo LEE la política IAM de MIGRATION_EXECUTOR_SA (get-iam-policy) — nunca la muta', () => {
+      const gateSource = jobSource('verify-deployer-permissions');
+      expect(gateSource).toMatch(/gcloud iam service-accounts get-iam-policy "\$\{\{ env\.MIGRATION_EXECUTOR_SA \}\}"/);
+      expect(gateSource).not.toMatch(/gcloud iam service-accounts (add-iam-policy-binding|remove-iam-policy-binding|set-iam-policy)/);
+    });
+
+    it('legacy (TEST_10 original): --service-account de los Cloud Run Jobs efímeros y el add-iam-policy-binding del secret DSN siguen siendo los únicos usos "de escritura/uso" de MIGRATION_EXECUTOR_SA', () => {
+      const operationalLines = source.split('\n').filter(
+        (line) =>
+          !line.trim().startsWith('#') &&
+          line.includes('MIGRATION_EXECUTOR_SA') &&
+          !/get-iam-policy|ACTAS_|fail "|name: Reprobar/.test(line),
+      );
       for (const line of operationalLines) {
         expect(/--service-account="\$\{\{ env\.MIGRATION_EXECUTOR_SA \}\}"|member="serviceAccount:\$\{\{ env\.MIGRATION_EXECUTOR_SA \}\}"|MIGRATION_EXECUTOR_SA: korixa-prod-migration-exec@/.test(line)).toBe(true);
       }
     });
 
-    it('TEST_11: el gate declara, en su propio comentario, el contrato de meta-permissions que necesita para leerse a sí mismo (resourcemanager.projects.getIamPolicy + iam.roles.get) — nunca las asume implícitamente', () => {
+    it('TEST_11: el gate declara, en su propio comentario, el contrato de meta-permissions que necesita para leerse a sí mismo (resourcemanager.projects.getIamPolicy + iam.roles.get + iam.serviceAccounts.getIamPolicy) — nunca las asume implícitamente', () => {
       const gateSource = jobSource('verify-deployer-permissions');
       expect(gateSource).toMatch(/resourcemanager\.projects\.getIamPolicy/);
       expect(gateSource).toMatch(/iam\.roles\.get/i);
+      expect(gateSource).toMatch(/iam\.serviceAccounts\.getIamPolicy/);
       expect(gateSource).toMatch(/falta resourcemanager\.projects\.getIamPolicy en DEPLOYER_SA/);
+      expect(gateSource).toMatch(/falta iam\.serviceAccounts\.getIamPolicy en DEPLOYER_SA/);
     });
 
-    it('TEST_12: el manifiesto tiene un conteo exacto y documentado — 12, nunca un número mágico sin explicar', () => {
-      expect(ALL_REQUIRED_DEPLOYER_PERMISSIONS.length + READINESS_GATE_META_PERMISSIONS.length).toBe(12);
+    it('P1-B: existe un step dedicado que reprueba EN VIVO el binding roles/iam.serviceAccountUser de DEPLOYER_SA sobre MIGRATION_EXECUTOR_SA — nunca se acepta "ya se probó antes" como evidencia', () => {
       const gateSource = jobSource('verify-deployer-permissions');
-      expect(gateSource).toMatch(/12 permisos/);
+      expect(gateSource).toMatch(/CAN_DEPLOYER_ACT_AS_MIGRATION_EXECUTOR=YES/);
+      expect(gateSource).toMatch(/roles\/iam\.serviceAccountUser/);
+      expect(gateSource).toMatch(/no puede actAs para desplegar el Cloud Run Job efímero/);
+      // También fail-closed ante un binding condicional, igual que el
+      // chequeo de permisos de proyecto (Fase 8 red team, generalizado).
+      expect(gateSource).toMatch(/ACTAS_CONDITIONAL/);
     });
 
-    it('el gate nunca vuelca la política IAM completa ni la lista completa de permisos de un rol a los logs — solo nombres de permisos individuales ya comparados', () => {
+    it('TEST_12: el manifiesto tiene un conteo exacto y documentado — 13 (10 operativos + 3 meta, P1-B agregó iam.serviceAccounts.getIamPolicy), nunca un número mágico sin explicar', () => {
+      expect(ALL_REQUIRED_DEPLOYER_PERMISSIONS.length + READINESS_GATE_META_PERMISSIONS.length).toBe(13);
+      const gateSource = jobSource('verify-deployer-permissions');
+      expect(gateSource).toMatch(/13 permisos/);
+    });
+
+    it('el gate nunca vuelca la política IAM completa (ni del proyecto ni de MIGRATION_EXECUTOR_SA) ni la lista completa de permisos de un rol a los logs — solo nombres de permisos individuales ya comparados', () => {
       const gateSource = jobSource('verify-deployer-permissions');
       expect(gateSource).not.toMatch(/cat "\$PROJECT_POLICY_JSON"/);
       expect(gateSource).not.toMatch(/echo "\$PROJECT_POLICY_JSON"/);
+      expect(gateSource).not.toMatch(/cat "\$MIGRATION_EXEC_POLICY_JSON"/);
+      expect(gateSource).not.toMatch(/echo "\$MIGRATION_EXEC_POLICY_JSON"/);
       expect(gateSource).not.toMatch(/gcloud iam roles describe.*--format=json/);
     });
 

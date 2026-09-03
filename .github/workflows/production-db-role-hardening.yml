@@ -658,8 +658,12 @@ jobs:
 
           # Espejo bash EXACTO de ALL_REQUIRED_DEPLOYER_PERMISSIONS +
           # READINESS_GATE_META_PERMISSIONS en
-          # production-hardener-required-permissions.ts (12 permisos —
+          # production-hardener-required-permissions.ts (13 permisos —
           # probado idéntico por hardener-workflow-contract.spec.ts).
+          # TF12-POINT8C-IAM-P1-INDEPENDENT-AUDIT-REMEDIATION (P1-B) agregó
+          # iam.serviceAccounts.getIamPolicy — necesaria para reprobar, en
+          # vivo, el binding actAs sobre MIGRATION_EXECUTOR_SA más abajo en
+          # este mismo step (nunca "ya se probó antes").
           REQUIRED_PERMISSIONS=(
             "cloudsql.users.create"
             "cloudsql.users.delete"
@@ -673,6 +677,7 @@ jobs:
             "secretmanager.versions.add"
             "iam.roles.get"
             "resourcemanager.projects.getIamPolicy"
+            "iam.serviceAccounts.getIamPolicy"
           )
           FORBIDDEN_PERMISSIONS=(
             "secretmanager.versions.access"
@@ -705,7 +710,7 @@ jobs:
           print('\n'.join(roles))
           ")"
           if [ -n "$CONDITIONAL_ROLES" ]; then
-            fail "DEPLOYER_SA tiene al menos un binding de rol CONDICIONAL a nivel de proyecto ($(echo "$CONDITIONAL_ROLES" | tr '\n' ',' | sed 's/,$//')) — este gate nunca evalúa condiciones CEL, así que nunca puede confiar en que ese rol esté realmente activo en el momento de la mutación real. Revisar manualmente si ese binding cubre alguno de los 12 permisos requeridos."
+            fail "DEPLOYER_SA tiene al menos un binding de rol CONDICIONAL a nivel de proyecto ($(echo "$CONDITIONAL_ROLES" | tr '\n' ',' | sed 's/,$//')) — este gate nunca evalúa condiciones CEL, así que nunca puede confiar en que ese rol esté realmente activo en el momento de la mutación real. Revisar manualmente si ese binding cubre alguno de los 13 permisos requeridos."
           fi
 
           DEPLOYER_ROLES="$(python3 -c "
@@ -749,6 +754,74 @@ jobs:
           fi
 
           echo "DEPLOYER_PERMISSIONS_SUFFICIENT=YES"
+
+      - name: Reprobar en vivo — DEPLOYER_SA puede actAs MIGRATION_EXECUTOR_SA (solo lectura — nunca "ya se probó antes")
+        shell: bash
+        run: |
+          set -euo pipefail
+          fail() { echo "::error::HOLD_INSUFFICIENT_DEPLOYER_PERMISSIONS — $1"; exit 1; }
+          command -v python3 >/dev/null 2>&1 || fail "PARSER_UNAVAILABLE — python3 requerido, FAIL_CLOSED."
+
+          # TF12-POINT8C-IAM-P1-INDEPENDENT-AUDIT-REMEDIATION (P1-B). La
+          # auditoría independiente rechazó explícitamente "ya se probó en
+          # vivo previamente" como justificación de que DEPLOYER_SA puede
+          # `actAs` MIGRATION_EXECUTOR_SA para desplegar cada Cloud Run Job
+          # efímero (`--service-account=${{ env.MIGRATION_EXECUTOR_SA }}`
+          # en todo `gcloud run jobs deploy` de este archivo) — exactamente
+          # el mismo error de categoría (drift-checked != sufficiency-
+          # checked) que motivó P1-A/P1-1..P1-9 de este archivo. Este step
+          # reprueba el binding EN VIVO, en cada dispatch, antes de que
+          # bootstrap-ephemeral-admin/bootstrap-apply-admin puedan correr —
+          # nunca confía en un resultado de auditoría pasado.
+          #
+          # `iam.serviceAccounts.actAs` se otorga vía `roles/iam.
+          # serviceAccountUser` ligado, a nivel de RECURSO (la propia
+          # MIGRATION_EXECUTOR_SA, no el proyecto), a DEPLOYER_SA — la
+          # única forma de leerlo de solo lectura es `gcloud iam
+          # service-accounts get-iam-policy <MIGRATION_EXECUTOR_SA>`, que
+          # exige exactamente `iam.serviceAccounts.getIamPolicy` (ya
+          # incluida arriba en REQUIRED_PERMISSIONS — probada desde este
+          # comando, no asumida).
+          MIGRATION_EXEC_POLICY_JSON="$(mktemp)"
+          set +e
+          gcloud iam service-accounts get-iam-policy "${{ env.MIGRATION_EXECUTOR_SA }}" --project="${{ env.PRODUCTION_PROJECT }}" --format=json >"$MIGRATION_EXEC_POLICY_JSON" 2>/dev/null
+          MIGRATION_EXEC_POLICY_READ_EXIT=$?
+          set -e
+          [ "$MIGRATION_EXEC_POLICY_READ_EXIT" -eq 0 ] || fail "No se pudo leer la política IAM de MIGRATION_EXECUTOR_SA — falta iam.serviceAccounts.getIamPolicy en DEPLOYER_SA (meta-permission que este mismo gate necesita para reprobar actAs)."
+
+          DEPLOYER_MEMBER="serviceAccount:${{ env.DEPLOYER_SA }}"
+          # Mismo fail-closed ante bindings CONDICIONALES que el step
+          # anterior — un roles/iam.serviceAccountUser condicional nunca se
+          # cuenta como actAs garantizado.
+          ACTAS_CONDITIONAL="$(python3 -c "
+          import json
+          with open('$MIGRATION_EXEC_POLICY_JSON', encoding='utf-8') as handle:
+              policy = json.load(handle)
+          member = '$DEPLOYER_MEMBER'
+          for b in policy.get('bindings', []):
+              if b.get('role') == 'roles/iam.serviceAccountUser' and member in (b.get('members') or []) and b.get('condition'):
+                  print('YES')
+                  break
+          else:
+              print('NO')
+          ")"
+          [ "$ACTAS_CONDITIONAL" = "NO" ] || fail "El binding roles/iam.serviceAccountUser de DEPLOYER_SA sobre MIGRATION_EXECUTOR_SA es CONDICIONAL — este gate nunca evalúa CEL, nunca confía en que esté activo en el momento real del deploy."
+
+          ACTAS_GRANTED="$(python3 -c "
+          import json
+          with open('$MIGRATION_EXEC_POLICY_JSON', encoding='utf-8') as handle:
+              policy = json.load(handle)
+          member = '$DEPLOYER_MEMBER'
+          for b in policy.get('bindings', []):
+              if b.get('role') == 'roles/iam.serviceAccountUser' and member in (b.get('members') or []) and not b.get('condition'):
+                  print('YES')
+                  break
+          else:
+              print('NO')
+          ")"
+          [ "$ACTAS_GRANTED" = "YES" ] || fail "DEPLOYER_SA no tiene roles/iam.serviceAccountUser (sin condición) sobre MIGRATION_EXECUTOR_SA — no puede actAs para desplegar el Cloud Run Job efímero. dispatch bloqueado hasta que el Human Gate de remediación IAM lo confirme/restaure."
+
+          echo "CAN_DEPLOYER_ACT_AS_MIGRATION_EXECUTOR=YES"
 
   # ===========================================================================
   # Job 6 — prerrequisitos de solo lectura (nunca crea nada, HOLD fail-closed
@@ -1111,7 +1184,7 @@ jobs:
       - name: Setup gcloud
         uses: google-github-actions/setup-gcloud@aa5489c8933f4cc7a4f7d45035b3b1440c9c10db # v3
 
-      - name: Descubrir y remover, defensivamente, exactamente los recursos de esta operation_id (idempotente — describe antes de borrar)
+      - name: Descubrir y remover, defensivamente, exactamente los recursos de esta operation_id (idempotente — clasifica antes de borrar, nunca asume ausencia ante un fallo genérico)
         shell: bash
         env:
           IMMUTABLE_REF: ${{ needs.resolve-artifact.outputs.immutable_ref }}
@@ -1123,16 +1196,53 @@ jobs:
         run: |
           set +e
 
-          # A — revocar ADMIN OPTION, solo si el admin y el secret DSN siguen
-          # existiendo. Vía el mismo Cloud Run Job efímero, VPC privada,
-          # `db-hardener-bootstrap.js revoke-admin-option` — nunca ExecuteSql
-          # API. Best-effort respecto de IMMUTABLE_REF.
-          gcloud sql users describe "$EPHEMERAL_ADMIN" --instance="${{ env.CLOUD_SQL_INSTANCE }}" --project="${{ env.PRODUCTION_PROJECT }}" >/dev/null 2>&1
-          ADMIN_EXISTS_BEFORE=$?
-          if [ "$ADMIN_EXISTS_BEFORE" -eq 0 ]; then
-            gcloud secrets describe "$EPHEMERAL_DSN_SECRET" --project="${{ env.PRODUCTION_PROJECT }}" >/dev/null 2>&1
-            DSN_SECRET_EXISTS_BEFORE=$?
-            if [ "$DSN_SECRET_EXISTS_BEFORE" -eq 0 ] && [ -n "$IMMUTABLE_REF" ]; then
+          # TF12-POINT8C-IAM-P1 remediation (P1-A) — clasificador
+          # fail-closed de existencia. ANY non-zero exit de `describe` NO
+          # es lo mismo que "no existe": un 403/timeout/error transitorio
+          # de la API nunca debe interpretarse como ausencia. Solo un
+          # texto de error que PRUEBA NOT_FOUND (observado en vivo, esta
+          # investigación: Cloud SQL users -> "HTTPError 404"; Secret
+          # Manager -> "NOT_FOUND:"; Cloud Run Jobs -> "Cannot find job")
+          # produce ABSENT_CONFIRMED. Cualquier otro fallo es
+          # LOOKUP_FAILED — invariante: PERMISSION_DENIED != NOT_FOUND,
+          # TIMEOUT != NOT_FOUND, API_FAILURE != NOT_FOUND.
+          classify_resource() {
+            local kind="$1"; shift
+            local stderr_file; stderr_file="$(mktemp)"
+            "$@" >/dev/null 2>"$stderr_file"
+            local exit_code=$?
+            if [ "$exit_code" -eq 0 ]; then
+              rm -f "$stderr_file"
+              echo "EXISTS"
+              return 0
+            fi
+            local not_found_pattern=""
+            case "$kind" in
+              cloudsql_user) not_found_pattern="HTTPError 404" ;;
+              secret) not_found_pattern="NOT_FOUND:" ;;
+              cloudrun_job) not_found_pattern="Cannot find job" ;;
+            esac
+            if grep -q "$not_found_pattern" "$stderr_file"; then
+              rm -f "$stderr_file"
+              echo "ABSENT_CONFIRMED"
+            else
+              rm -f "$stderr_file"
+              echo "LOOKUP_FAILED"
+            fi
+          }
+
+          # A — revocar ADMIN OPTION, salvo que el admin esté
+          # ABSENT_CONFIRMED (un LOOKUP_FAILED se trata igual que EXISTS —
+          # nunca se asume que no hace falta revocar). Vía el mismo Cloud
+          # Run Job efímero, VPC privada, `db-hardener-bootstrap.js
+          # revoke-admin-option` — nunca ExecuteSql API. Best-effort
+          # respecto de IMMUTABLE_REF.
+          ADMIN_STATE_A="$(classify_resource cloudsql_user gcloud sql users describe "$EPHEMERAL_ADMIN" --instance="${{ env.CLOUD_SQL_INSTANCE }}" --project="${{ env.PRODUCTION_PROJECT }}")"
+          [ "$ADMIN_STATE_A" = "LOOKUP_FAILED" ] && echo "::warning::LOOKUP_FAILED al comprobar el admin efímero antes de revocar ADMIN OPTION — nunca se asume ausencia, se intenta igual."
+          if [ "$ADMIN_STATE_A" != "ABSENT_CONFIRMED" ]; then
+            DSN_SECRET_STATE_A="$(classify_resource secret gcloud secrets describe "$EPHEMERAL_DSN_SECRET" --project="${{ env.PRODUCTION_PROJECT }}")"
+            [ "$DSN_SECRET_STATE_A" = "LOOKUP_FAILED" ] && echo "::warning::LOOKUP_FAILED al comprobar el secret DSN antes de revocar ADMIN OPTION — nunca se asume ausencia, se intenta igual."
+            if [ "$DSN_SECRET_STATE_A" != "ABSENT_CONFIRMED" ] && [ -n "$IMMUTABLE_REF" ]; then
               gcloud run jobs deploy "$EPHEMERAL_JOB" \
                 --project="${{ env.PRODUCTION_PROJECT }}" \
                 --region="${{ env.PRODUCTION_REGION }}" \
@@ -1157,36 +1267,38 @@ jobs:
             echo "state=SKIPPED" >> "$GITHUB_OUTPUT"
           fi
 
-          # B — eliminar el admin (idempotente).
-          gcloud sql users describe "$EPHEMERAL_ADMIN" --instance="${{ env.CLOUD_SQL_INSTANCE }}" --project="${{ env.PRODUCTION_PROJECT }}" >/dev/null 2>&1
-          if [ $? -eq 0 ]; then
-            gcloud sql users delete "$EPHEMERAL_ADMIN" --instance="${{ env.CLOUD_SQL_INSTANCE }}" --project="${{ env.PRODUCTION_PROJECT }}" --quiet >/dev/null 2>&1
-            echo "STAGE1_CLEANUP_B_ATTEMPTED=YES"
-          else
+          # B — eliminar el admin. ABSENT_CONFIRMED es la ÚNICA razón
+          # válida para saltear el delete — EXISTS y LOOKUP_FAILED
+          # intentan el delete igual.
+          ADMIN_STATE_B="$(classify_resource cloudsql_user gcloud sql users describe "$EPHEMERAL_ADMIN" --instance="${{ env.CLOUD_SQL_INSTANCE }}" --project="${{ env.PRODUCTION_PROJECT }}")"
+          if [ "$ADMIN_STATE_B" = "ABSENT_CONFIRMED" ]; then
             echo "STAGE1_CLEANUP_B_SKIPPED=ADMIN_ALREADY_ABSENT"
+          else
+            gcloud sql users delete "$EPHEMERAL_ADMIN" --instance="${{ env.CLOUD_SQL_INSTANCE }}" --project="${{ env.PRODUCTION_PROJECT }}" --quiet >/dev/null 2>&1
+            echo "STAGE1_CLEANUP_B_ATTEMPTED=YES (pre_state=$ADMIN_STATE_B)"
           fi
 
-          # C/D — eliminar el secret DSN (idempotente).
-          gcloud secrets describe "$EPHEMERAL_DSN_SECRET" --project="${{ env.PRODUCTION_PROJECT }}" >/dev/null 2>&1
-          if [ $? -eq 0 ]; then
-            gcloud secrets delete "$EPHEMERAL_DSN_SECRET" --project="${{ env.PRODUCTION_PROJECT }}" --quiet >/dev/null 2>&1
-            echo "STAGE1_CLEANUP_C_D_ATTEMPTED=YES"
-          else
+          # C/D — eliminar el secret DSN. Misma regla: solo ABSENT_CONFIRMED salta el delete.
+          SECRET_STATE_CD="$(classify_resource secret gcloud secrets describe "$EPHEMERAL_DSN_SECRET" --project="${{ env.PRODUCTION_PROJECT }}")"
+          if [ "$SECRET_STATE_CD" = "ABSENT_CONFIRMED" ]; then
             echo "STAGE1_CLEANUP_C_D_SKIPPED=DSN_SECRET_ALREADY_ABSENT"
+          else
+            gcloud secrets delete "$EPHEMERAL_DSN_SECRET" --project="${{ env.PRODUCTION_PROJECT }}" --quiet >/dev/null 2>&1
+            echo "STAGE1_CLEANUP_C_D_ATTEMPTED=YES (pre_state=$SECRET_STATE_CD)"
           fi
 
-          # E — eliminar el Cloud Run Job efímero (idempotente).
-          gcloud run jobs describe "$EPHEMERAL_JOB" --project="${{ env.PRODUCTION_PROJECT }}" --region="${{ env.PRODUCTION_REGION }}" >/dev/null 2>&1
-          if [ $? -eq 0 ]; then
-            gcloud run jobs delete "$EPHEMERAL_JOB" --project="${{ env.PRODUCTION_PROJECT }}" --region="${{ env.PRODUCTION_REGION }}" --quiet >/dev/null 2>&1
-            echo "STAGE1_CLEANUP_E_ATTEMPTED=YES"
-          else
+          # E — eliminar el Cloud Run Job efímero. Misma regla.
+          JOB_STATE_E="$(classify_resource cloudrun_job gcloud run jobs describe "$EPHEMERAL_JOB" --project="${{ env.PRODUCTION_PROJECT }}" --region="${{ env.PRODUCTION_REGION }}")"
+          if [ "$JOB_STATE_E" = "ABSENT_CONFIRMED" ]; then
             echo "STAGE1_CLEANUP_E_SKIPPED=JOB_ALREADY_ABSENT"
+          else
+            gcloud run jobs delete "$EPHEMERAL_JOB" --project="${{ env.PRODUCTION_PROJECT }}" --region="${{ env.PRODUCTION_REGION }}" --quiet >/dev/null 2>&1
+            echo "STAGE1_CLEANUP_E_ATTEMPTED=YES (pre_state=$JOB_STATE_E)"
           fi
 
           set -e
 
-      - name: Verificación independiente de ausencia — nunca se declara éxito sin re-comprobar
+      - name: Verificación independiente de ausencia — nunca se declara CLEAN salvo ABSENT_CONFIRMED en los tres recursos
         shell: bash
         env:
           EPHEMERAL_ADMIN: ${{ needs.derive-operation-names.outputs.ephemeral_admin_username }}
@@ -1194,25 +1306,51 @@ jobs:
           EPHEMERAL_JOB: ${{ needs.derive-operation-names.outputs.ephemeral_job_name }}
         run: |
           set +e
-          gcloud sql users describe "$EPHEMERAL_ADMIN" --instance="${{ env.CLOUD_SQL_INSTANCE }}" --project="${{ env.PRODUCTION_PROJECT }}" >/dev/null 2>&1
-          ADMIN_STILL_EXISTS=$?
-          gcloud secrets describe "$EPHEMERAL_DSN_SECRET" --project="${{ env.PRODUCTION_PROJECT }}" >/dev/null 2>&1
-          DSN_SECRET_STILL_EXISTS=$?
-          gcloud run jobs describe "$EPHEMERAL_JOB" --project="${{ env.PRODUCTION_PROJECT }}" --region="${{ env.PRODUCTION_REGION }}" >/dev/null 2>&1
-          JOB_STILL_EXISTS=$?
+
+          # Mismo clasificador fail-closed que el paso anterior (Fase P1-A)
+          # — duplicado deliberadamente: cada step de GitHub Actions es un
+          # proceso bash nuevo, las funciones no persisten entre steps.
+          classify_resource() {
+            local kind="$1"; shift
+            local stderr_file; stderr_file="$(mktemp)"
+            "$@" >/dev/null 2>"$stderr_file"
+            local exit_code=$?
+            if [ "$exit_code" -eq 0 ]; then
+              rm -f "$stderr_file"
+              echo "EXISTS"
+              return 0
+            fi
+            local not_found_pattern=""
+            case "$kind" in
+              cloudsql_user) not_found_pattern="HTTPError 404" ;;
+              secret) not_found_pattern="NOT_FOUND:" ;;
+              cloudrun_job) not_found_pattern="Cannot find job" ;;
+            esac
+            if grep -q "$not_found_pattern" "$stderr_file"; then
+              rm -f "$stderr_file"
+              echo "ABSENT_CONFIRMED"
+            else
+              rm -f "$stderr_file"
+              echo "LOOKUP_FAILED"
+            fi
+          }
+
+          ADMIN_STATE="$(classify_resource cloudsql_user gcloud sql users describe "$EPHEMERAL_ADMIN" --instance="${{ env.CLOUD_SQL_INSTANCE }}" --project="${{ env.PRODUCTION_PROJECT }}")"
+          DSN_SECRET_STATE="$(classify_resource secret gcloud secrets describe "$EPHEMERAL_DSN_SECRET" --project="${{ env.PRODUCTION_PROJECT }}")"
+          JOB_STATE="$(classify_resource cloudrun_job gcloud run jobs describe "$EPHEMERAL_JOB" --project="${{ env.PRODUCTION_PROJECT }}" --region="${{ env.PRODUCTION_REGION }}")"
           set -e
           {
             echo "### T-F1.2 Point 8C — cleanup-after-preflight — operation ${{ needs.derive-operation-names.outputs.operation_id }}"
             echo ""
-            if [ "$ADMIN_STILL_EXISTS" -ne 0 ] && [ "$DSN_SECRET_STILL_EXISTS" -ne 0 ] && [ "$JOB_STILL_EXISTS" -ne 0 ]; then
-              echo "STAGE1_CLEANUP_RESULT = CLEAN (los tres recursos confirmados ausentes: admin, DSN secret, Cloud Run Job)"
+            if [ "$ADMIN_STATE" = "ABSENT_CONFIRMED" ] && [ "$DSN_SECRET_STATE" = "ABSENT_CONFIRMED" ] && [ "$JOB_STATE" = "ABSENT_CONFIRMED" ]; then
+              echo "STAGE1_CLEANUP_RESULT = CLEAN (los tres recursos confirmados AUSENTES — ABSENT_CONFIRMED, nunca inferido de un error genérico)"
               echo "PRIVILEGED_RESOURCES_WHILE_WAITING_HUMAN_GATE = 0"
             else
-              echo "STAGE1_CLEANUP_RESULT = HOLD_STILL_PRESENT"
+              echo "STAGE1_CLEANUP_RESULT = HOLD_STILL_PRESENT_OR_UNVERIFIED (admin=$ADMIN_STATE, secret=$DSN_SECRET_STATE, job=$JOB_STATE)"
             fi
           } >> "$GITHUB_STEP_SUMMARY"
-          if [ "$ADMIN_STILL_EXISTS" -eq 0 ] || [ "$DSN_SECRET_STILL_EXISTS" -eq 0 ] || [ "$JOB_STILL_EXISTS" -eq 0 ]; then
-            echo "::error::HOLD_STAGE1_CLEANUP_INCOMPLETE — el cleanup automático de Stage 1 no logró dejar los tres recursos ausentes. Dispatch mode=cleanup_only con este operation_id."
+          if [ "$ADMIN_STATE" != "ABSENT_CONFIRMED" ] || [ "$DSN_SECRET_STATE" != "ABSENT_CONFIRMED" ] || [ "$JOB_STATE" != "ABSENT_CONFIRMED" ]; then
+            echo "::error::HOLD_STAGE1_CLEANUP_INCOMPLETE — el cleanup automático de Stage 1 no logró confirmar los tres recursos AUSENTES (ABSENT_CONFIRMED) — un LOOKUP_FAILED nunca se trata como ausencia. Dispatch mode=cleanup_only con este operation_id."
             exit 1
           fi
 
@@ -1685,15 +1823,47 @@ jobs:
           EPHEMERAL_DSN_SECRET: ${{ needs.derive-operation-names.outputs.ephemeral_dsn_secret_name }}
         run: |
           set +e
-          gcloud secrets describe "$EPHEMERAL_DSN_SECRET" --project="${{ env.PRODUCTION_PROJECT }}" >/dev/null 2>&1
-          DSN_SECRET_EXISTS=$?
-          if [ "$DSN_SECRET_EXISTS" -ne 0 ]; then
-            echo "DSN secret efímero ya ausente — nada que revocar vía él."
+
+          # TF12-POINT8C-IAM-P1 remediation (P1-A) — clasificador
+          # fail-closed de existencia, duplicado por step (las funciones no
+          # persisten entre steps de GitHub Actions). Solo un texto de
+          # error que PRUEBA NOT_FOUND produce ABSENT_CONFIRMED — cualquier
+          # otro fallo (403/timeout/transitorio) es LOOKUP_FAILED, nunca
+          # tratado como ausencia.
+          classify_resource() {
+            local kind="$1"; shift
+            local stderr_file; stderr_file="$(mktemp)"
+            "$@" >/dev/null 2>"$stderr_file"
+            local exit_code=$?
+            if [ "$exit_code" -eq 0 ]; then
+              rm -f "$stderr_file"
+              echo "EXISTS"
+              return 0
+            fi
+            local not_found_pattern=""
+            case "$kind" in
+              cloudsql_user) not_found_pattern="HTTPError 404" ;;
+              secret) not_found_pattern="NOT_FOUND:" ;;
+              cloudrun_job) not_found_pattern="Cannot find job" ;;
+            esac
+            if grep -q "$not_found_pattern" "$stderr_file"; then
+              rm -f "$stderr_file"
+              echo "ABSENT_CONFIRMED"
+            else
+              rm -f "$stderr_file"
+              echo "LOOKUP_FAILED"
+            fi
+          }
+
+          DSN_SECRET_STATE="$(classify_resource secret gcloud secrets describe "$EPHEMERAL_DSN_SECRET" --project="${{ env.PRODUCTION_PROJECT }}")"
+          if [ "$DSN_SECRET_STATE" = "ABSENT_CONFIRMED" ]; then
+            echo "DSN secret efímero ya ausente (ABSENT_CONFIRMED) — nada que revocar vía él."
             REVOKE_EXIT=0
           elif [ -z "$IMMUTABLE_REF" ]; then
             echo "IMMUTABLE_REF no disponible (falla de resolución de artefacto) — revoke salteado, cleanup continúa igual."
             REVOKE_EXIT=1
           else
+            [ "$DSN_SECRET_STATE" = "LOOKUP_FAILED" ] && echo "::warning::LOOKUP_FAILED al comprobar el secret DSN antes de revocar ADMIN OPTION — nunca se asume ausencia, se intenta igual."
             gcloud run jobs deploy "$EPHEMERAL_JOB" \
               --project="${{ env.PRODUCTION_PROJECT }}" \
               --region="${{ env.PRODUCTION_REGION }}" \
@@ -1727,12 +1897,40 @@ jobs:
           EPHEMERAL_ADMIN: ${{ needs.derive-operation-names.outputs.ephemeral_admin_username }}
         run: |
           set +e
-          gcloud sql users describe "$EPHEMERAL_ADMIN" --instance="${{ env.CLOUD_SQL_INSTANCE }}" --project="${{ env.PRODUCTION_PROJECT }}" >/dev/null 2>&1
-          EXISTS=$?
-          if [ "$EXISTS" -ne 0 ]; then
-            echo "Admin efímero ya ausente — cleanup idempotente, éxito."
+
+          # TF12-POINT8C-IAM-P1 remediation (P1-A) — mismo clasificador
+          # fail-closed, duplicado por step.
+          classify_resource() {
+            local kind="$1"; shift
+            local stderr_file; stderr_file="$(mktemp)"
+            "$@" >/dev/null 2>"$stderr_file"
+            local exit_code=$?
+            if [ "$exit_code" -eq 0 ]; then
+              rm -f "$stderr_file"
+              echo "EXISTS"
+              return 0
+            fi
+            local not_found_pattern=""
+            case "$kind" in
+              cloudsql_user) not_found_pattern="HTTPError 404" ;;
+              secret) not_found_pattern="NOT_FOUND:" ;;
+              cloudrun_job) not_found_pattern="Cannot find job" ;;
+            esac
+            if grep -q "$not_found_pattern" "$stderr_file"; then
+              rm -f "$stderr_file"
+              echo "ABSENT_CONFIRMED"
+            else
+              rm -f "$stderr_file"
+              echo "LOOKUP_FAILED"
+            fi
+          }
+
+          ADMIN_STATE="$(classify_resource cloudsql_user gcloud sql users describe "$EPHEMERAL_ADMIN" --instance="${{ env.CLOUD_SQL_INSTANCE }}" --project="${{ env.PRODUCTION_PROJECT }}")"
+          if [ "$ADMIN_STATE" = "ABSENT_CONFIRMED" ]; then
+            echo "Admin efímero ya ausente (ABSENT_CONFIRMED) — cleanup idempotente, éxito."
             echo "state=DONE" >> "$GITHUB_OUTPUT"
           else
+            [ "$ADMIN_STATE" = "LOOKUP_FAILED" ] && echo "::warning::LOOKUP_FAILED al comprobar el admin efímero — nunca se asume ausencia, se intenta el delete igual."
             gcloud sql users delete "$EPHEMERAL_ADMIN" --instance="${{ env.CLOUD_SQL_INSTANCE }}" --project="${{ env.PRODUCTION_PROJECT }}" --quiet
             DELETE_EXIT=$?
             set -e
@@ -1751,12 +1949,40 @@ jobs:
           EPHEMERAL_DSN_SECRET: ${{ needs.derive-operation-names.outputs.ephemeral_dsn_secret_name }}
         run: |
           set +e
-          gcloud secrets describe "$EPHEMERAL_DSN_SECRET" --project="${{ env.PRODUCTION_PROJECT }}" >/dev/null 2>&1
-          EXISTS=$?
-          if [ "$EXISTS" -ne 0 ]; then
-            echo "DSN secret efímero ya ausente — cleanup idempotente, éxito."
+
+          # TF12-POINT8C-IAM-P1 remediation (P1-A) — mismo clasificador
+          # fail-closed, duplicado por step.
+          classify_resource() {
+            local kind="$1"; shift
+            local stderr_file; stderr_file="$(mktemp)"
+            "$@" >/dev/null 2>"$stderr_file"
+            local exit_code=$?
+            if [ "$exit_code" -eq 0 ]; then
+              rm -f "$stderr_file"
+              echo "EXISTS"
+              return 0
+            fi
+            local not_found_pattern=""
+            case "$kind" in
+              cloudsql_user) not_found_pattern="HTTPError 404" ;;
+              secret) not_found_pattern="NOT_FOUND:" ;;
+              cloudrun_job) not_found_pattern="Cannot find job" ;;
+            esac
+            if grep -q "$not_found_pattern" "$stderr_file"; then
+              rm -f "$stderr_file"
+              echo "ABSENT_CONFIRMED"
+            else
+              rm -f "$stderr_file"
+              echo "LOOKUP_FAILED"
+            fi
+          }
+
+          SECRET_STATE="$(classify_resource secret gcloud secrets describe "$EPHEMERAL_DSN_SECRET" --project="${{ env.PRODUCTION_PROJECT }}")"
+          if [ "$SECRET_STATE" = "ABSENT_CONFIRMED" ]; then
+            echo "DSN secret efímero ya ausente (ABSENT_CONFIRMED) — cleanup idempotente, éxito."
             echo "state=DONE" >> "$GITHUB_OUTPUT"
           else
+            [ "$SECRET_STATE" = "LOOKUP_FAILED" ] && echo "::warning::LOOKUP_FAILED al comprobar el secret DSN — nunca se asume ausencia, se intenta el delete igual."
             gcloud secrets delete "$EPHEMERAL_DSN_SECRET" --project="${{ env.PRODUCTION_PROJECT }}" --quiet
             DELETE_EXIT=$?
             set -e
@@ -1775,12 +2001,40 @@ jobs:
           EPHEMERAL_JOB: ${{ needs.derive-operation-names.outputs.ephemeral_job_name }}
         run: |
           set +e
-          gcloud run jobs describe "$EPHEMERAL_JOB" --project="${{ env.PRODUCTION_PROJECT }}" --region="${{ env.PRODUCTION_REGION }}" >/dev/null 2>&1
-          EXISTS=$?
-          if [ "$EXISTS" -ne 0 ]; then
-            echo "Cloud Run Job efímero ya ausente — cleanup idempotente, éxito."
+
+          # TF12-POINT8C-IAM-P1 remediation (P1-A) — mismo clasificador
+          # fail-closed, duplicado por step.
+          classify_resource() {
+            local kind="$1"; shift
+            local stderr_file; stderr_file="$(mktemp)"
+            "$@" >/dev/null 2>"$stderr_file"
+            local exit_code=$?
+            if [ "$exit_code" -eq 0 ]; then
+              rm -f "$stderr_file"
+              echo "EXISTS"
+              return 0
+            fi
+            local not_found_pattern=""
+            case "$kind" in
+              cloudsql_user) not_found_pattern="HTTPError 404" ;;
+              secret) not_found_pattern="NOT_FOUND:" ;;
+              cloudrun_job) not_found_pattern="Cannot find job" ;;
+            esac
+            if grep -q "$not_found_pattern" "$stderr_file"; then
+              rm -f "$stderr_file"
+              echo "ABSENT_CONFIRMED"
+            else
+              rm -f "$stderr_file"
+              echo "LOOKUP_FAILED"
+            fi
+          }
+
+          JOB_STATE="$(classify_resource cloudrun_job gcloud run jobs describe "$EPHEMERAL_JOB" --project="${{ env.PRODUCTION_PROJECT }}" --region="${{ env.PRODUCTION_REGION }}")"
+          if [ "$JOB_STATE" = "ABSENT_CONFIRMED" ]; then
+            echo "Cloud Run Job efímero ya ausente (ABSENT_CONFIRMED) — cleanup idempotente, éxito."
             echo "state=DONE" >> "$GITHUB_OUTPUT"
           else
+            [ "$JOB_STATE" = "LOOKUP_FAILED" ] && echo "::warning::LOOKUP_FAILED al comprobar el Cloud Run Job efímero — nunca se asume ausencia, se intenta el delete igual."
             gcloud run jobs delete "$EPHEMERAL_JOB" --project="${{ env.PRODUCTION_PROJECT }}" --region="${{ env.PRODUCTION_REGION }}" --quiet
             DELETE_EXIT=$?
             set -e
@@ -1792,7 +2046,7 @@ jobs:
             fi
           fi
 
-      - name: Estado F — verificación independiente de ausencia (admin + secret DSN + Cloud Run Job)
+      - name: Estado F — verificación independiente de ausencia (admin + secret DSN + Cloud Run Job) — solo ABSENT_CONFIRMED en los tres cuenta como verificado
         id: independent-verify
         shell: bash
         env:
@@ -1801,17 +2055,46 @@ jobs:
           EPHEMERAL_JOB: ${{ needs.derive-operation-names.outputs.ephemeral_job_name }}
         run: |
           set +e
-          gcloud sql users describe "$EPHEMERAL_ADMIN" --instance="${{ env.CLOUD_SQL_INSTANCE }}" --project="${{ env.PRODUCTION_PROJECT }}" >/dev/null 2>&1
-          ADMIN_STILL_EXISTS=$?
-          gcloud secrets describe "$EPHEMERAL_DSN_SECRET" --project="${{ env.PRODUCTION_PROJECT }}" >/dev/null 2>&1
-          DSN_SECRET_STILL_EXISTS=$?
-          gcloud run jobs describe "$EPHEMERAL_JOB" --project="${{ env.PRODUCTION_PROJECT }}" --region="${{ env.PRODUCTION_REGION }}" >/dev/null 2>&1
-          JOB_STILL_EXISTS=$?
+
+          # TF12-POINT8C-IAM-P1 remediation (P1-A) — mismo clasificador
+          # fail-closed. Este es el step más importante de todos: su
+          # resultado alimenta directamente CLEANUP_OK en el step final.
+          classify_resource() {
+            local kind="$1"; shift
+            local stderr_file; stderr_file="$(mktemp)"
+            "$@" >/dev/null 2>"$stderr_file"
+            local exit_code=$?
+            if [ "$exit_code" -eq 0 ]; then
+              rm -f "$stderr_file"
+              echo "EXISTS"
+              return 0
+            fi
+            local not_found_pattern=""
+            case "$kind" in
+              cloudsql_user) not_found_pattern="HTTPError 404" ;;
+              secret) not_found_pattern="NOT_FOUND:" ;;
+              cloudrun_job) not_found_pattern="Cannot find job" ;;
+            esac
+            if grep -q "$not_found_pattern" "$stderr_file"; then
+              rm -f "$stderr_file"
+              echo "ABSENT_CONFIRMED"
+            else
+              rm -f "$stderr_file"
+              echo "LOOKUP_FAILED"
+            fi
+          }
+
+          ADMIN_STATE="$(classify_resource cloudsql_user gcloud sql users describe "$EPHEMERAL_ADMIN" --instance="${{ env.CLOUD_SQL_INSTANCE }}" --project="${{ env.PRODUCTION_PROJECT }}")"
+          DSN_SECRET_STATE="$(classify_resource secret gcloud secrets describe "$EPHEMERAL_DSN_SECRET" --project="${{ env.PRODUCTION_PROJECT }}")"
+          JOB_STATE="$(classify_resource cloudrun_job gcloud run jobs describe "$EPHEMERAL_JOB" --project="${{ env.PRODUCTION_PROJECT }}" --region="${{ env.PRODUCTION_REGION }}")"
           set -e
-          if [ "$ADMIN_STILL_EXISTS" -eq 0 ] || [ "$DSN_SECRET_STILL_EXISTS" -eq 0 ] || [ "$JOB_STILL_EXISTS" -eq 0 ]; then
-            echo "independent_absence_verified=NO" >> "$GITHUB_OUTPUT"
-          else
+          echo "independent_verify_admin_state=$ADMIN_STATE" >> "$GITHUB_OUTPUT"
+          echo "independent_verify_secret_state=$DSN_SECRET_STATE" >> "$GITHUB_OUTPUT"
+          echo "independent_verify_job_state=$JOB_STATE" >> "$GITHUB_OUTPUT"
+          if [ "$ADMIN_STATE" = "ABSENT_CONFIRMED" ] && [ "$DSN_SECRET_STATE" = "ABSENT_CONFIRMED" ] && [ "$JOB_STATE" = "ABSENT_CONFIRMED" ]; then
             echo "independent_absence_verified=YES" >> "$GITHUB_OUTPUT"
+          else
+            echo "independent_absence_verified=NO" >> "$GITHUB_OUTPUT"
           fi
 
       - name: Clasificar resultado final — nunca esconder un cleanup incompleto detrás de "la operación falló"
@@ -1902,12 +2185,42 @@ jobs:
         run: |
           set +e
 
-          gcloud sql users describe "$EPHEMERAL_ADMIN" --instance="${{ env.CLOUD_SQL_INSTANCE }}" --project="${{ env.PRODUCTION_PROJECT }}" >/dev/null 2>&1
-          ADMIN_EXISTS_BEFORE=$?
-          if [ "$ADMIN_EXISTS_BEFORE" -eq 0 ]; then
-            gcloud secrets describe "$EPHEMERAL_DSN_SECRET" --project="${{ env.PRODUCTION_PROJECT }}" >/dev/null 2>&1
-            DSN_SECRET_EXISTS_BEFORE=$?
-            if [ "$DSN_SECRET_EXISTS_BEFORE" -eq 0 ] && [ -n "$IMMUTABLE_REF" ]; then
+          # TF12-POINT8C-IAM-P1 remediation (P1-A) — clasificador
+          # fail-closed de existencia (ver cleanup-after-preflight para la
+          # explicación completa de la evidencia detrás de cada patrón de
+          # NOT_FOUND). Duplicado por step — las funciones no persisten
+          # entre steps de GitHub Actions.
+          classify_resource() {
+            local kind="$1"; shift
+            local stderr_file; stderr_file="$(mktemp)"
+            "$@" >/dev/null 2>"$stderr_file"
+            local exit_code=$?
+            if [ "$exit_code" -eq 0 ]; then
+              rm -f "$stderr_file"
+              echo "EXISTS"
+              return 0
+            fi
+            local not_found_pattern=""
+            case "$kind" in
+              cloudsql_user) not_found_pattern="HTTPError 404" ;;
+              secret) not_found_pattern="NOT_FOUND:" ;;
+              cloudrun_job) not_found_pattern="Cannot find job" ;;
+            esac
+            if grep -q "$not_found_pattern" "$stderr_file"; then
+              rm -f "$stderr_file"
+              echo "ABSENT_CONFIRMED"
+            else
+              rm -f "$stderr_file"
+              echo "LOOKUP_FAILED"
+            fi
+          }
+
+          ADMIN_STATE_A="$(classify_resource cloudsql_user gcloud sql users describe "$EPHEMERAL_ADMIN" --instance="${{ env.CLOUD_SQL_INSTANCE }}" --project="${{ env.PRODUCTION_PROJECT }}")"
+          [ "$ADMIN_STATE_A" = "LOOKUP_FAILED" ] && echo "::warning::LOOKUP_FAILED al comprobar el admin efímero — nunca se asume ausencia, se intenta igual."
+          if [ "$ADMIN_STATE_A" != "ABSENT_CONFIRMED" ]; then
+            DSN_SECRET_STATE_A="$(classify_resource secret gcloud secrets describe "$EPHEMERAL_DSN_SECRET" --project="${{ env.PRODUCTION_PROJECT }}")"
+            [ "$DSN_SECRET_STATE_A" = "LOOKUP_FAILED" ] && echo "::warning::LOOKUP_FAILED al comprobar el secret DSN — nunca se asume ausencia, se intenta igual."
+            if [ "$DSN_SECRET_STATE_A" != "ABSENT_CONFIRMED" ] && [ -n "$IMMUTABLE_REF" ]; then
               gcloud run jobs deploy "$EPHEMERAL_JOB" \
                 --project="${{ env.PRODUCTION_PROJECT }}" \
                 --region="${{ env.PRODUCTION_REGION }}" \
@@ -1925,41 +2238,41 @@ jobs:
                 --quiet >/dev/null 2>&1
               gcloud run jobs execute "$EPHEMERAL_JOB" --project="${{ env.PRODUCTION_PROJECT }}" --region="${{ env.PRODUCTION_REGION }}" --wait >/dev/null 2>&1
               echo "CLEANUP_A_ATTEMPTED=YES"
-            elif [ "$DSN_SECRET_EXISTS_BEFORE" -ne 0 ]; then
+            elif [ "$DSN_SECRET_STATE_A" = "ABSENT_CONFIRMED" ]; then
               echo "CLEANUP_A_SKIPPED=DSN_SECRET_ALREADY_ABSENT (nada que revocar vía él)"
             else
               echo "CLEANUP_A_SKIPPED=ARTIFACT_UNAVAILABLE (no bloquea B/C-D/E)"
             fi
             # B — eliminar el admin.
             gcloud sql users delete "$EPHEMERAL_ADMIN" --instance="${{ env.CLOUD_SQL_INSTANCE }}" --project="${{ env.PRODUCTION_PROJECT }}" --quiet >/dev/null 2>&1
-            echo "CLEANUP_B_ATTEMPTED=YES"
+            echo "CLEANUP_B_ATTEMPTED=YES (pre_state=$ADMIN_STATE_A)"
           else
             echo "CLEANUP_A_B_SKIPPED=ADMIN_ALREADY_ABSENT"
           fi
 
-          # C/D — eliminar el DSN secret (global).
-          gcloud secrets describe "$EPHEMERAL_DSN_SECRET" --project="${{ env.PRODUCTION_PROJECT }}" >/dev/null 2>&1
-          DSN_SECRET_EXISTS_BEFORE=$?
-          if [ "$DSN_SECRET_EXISTS_BEFORE" -eq 0 ]; then
-            gcloud secrets delete "$EPHEMERAL_DSN_SECRET" --project="${{ env.PRODUCTION_PROJECT }}" --quiet >/dev/null 2>&1
-            echo "CLEANUP_C_D_ATTEMPTED=YES"
-          else
+          # C/D — eliminar el DSN secret (global). Solo ABSENT_CONFIRMED salta el delete.
+          SECRET_STATE_CD="$(classify_resource secret gcloud secrets describe "$EPHEMERAL_DSN_SECRET" --project="${{ env.PRODUCTION_PROJECT }}")"
+          if [ "$SECRET_STATE_CD" = "ABSENT_CONFIRMED" ]; then
             echo "CLEANUP_C_D_SKIPPED=DSN_SECRET_ALREADY_ABSENT"
+          else
+            [ "$SECRET_STATE_CD" = "LOOKUP_FAILED" ] && echo "::warning::LOOKUP_FAILED al comprobar el secret DSN — nunca se asume ausencia, se intenta el delete igual."
+            gcloud secrets delete "$EPHEMERAL_DSN_SECRET" --project="${{ env.PRODUCTION_PROJECT }}" --quiet >/dev/null 2>&1
+            echo "CLEANUP_C_D_ATTEMPTED=YES (pre_state=$SECRET_STATE_CD)"
           fi
 
-          # E — eliminar el Cloud Run Job efímero.
-          gcloud run jobs describe "$EPHEMERAL_JOB" --project="${{ env.PRODUCTION_PROJECT }}" --region="${{ env.PRODUCTION_REGION }}" >/dev/null 2>&1
-          JOB_EXISTS_BEFORE=$?
-          if [ "$JOB_EXISTS_BEFORE" -eq 0 ]; then
-            gcloud run jobs delete "$EPHEMERAL_JOB" --project="${{ env.PRODUCTION_PROJECT }}" --region="${{ env.PRODUCTION_REGION }}" --quiet >/dev/null 2>&1
-            echo "CLEANUP_E_ATTEMPTED=YES"
-          else
+          # E — eliminar el Cloud Run Job efímero. Solo ABSENT_CONFIRMED salta el delete.
+          JOB_STATE_E="$(classify_resource cloudrun_job gcloud run jobs describe "$EPHEMERAL_JOB" --project="${{ env.PRODUCTION_PROJECT }}" --region="${{ env.PRODUCTION_REGION }}")"
+          if [ "$JOB_STATE_E" = "ABSENT_CONFIRMED" ]; then
             echo "CLEANUP_E_SKIPPED=JOB_ALREADY_ABSENT"
+          else
+            [ "$JOB_STATE_E" = "LOOKUP_FAILED" ] && echo "::warning::LOOKUP_FAILED al comprobar el Cloud Run Job efímero — nunca se asume ausencia, se intenta el delete igual."
+            gcloud run jobs delete "$EPHEMERAL_JOB" --project="${{ env.PRODUCTION_PROJECT }}" --region="${{ env.PRODUCTION_REGION }}" --quiet >/dev/null 2>&1
+            echo "CLEANUP_E_ATTEMPTED=YES (pre_state=$JOB_STATE_E)"
           fi
 
           set -e
 
-      - name: Verificación independiente de ausencia — nunca se declara éxito sin re-comprobar
+      - name: Verificación independiente de ausencia — nunca se declara CLEAN salvo ABSENT_CONFIRMED en los tres recursos
         shell: bash
         env:
           EPHEMERAL_ADMIN: ${{ needs.derive-operation-names.outputs.ephemeral_admin_username }}
@@ -1967,12 +2280,36 @@ jobs:
           EPHEMERAL_JOB: ${{ needs.derive-operation-names.outputs.ephemeral_job_name }}
         run: |
           set +e
-          gcloud sql users describe "$EPHEMERAL_ADMIN" --instance="${{ env.CLOUD_SQL_INSTANCE }}" --project="${{ env.PRODUCTION_PROJECT }}" >/dev/null 2>&1
-          ADMIN_STILL_EXISTS=$?
-          gcloud secrets describe "$EPHEMERAL_DSN_SECRET" --project="${{ env.PRODUCTION_PROJECT }}" >/dev/null 2>&1
-          DSN_SECRET_STILL_EXISTS=$?
-          gcloud run jobs describe "$EPHEMERAL_JOB" --project="${{ env.PRODUCTION_PROJECT }}" --region="${{ env.PRODUCTION_REGION }}" >/dev/null 2>&1
-          JOB_STILL_EXISTS=$?
+
+          # TF12-POINT8C-IAM-P1 remediation (P1-A) — mismo clasificador fail-closed.
+          classify_resource() {
+            local kind="$1"; shift
+            local stderr_file; stderr_file="$(mktemp)"
+            "$@" >/dev/null 2>"$stderr_file"
+            local exit_code=$?
+            if [ "$exit_code" -eq 0 ]; then
+              rm -f "$stderr_file"
+              echo "EXISTS"
+              return 0
+            fi
+            local not_found_pattern=""
+            case "$kind" in
+              cloudsql_user) not_found_pattern="HTTPError 404" ;;
+              secret) not_found_pattern="NOT_FOUND:" ;;
+              cloudrun_job) not_found_pattern="Cannot find job" ;;
+            esac
+            if grep -q "$not_found_pattern" "$stderr_file"; then
+              rm -f "$stderr_file"
+              echo "ABSENT_CONFIRMED"
+            else
+              rm -f "$stderr_file"
+              echo "LOOKUP_FAILED"
+            fi
+          }
+
+          ADMIN_STATE="$(classify_resource cloudsql_user gcloud sql users describe "$EPHEMERAL_ADMIN" --instance="${{ env.CLOUD_SQL_INSTANCE }}" --project="${{ env.PRODUCTION_PROJECT }}")"
+          DSN_SECRET_STATE="$(classify_resource secret gcloud secrets describe "$EPHEMERAL_DSN_SECRET" --project="${{ env.PRODUCTION_PROJECT }}")"
+          JOB_STATE="$(classify_resource cloudrun_job gcloud run jobs describe "$EPHEMERAL_JOB" --project="${{ env.PRODUCTION_PROJECT }}" --region="${{ env.PRODUCTION_REGION }}")"
           set -e
           {
             echo "### T-F1.2 Point 8C — cleanup_only — operation ${{ needs.derive-operation-names.outputs.operation_id }}"
@@ -1980,13 +2317,13 @@ jobs:
             echo "- ORIGINAL_OPERATION_SHA = ${{ inputs.operation_source_sha != '' && inputs.operation_source_sha || 'NOT_PROVIDED_BY_OPERATOR' }} (audit-only, never enforced for cleanup_only — recovery may legitimately run newer trusted cleanup code)"
             echo "- CLEANUP_IMPLEMENTATION_SHA = ${{ github.sha }}"
             echo ""
-            if [ "$ADMIN_STILL_EXISTS" -ne 0 ] && [ "$DSN_SECRET_STILL_EXISTS" -ne 0 ] && [ "$JOB_STILL_EXISTS" -ne 0 ]; then
-              echo "CLEANUP_ONLY_RESULT = CLEAN (los tres recursos confirmados ausentes: admin, DSN secret, Cloud Run Job)"
+            if [ "$ADMIN_STATE" = "ABSENT_CONFIRMED" ] && [ "$DSN_SECRET_STATE" = "ABSENT_CONFIRMED" ] && [ "$JOB_STATE" = "ABSENT_CONFIRMED" ]; then
+              echo "CLEANUP_ONLY_RESULT = CLEAN (los tres recursos confirmados AUSENTES — ABSENT_CONFIRMED, nunca inferido de un error genérico)"
             else
-              echo "CLEANUP_ONLY_RESULT = HOLD_STILL_PRESENT"
+              echo "CLEANUP_ONLY_RESULT = HOLD_STILL_PRESENT_OR_UNVERIFIED (admin=$ADMIN_STATE, secret=$DSN_SECRET_STATE, job=$JOB_STATE)"
             fi
           } >> "$GITHUB_STEP_SUMMARY"
-          if [ "$ADMIN_STILL_EXISTS" -eq 0 ] || [ "$DSN_SECRET_STILL_EXISTS" -eq 0 ] || [ "$JOB_STILL_EXISTS" -eq 0 ]; then
-            echo "::error::HOLD_PRIVILEGED_CLEANUP_INCOMPLETE — CLEANUP_ONLY no logró dejar los tres recursos ausentes — reintentar o escalar."
+          if [ "$ADMIN_STATE" != "ABSENT_CONFIRMED" ] || [ "$DSN_SECRET_STATE" != "ABSENT_CONFIRMED" ] || [ "$JOB_STATE" != "ABSENT_CONFIRMED" ]; then
+            echo "::error::HOLD_PRIVILEGED_CLEANUP_INCOMPLETE — CLEANUP_ONLY no logró confirmar los tres recursos AUSENTES (ABSENT_CONFIRMED) — un LOOKUP_FAILED nunca se trata como ausencia — reintentar o escalar."
             exit 1
           fi

@@ -90,13 +90,16 @@ describe('production-hardener-required-permissions — manifiesto exacto (Fase 1
   });
 });
 
-describe('READINESS_GATE_META_PERMISSIONS (Fase 2)', () => {
-  it('contiene exactamente resourcemanager.projects.getIamPolicy e iam.roles.get — determinado por investigación en vivo, nunca asumido', () => {
-    expect([...READINESS_GATE_META_PERMISSIONS].sort()).toEqual(['iam.roles.get', 'resourcemanager.projects.getIamPolicy'].sort());
+describe('READINESS_GATE_META_PERMISSIONS (Fase 2 / P1-B)', () => {
+  it('contiene exactamente resourcemanager.projects.getIamPolicy, iam.roles.get e iam.serviceAccounts.getIamPolicy — determinado por investigación en vivo, nunca asumido', () => {
+    expect([...READINESS_GATE_META_PERMISSIONS].sort()).toEqual(
+      ['iam.roles.get', 'resourcemanager.projects.getIamPolicy', 'iam.serviceAccounts.getIamPolicy'].sort(),
+    );
+    expect(READINESS_GATE_META_PERMISSIONS).toHaveLength(3);
   });
 
-  it('NO incluye iam.serviceAccounts.getIamPolicy — el gate no re-verifica el binding actAs sobre MIGRATION_EXECUTOR_SA en cada dispatch (ya probado suficiente; solución más angosta posible)', () => {
-    expect(READINESS_GATE_META_PERMISSIONS).not.toContain('iam.serviceAccounts.getIamPolicy');
+  it('P1-B: SÍ incluye iam.serviceAccounts.getIamPolicy — la auditoría independiente rechazó "ya se probó en vivo antes" como justificación suficiente; el gate ahora reprueba actAs en cada dispatch, de solo lectura', () => {
+    expect(READINESS_GATE_META_PERMISSIONS).toContain('iam.serviceAccounts.getIamPolicy');
   });
 
   it('no se solapa con ALL_REQUIRED_DEPLOYER_PERMISSIONS — son categorías distintas (operativo vs. auto-verificación)', () => {
@@ -111,9 +114,9 @@ describe('PROPOSED_HARDENER_ORCHESTRATOR_ROLE — artefacto revisado, nunca apli
     expect(PROPOSED_HARDENER_ORCHESTRATOR_ROLE.roleId).toBe('korixaProductionDbHardenerOrchestrator');
   });
 
-  it('incluye exactamente 12 permisos: los 10 operativos + las 2 meta-permissions del gate, sin exceso', () => {
+  it('incluye exactamente 13 permisos: los 10 operativos + las 3 meta-permissions del gate (P1-B agregó iam.serviceAccounts.getIamPolicy), sin exceso', () => {
     expect(PROPOSED_HARDENER_ORCHESTRATOR_ROLE.includedPermissions).toHaveLength(EXPECTED_PROPOSED_ROLE_PERMISSION_COUNT);
-    expect(PROPOSED_HARDENER_ORCHESTRATOR_ROLE.includedPermissions).toHaveLength(12);
+    expect(PROPOSED_HARDENER_ORCHESTRATOR_ROLE.includedPermissions).toHaveLength(13);
   });
 
   it('la unión de permisos operativos + meta es exactamente el conjunto de includedPermissions, sin duplicados ni faltantes', () => {
@@ -138,10 +141,10 @@ describe('PROPOSED_HARDENER_ORCHESTRATOR_ROLE — artefacto revisado, nunca apli
 });
 
 describe('evaluatePermissionSufficiency — función pura de comparación (Fase 4/2)', () => {
-  it('reporta sufficient=false y lista TODOS los 12 permisos como missing cuando el conjunto otorgado está vacío (el estado REAL actual de Producción)', () => {
+  it('reporta sufficient=false y lista TODOS los 13 permisos como missing cuando el conjunto otorgado está vacío (el estado REAL actual de Producción)', () => {
     const report = evaluatePermissionSufficiency(new Set());
     expect(report.sufficient).toBe(false);
-    expect(report.missing).toHaveLength(12);
+    expect(report.missing).toHaveLength(13);
   });
 
   it('reporta sufficient=true cuando el conjunto otorgado es exactamente el rol propuesto completo', () => {
