@@ -191,42 +191,95 @@ export function deriveOperationResourceNames(operationId: string): OperationReso
 }
 
 // =============================================================================
-// Máquina de estados de la operación (Phase 13) — modelo puro, sin I/O.
-// Transiciones unidireccionales y validadas; una transición ilegal lanza en
-// vez de reconstruirse silenciosamente a partir de una suposición.
+// Máquina de estados de la operación — modelo puro, sin I/O. Transiciones
+// unidireccionales y validadas; una transición ilegal lanza en vez de
+// reconstruirse silenciosamente a partir de una suposición.
+//
+// PR #115 zero-standing-privilege remediation: el modelo anterior tenía un
+// único WAITING_APPLY_GATE en el que la identidad efímera de Stage 1 seguía
+// viva — eso era exactamente el defecto P1 que esta remediación corrige. El
+// modelo actual separa explícitamente el ciclo de vida de Stage 1
+// (PREFLIGHT_*) del de Stage 2 (APPLY_*/TARGET_CLOUDSQL_ROLE_REMOVED/
+// VERIFYING) — cada uno con su propio bootstrap y su propia limpieza — y deja
+// un único estado de espera genuinamente inerte, WAITING_FOR_APPLY_HUMAN_GATE,
+// en el que NINGÚN recurso privilegiado existe (ver
+// `hasZeroPrivilegedResources` más abajo, que es la prueba machine-checkable
+// de esa propiedad, no solo una convención de nombres).
 // =============================================================================
 
 export type OperationState =
-  | 'NOT_STARTED'
-  | 'BOOTSTRAPPING'
-  | 'PREFLIGHT_READY'
-  | 'WAITING_APPLY_GATE'
+  | 'PREFLIGHT_NOT_STARTED'
+  | 'PREFLIGHT_BOOTSTRAPPING'
+  | 'PREFLIGHT_RUNNING'
+  | 'PREFLIGHT_EVIDENCE_CAPTURED'
+  | 'PREFLIGHT_CLEANING'
+  | 'PREFLIGHT_CLEAN'
+  | 'WAITING_FOR_APPLY_HUMAN_GATE'
+  | 'APPLY_BOOTSTRAPPING'
+  | 'APPLY_FRESH_PREFLIGHT'
   | 'APPLYING'
-  | 'TARGET_SQL_HARDENED'
   | 'TARGET_CLOUDSQL_ROLE_REMOVED'
-  | 'VERIFIED'
-  | 'CLEANING'
+  | 'VERIFYING'
+  | 'APPLY_CLEANING'
   | 'CLEAN'
   | 'HOLD';
 
 /** Grafo de transiciones permitidas — cualquier arista no listada acá es
- * ilegal. `HOLD` es alcanzable desde CUALQUIER estado (fail-closed ante
- * cualquier error), pero nunca es un estado de origen válido para avanzar
+ * ilegal. `HOLD` es alcanzable desde CUALQUIER estado no terminal (fail-closed
+ * ante cualquier error), pero nunca es un estado de origen válido para avanzar
  * automáticamente — solo cleanup_only puede actuar sobre una operación en
- * HOLD, y solo para limpiar, nunca para reintentar la operación original. */
+ * HOLD, y solo para limpiar (hacia CUALQUIERA de las dos rutas de limpieza,
+ * según qué identidad — Stage 1 o Stage 2 — estuviera activa), nunca para
+ * reintentar la operación original.
+ *
+ * PREFLIGHT_EVIDENCE_CAPTURED -> PREFLIGHT_CLEANING es la ÚNICA transición
+ * permitida (además de HOLD) — deliberadamente NO existe una arista directa
+ * PREFLIGHT_EVIDENCE_CAPTURED -> WAITING_FOR_APPLY_HUMAN_GATE: la limpieza es
+ * obligatoria y no puede saltearse, sin importar si el preflight fue PASS o
+ * FAIL (esa distinción vive en el disposition capturado como evidencia, no
+ * en el grafo de transición). */
 const ALLOWED_TRANSITIONS: Readonly<Record<OperationState, ReadonlySet<OperationState>>> = {
-  NOT_STARTED: new Set<OperationState>(['BOOTSTRAPPING', 'HOLD']),
-  BOOTSTRAPPING: new Set<OperationState>(['PREFLIGHT_READY', 'HOLD']),
-  PREFLIGHT_READY: new Set<OperationState>(['WAITING_APPLY_GATE', 'HOLD']),
-  WAITING_APPLY_GATE: new Set<OperationState>(['APPLYING', 'HOLD']),
-  APPLYING: new Set<OperationState>(['TARGET_SQL_HARDENED', 'HOLD']),
-  TARGET_SQL_HARDENED: new Set<OperationState>(['TARGET_CLOUDSQL_ROLE_REMOVED', 'HOLD']),
-  TARGET_CLOUDSQL_ROLE_REMOVED: new Set<OperationState>(['VERIFIED', 'HOLD']),
-  VERIFIED: new Set<OperationState>(['CLEANING', 'HOLD']),
-  CLEANING: new Set<OperationState>(['CLEAN', 'HOLD']),
+  PREFLIGHT_NOT_STARTED: new Set<OperationState>(['PREFLIGHT_BOOTSTRAPPING', 'HOLD']),
+  PREFLIGHT_BOOTSTRAPPING: new Set<OperationState>(['PREFLIGHT_RUNNING', 'HOLD']),
+  PREFLIGHT_RUNNING: new Set<OperationState>(['PREFLIGHT_EVIDENCE_CAPTURED', 'HOLD']),
+  PREFLIGHT_EVIDENCE_CAPTURED: new Set<OperationState>(['PREFLIGHT_CLEANING', 'HOLD']),
+  PREFLIGHT_CLEANING: new Set<OperationState>(['PREFLIGHT_CLEAN', 'HOLD']),
+  PREFLIGHT_CLEAN: new Set<OperationState>(['WAITING_FOR_APPLY_HUMAN_GATE']),
+  WAITING_FOR_APPLY_HUMAN_GATE: new Set<OperationState>(['APPLY_BOOTSTRAPPING']),
+  APPLY_BOOTSTRAPPING: new Set<OperationState>(['APPLY_FRESH_PREFLIGHT', 'HOLD']),
+  APPLY_FRESH_PREFLIGHT: new Set<OperationState>(['APPLYING', 'HOLD']),
+  APPLYING: new Set<OperationState>(['TARGET_CLOUDSQL_ROLE_REMOVED', 'HOLD']),
+  TARGET_CLOUDSQL_ROLE_REMOVED: new Set<OperationState>(['VERIFYING', 'HOLD']),
+  VERIFYING: new Set<OperationState>(['APPLY_CLEANING', 'HOLD']),
+  APPLY_CLEANING: new Set<OperationState>(['CLEAN', 'HOLD']),
   CLEAN: new Set<OperationState>([]), // estado terminal — ninguna transición más
-  HOLD: new Set<OperationState>(['CLEANING']), // solo cleanup_only puede sacar una operación de HOLD, y solo hacia limpieza
+  // HOLD puede resolverse hacia cualquiera de las dos rutas de cleanup —
+  // cleanup_only es genérico sobre preflight_operation_id/apply_execution_id
+  // (ver el workflow) y no sabe de antemano cuál de las dos identidades es
+  // la que quedó varada.
+  HOLD: new Set<OperationState>(['PREFLIGHT_CLEANING', 'APPLY_CLEANING']),
 };
+
+/**
+ * Estados en los que, por construcción, NINGÚN recurso privilegiado
+ * (usuario PostgreSQL efímero, secret DSN, Cloud Run Job efímero, ADMIN
+ * OPTION) puede seguir existiendo — la prueba machine-checkable de "zero
+ * standing privilege" que este modelo existe para garantizar. `HOLD` está
+ * deliberadamente EXCLUIDO: un HOLD significa que algo falló de forma no
+ * anticipada, y asumir "limpio" sin una re-verificación real sería
+ * exactamente el tipo de suposición fail-open que este archivo entero existe
+ * para prohibir.
+ */
+const ZERO_PRIVILEGED_RESOURCE_STATES: ReadonlySet<OperationState> = new Set<OperationState>([
+  'PREFLIGHT_NOT_STARTED',
+  'PREFLIGHT_CLEAN',
+  'WAITING_FOR_APPLY_HUMAN_GATE',
+  'CLEAN',
+]);
+
+export function hasZeroPrivilegedResources(state: OperationState): boolean {
+  return ZERO_PRIVILEGED_RESOURCE_STATES.has(state);
+}
 
 export class IllegalOperationTransitionError extends Error {
   constructor(

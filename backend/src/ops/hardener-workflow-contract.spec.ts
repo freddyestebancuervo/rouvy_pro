@@ -71,10 +71,15 @@ describe('production-db-role-hardening.yml — contrato estructural', () => {
     expect(source).toMatch(/HOLD_OPERATION_CONTEXT_DRIFT/);
   });
 
-  it('Phase 8 — apply requiere verify-operation-context como needs antes de mutar nada', () => {
+  it('Phase 8 (zero-standing-privilege remediation) — apply requiere verify-target-role-preconditions Y fresh-preflight como needs antes de mutar nada — nunca el antiguo verify-operation-context (que verificaba la identidad de Stage 1, ya eliminada para cuando apply corre)', () => {
     const applyBlock = jobSource('apply');
-    expect(jobNeeds('apply')).toContain('verify-operation-context');
-    expect(applyBlock).toMatch(/needs\.verify-operation-context\.outputs\.context_verified == 'YES'/);
+    expect(jobNeeds('apply')).toEqual(
+      expect.arrayContaining(['verify-target-role-preconditions', 'bootstrap-apply-admin', 'fresh-preflight']),
+    );
+    expect(jobNeeds('apply')).not.toContain('verify-operation-context');
+    expect(applyBlock).toMatch(/needs\.verify-target-role-preconditions\.outputs\.target_role_verified == 'YES'/);
+    expect(applyBlock).toMatch(/needs\.fresh-preflight\.outputs\.fresh_preflight_result == 'PASS'/);
+    expect(source).not.toMatch(/\n  verify-operation-context:\n/);
   });
 
   it('Phase 7 — bootstrap_and_preflight nunca tiene una arista needs hacia apply/remove-target-cloudsqlsuperuser', () => {
@@ -331,8 +336,10 @@ describe('production-db-role-hardening.yml — contrato estructural', () => {
       'bootstrap-ephemeral-admin',
       'verify-prerequisites-instance',
       'preflight',
-      'cleanup-after-stage1-failure',
-      'verify-operation-context',
+      'cleanup-after-preflight',
+      'verify-target-role-preconditions',
+      'bootstrap-apply-admin',
+      'fresh-preflight',
       'apply',
       'remove-target-cloudsqlsuperuser',
       'verify',
@@ -361,30 +368,31 @@ describe('production-db-role-hardening.yml — contrato estructural', () => {
       expect(verifySource).toMatch(/EXECUTE_EXIT.*-eq 0.*fail/s);
     });
 
-    it('P1-2: existe cleanup-after-stage1-failure, corre siempre que bootstrap+preflight NO tuvieron éxito completo, y elimina admin/secret/Job con verificación independiente', () => {
-      const stage1CleanupSource = jobSource('cleanup-after-stage1-failure');
-      expect(stage1CleanupSource).toMatch(/always\(\)/);
-      expect(stage1CleanupSource).toMatch(/!\(needs\.bootstrap-ephemeral-admin\.result == 'success' && needs\.preflight\.result == 'success'\)/);
+    it('P1-2 (zero-standing-privilege remediation): existe cleanup-after-preflight, corre SIEMPRE (incondicionalmente — ni éxito ni falla de preflight lo condicionan) para todo dispatch bootstrap_and_preflight, y elimina admin/secret/Job con verificación independiente', () => {
+      const stage1CleanupSource = jobSource('cleanup-after-preflight');
+      expect(stage1CleanupSource).toMatch(/if: \|\s*\n\s*always\(\) &&\s*\n\s*needs\.guard\.outputs\.guard_pass == 'YES' &&\s*\n\s*needs\.guard\.outputs\.mode == 'bootstrap_and_preflight'/);
+      // Ya NO existe ninguna condición que dependa de preflight.result o
+      // bootstrap-ephemeral-admin.result — el cleanup no es condicional al
+      // éxito/falla, es incondicional dado el modo.
+      expect(stage1CleanupSource).not.toMatch(/needs\.preflight\.result/);
+      expect(stage1CleanupSource).not.toMatch(/needs\.bootstrap-ephemeral-admin\.result/);
       expect(stage1CleanupSource).toMatch(/gcloud sql users delete "\$EPHEMERAL_ADMIN"/);
       expect(stage1CleanupSource).toMatch(/gcloud secrets delete "\$EPHEMERAL_DSN_SECRET"/);
       expect(stage1CleanupSource).toMatch(/gcloud run jobs delete "\$EPHEMERAL_JOB"/);
       expect(stage1CleanupSource).toMatch(/ADMIN_STILL_EXISTS/);
-      expect(jobNeeds('cleanup-after-stage1-failure')).toEqual(
-        expect.arrayContaining(['bootstrap-ephemeral-admin', 'preflight']),
+      expect(jobNeeds('cleanup-after-preflight')).toEqual(
+        expect.arrayContaining(['bootstrap-ephemeral-admin', 'preflight', 'stage1-summary']),
       );
+      // No queda ningún job con el nombre antiguo (condicional a la falla).
+      expect(source).not.toMatch(/\n  cleanup-after-stage1-failure:\n/);
     });
 
-    it('P1-3: existe un lease acotado, explícito y testeable (EPHEMERAL_ADMIN_MAX_LIFETIME_SECONDS), calculado desde createTime real del secret DSN, y apply lo rechaza si expiró', () => {
-      expect(source).toMatch(/EPHEMERAL_ADMIN_MAX_LIFETIME_SECONDS:\s*"?(\d+)"?/);
-      const lifetimeMatch = /EPHEMERAL_ADMIN_MAX_LIFETIME_SECONDS:\s*"?(\d+)"?/.exec(source);
-      expect(lifetimeMatch?.[1]).toBeDefined();
-      expect(Number(lifetimeMatch![1])).toBeGreaterThan(0);
-      expect(source).toMatch(/HOLD_OPERATION_LEASE_EXPIRED/);
-      const verifyContextSource = jobSource('verify-operation-context');
-      expect(verifyContextSource).toMatch(/createTime/);
-      expect(verifyContextSource).toMatch(/EPHEMERAL_ADMIN_MAX_LIFETIME_SECONDS/);
-      // Nunca se introduce un trigger `schedule:` para forzar limpieza —
-      // la aplicación del lease es reactiva, dentro del propio dispatch.
+    it('P1-3 (SUPERSEDED por la remediación zero-standing-privilege — ver el describe block dedicado más abajo): el lease reactivo cross-dispatch fue ELIMINADO, no acortado — no queda ninguna referencia operativa a EPHEMERAL_ADMIN_MAX_LIFETIME_SECONDS/HOLD_OPERATION_LEASE_EXPIRED/createTime como mecanismo de expiración', () => {
+      expect(source).not.toMatch(/EPHEMERAL_ADMIN_MAX_LIFETIME_SECONDS:\s*"?\d+"?/);
+      expect(source).not.toMatch(/HOLD_OPERATION_LEASE_EXPIRED/);
+      expect(source).not.toMatch(/LEASE_CHECK/);
+      // Ningún trigger schedule: existe ni existió — el fix nunca introduce
+      // un cron para compensar la eliminación del lease reactivo.
       const onBlock = /\non:\n([\s\S]*?)\npermissions:/.exec(source)?.[1] ?? '';
       expect(onBlock).not.toMatch(/^\s*schedule:/m);
     });
@@ -399,10 +407,16 @@ describe('production-db-role-hardening.yml — contrato estructural', () => {
       expect(echoModeIdx).toBeLessThan(driftCheckIdx);
     });
 
-    it('P1-4b: cleanup-after-apply corre para CUALQUIER dispatch mode=apply con guard_pass=YES — ya NO exige context_verified==YES (eso ocultaba el drift que más necesita cleanup)', () => {
+    it('P1-4b: cleanup-after-apply corre para CUALQUIER dispatch mode=apply con guard_pass=YES — no exige que verify-target-role-preconditions/bootstrap-apply-admin/fresh-preflight/apply/remove/verify hayan tenido éxito', () => {
       const cleanupAfterApplySource = jobSource('cleanup-after-apply');
-      expect(cleanupAfterApplySource).not.toMatch(/needs\.verify-operation-context\.outputs\.context_verified == 'YES'/);
+      expect(cleanupAfterApplySource).not.toMatch(/needs\.verify-operation-context/);
+      expect(cleanupAfterApplySource).not.toMatch(/needs\.verify-target-role-preconditions\.result == 'success'/);
+      expect(cleanupAfterApplySource).not.toMatch(/needs\.fresh-preflight\.result == 'success'/);
+      expect(cleanupAfterApplySource).not.toMatch(/needs\.bootstrap-apply-admin\.result == 'success'/);
       expect(cleanupAfterApplySource).toMatch(/always\(\) && needs\.guard\.outputs\.guard_pass == 'YES' && needs\.guard\.outputs\.mode == 'apply'/);
+      expect(jobNeeds('cleanup-after-apply')).toEqual(
+        expect.arrayContaining(['verify-target-role-preconditions', 'bootstrap-apply-admin', 'fresh-preflight', 'apply', 'remove-target-cloudsqlsuperuser', 'verify']),
+      );
     });
 
     it('P1-4a/P1-4b: cleanup-only también se dispara automáticamente cuando guard rechazó apply por drift de SHA (sha_drift_detected==YES), no solo por dispatch manual mode=cleanup_only', () => {
@@ -410,30 +424,35 @@ describe('production-db-role-hardening.yml — contrato estructural', () => {
       expect(cleanupOnlySource).toMatch(/needs\.guard\.outputs\.sha_drift_detected == 'YES'/);
     });
 
-    it('P1-5: databaseRoles del admin efímero Y de korixa_app se prueban EXACTOS vía JSON estructurado (nunca grep/substring), con HOLD_TARGET_DATABASE_ROLES_DRIFT si difieren', () => {
-      const verifyContextSource = jobSource('verify-operation-context');
-      expect(verifyContextSource).not.toMatch(/grep -qi cloudsqlsuperuser/);
-      expect(verifyContextSource).toMatch(/HOLD_TARGET_DATABASE_ROLES_DRIFT/);
-      const exactChecks = [...verifyContextSource.matchAll(/roles == \['cloudsqlsuperuser'\]/g)];
-      expect(exactChecks.length).toBeGreaterThanOrEqual(2); // admin + target
+    it('P1-5 (preservado — reubicado en verify-target-role-preconditions): databaseRoles de korixa_app se prueba EXACTO vía JSON estructurado (nunca grep/substring), con HOLD_TARGET_DATABASE_ROLES_DRIFT si difiere. El admin efímero de Stage 2 nunca necesita este chequeo de drift porque se crea recién, en este mismo dispatch, con --database-roles=cloudsqlsuperuser explícito — no existe ventana temporal en la que su rol pueda haber cambiado.', () => {
+      const targetRolePreconditionsSource = jobSource('verify-target-role-preconditions');
+      expect(targetRolePreconditionsSource).not.toMatch(/grep -qi cloudsqlsuperuser/);
+      expect(targetRolePreconditionsSource).toMatch(/HOLD_TARGET_DATABASE_ROLES_DRIFT/);
+      const exactChecks = [...targetRolePreconditionsSource.matchAll(/roles == \['cloudsqlsuperuser'\]/g)];
+      expect(exactChecks.length).toBe(1); // solo korixa_app — el admin efímero se crea fresco, sin ventana de drift
+      expect(source).not.toMatch(/\n  verify-operation-context:\n/);
+      // Ambos jobs de bootstrap crean el admin con el rol exacto explícito.
+      for (const jobName of ['bootstrap-ephemeral-admin', 'bootstrap-apply-admin']) {
+        expect(jobSource(jobName)).toMatch(/--database-roles=cloudsqlsuperuser/);
+      }
     });
 
-    it('P1-6: SECRET_LATEST_REFERENCES = 0 — el DSN secret siempre se referencia con versión fijada ":1", nunca ":latest"; drift de versión ENABLED dispara HOLD_OPERATION_SECRET_VERSION_DRIFT', () => {
+    it('P1-6: SECRET_LATEST_REFERENCES = 0 — el DSN secret siempre se referencia con versión fijada ":1", nunca ":latest"; ahora en NUEVE sitios (dos bootstraps, dos preflights, apply, verify, y tres revokes)', () => {
       const latestReferences = [...source.matchAll(/EPHEMERAL_DSN_SECRET\}?:latest/g)];
       expect(latestReferences).toHaveLength(0);
       const pinnedReferences = [...source.matchAll(/EPHEMERAL_DSN_SECRET\}:1"/g)];
-      expect(pinnedReferences.length).toBeGreaterThanOrEqual(6); // grant/preflight/apply/verify/revoke(x2)
-      expect(source).toMatch(/HOLD_OPERATION_SECRET_VERSION_DRIFT/);
+      expect(pinnedReferences.length).toBeGreaterThanOrEqual(9);
     });
 
-    it('P1-7: ni cleanup-only ni cleanup-after-apply ni cleanup-after-stage1-failure exigen needs.resolve-artifact.result == "success" — la eliminación de admin/secret/Job nunca se bloquea por artefacto', () => {
-      for (const jobName of ['cleanup-only', 'cleanup-after-apply', 'cleanup-after-stage1-failure']) {
+    it('P1-7: ni cleanup-only ni cleanup-after-apply ni cleanup-after-preflight exigen needs.resolve-artifact.result == "success" — la eliminación de admin/secret/Job nunca se bloquea por artefacto', () => {
+      for (const jobName of ['cleanup-only', 'cleanup-after-apply', 'cleanup-after-preflight']) {
         expect(jobSource(jobName)).not.toMatch(/needs\.resolve-artifact\.result == 'success'/);
       }
+      expect(source).not.toMatch(/\n  cleanup-after-stage1-failure:\n/);
       // Cada revoke best-effort chequea IMMUTABLE_REF antes de intentar el
       // deploy — nunca asume que la resolución de artefacto tuvo éxito.
       const immutableRefGuards = [...source.matchAll(/-n "\$IMMUTABLE_REF"|-z "\$IMMUTABLE_REF"/g)];
-      expect(immutableRefGuards.length).toBeGreaterThanOrEqual(3); // cleanup-after-apply, cleanup-only, cleanup-after-stage1-failure
+      expect(immutableRefGuards.length).toBeGreaterThanOrEqual(3); // cleanup-after-apply, cleanup-only, cleanup-after-preflight
     });
 
     it('P2: verify-prerequisites-instance prueba la postura de red EXACTA estructuradamente (JSON) — nunca ipAddresses[0] por índice — con HOLD_PRODUCTION_DB_NETWORK_POSTURE_DRIFT si algo no coincide', () => {
@@ -452,6 +471,148 @@ describe('production-db-role-hardening.yml — contrato estructural', () => {
       expect(prereqSource).toMatch(/databaseVersion/);
       expect(prereqSource).toMatch(/privateNetwork/);
       expect(prereqSource).toMatch(/len\(private_ips\) != 1/);
+    });
+  });
+
+  // ===========================================================================
+  // TF12-POINT8C-PR115-ZERO-STANDING-PRIVILEGE-FINAL-REMEDIATION — el único
+  // P1 restante: bajo el diseño anterior, un preflight EXITOSO dejaba el
+  // admin/secret/Job efímeros vivos INDEFINIDAMENTE en espera de que un
+  // humano dispatcheara apply, protegidos solo por un timer reactivo que
+  // nunca corría si apply jamás se dispatcheaba. Esta remediación NO
+  // rediseña la arquitectura ephemeral-admin en sí (sigue habiendo un admin
+  // cloudsqlsuperuser intencional, un secret DSN, un Cloud Run Job) — cambia
+  // su CICLO DE VIDA: Stage 1 se auto-limpia siempre, y Stage 2 bootstrapea
+  // una identidad completamente nueva y vuelve a preflightear antes de
+  // aplicar. Los 15 tests de esta sección prueban, uno por uno, contra el
+  // YAML real, cada propiedad exigida por la Phase 9 de la misión.
+  // ===========================================================================
+  describe('PR #115 zero-standing-privilege final remediation — Stage 1 siempre limpia, Stage 2 mintea una identidad fresca, fresh preflight obligatorio', () => {
+    it('1/2. un preflight de Stage 1 EXITOSO y uno FALLIDO ambos disparan cleanup-after-preflight — su condición no distingue el resultado de preflight/bootstrap en absoluto (unconditional dado el modo)', () => {
+      const cleanupSource = jobSource('cleanup-after-preflight');
+      expect(cleanupSource).toMatch(/always\(\)/);
+      expect(cleanupSource).not.toMatch(/preflight\.result == 'success'/);
+      expect(cleanupSource).not.toMatch(/bootstrap-ephemeral-admin\.result == 'success'/);
+      // Ambas ramas (admin+secret idempotentemente ausentes o presentes) se
+      // manejan con el mismo código describe-antes-de-borrar — no hay una
+      // rama de código separada para "preflight falló" vs "preflight pasó".
+      expect(cleanupSource).toMatch(/ADMIN_ALREADY_ABSENT|STAGE1_CLEANUP_B_SKIPPED=ADMIN_ALREADY_ABSENT/);
+    });
+
+    it('3. READY_FOR_APPLY_HUMAN_GATE_WITH_ZERO_PRIVILEGED_RESOURCES_REMAINING solo se emite en stage1-summary, y cleanup-after-preflight declara needs: stage1-summary — la evidencia se publica ANTES de que el job de cleanup pueda empezar (orden explícito por needs, no solo casual)', () => {
+      const summarySource = jobSource('stage1-summary');
+      expect(summarySource).toMatch(/READY_FOR_APPLY_HUMAN_GATE_WITH_ZERO_PRIVILEGED_RESOURCES_REMAINING/);
+      expect(jobNeeds('cleanup-after-preflight')).toContain('stage1-summary');
+      // stage1-summary en sí no hace ninguna mutación — solo lee outputs ya
+      // fijados y escribe al step summary.
+      expect(summarySource).not.toMatch(/gcloud sql users (create|delete)/);
+      expect(summarySource).not.toMatch(/gcloud secrets (create|delete)/);
+    });
+
+    it('4/5. Stage 2 (bootstrap-apply-admin) no depende en absoluto de que el admin o el secret de Stage 1 existan — crea un usuario y un secret NUEVOS incondicionalmente, nunca los "reutiliza"', () => {
+      const bootstrapApplySource = jobSource('bootstrap-apply-admin');
+      expect(bootstrapApplySource).toMatch(/gcloud sql users create "\$EPHEMERAL_ADMIN"/);
+      expect(bootstrapApplySource).toMatch(/gcloud secrets create "\$EPHEMERAL_DSN_SECRET"/);
+      // Nunca condicionado a un describe/lookup previo de un recurso
+      // "existente" de stage 1 — a diferencia de los jobs de cleanup, que sí
+      // hacen describe-antes-de-actuar, bootstrap-apply-admin siempre crea.
+      expect(bootstrapApplySource).not.toMatch(/gcloud sql users describe "\$EPHEMERAL_ADMIN"/);
+      // No depende de bootstrap-ephemeral-admin/preflight/cleanup-after-preflight de Stage 1.
+      const needs = jobNeeds('bootstrap-apply-admin');
+      for (const stage1Job of ['bootstrap-ephemeral-admin', 'preflight', 'cleanup-after-preflight', 'stage1-summary']) {
+        expect(needs).not.toContain(stage1Job);
+      }
+    });
+
+    it('6. derive-operation-names mintea un apply_execution_id FRESCO e independiente para mode=apply — nunca deriva los nombres de recurso de Stage 2 del preflight_operation_id de entrada', () => {
+      const deriveSource = jobSource('derive-operation-names');
+      expect(deriveSource).toMatch(/APPLY_EXECUTION_ID="\$\(openssl rand -hex 6\)"/);
+      expect(deriveSource).toMatch(/apply_execution_id=\$APPLY_EXECUTION_ID/);
+      // La colisión accidental (mismo valor que el preflight_operation_id de
+      // entrada) se rechaza explícitamente, nunca se ignora en silencio.
+      expect(deriveSource).toMatch(/APPLY_EXECUTION_ID.*!=.*OPERATION_ID.*INVARIANT_VIOLATION/s);
+      // Para mode=apply, RESOURCE_ID (lo que realmente nombra los recursos)
+      // se deriva de APPLY_EXECUTION_ID, no de OPERATION_ID.
+      expect(deriveSource).toMatch(/elif \[ "\$MODE" = "apply" \][\s\S]*?RESOURCE_ID="\$APPLY_EXECUTION_ID"/);
+    });
+
+    it('7/8. fresh-preflight es OBLIGATORIO antes de apply — su ausencia/falla implica APPLY_EXECUTED=NO, y cleanup-after-apply corre de todos modos', () => {
+      expect(jobNeeds('apply')).toContain('fresh-preflight');
+      const applySource = jobSource('apply');
+      expect(applySource).toMatch(/needs\.fresh-preflight\.outputs\.fresh_preflight_result == 'PASS'/);
+      const freshPreflightSource = jobSource('fresh-preflight');
+      expect(freshPreflightSource).toMatch(/HOLD_FRESH_PREFLIGHT_FAILED/);
+      expect(freshPreflightSource).toMatch(/dist\/ops\/db-role-hardener\.js/);
+      expect(freshPreflightSource).toMatch(/HARDENER_MODE=preflight/);
+      // cleanup-after-apply corre para CUALQUIER dispatch mode=apply,
+      // incluyendo cuando fresh-preflight falló (ya probado en P1-4b, pero
+      // se re-afirma acá con el nombre explícito del job nuevo).
+      expect(jobNeeds('cleanup-after-apply')).toContain('fresh-preflight');
+      expect(jobSource('cleanup-after-apply')).not.toMatch(/needs\.fresh-preflight\.result == 'success'/);
+    });
+
+    it('9. ningún recurso privilegiado existe mientras se espera el Human Gate de apply — PRIVILEGED_RESOURCES_WHILE_WAITING_HUMAN_GATE = 0 se emite solo tras confirmar los tres recursos ausentes', () => {
+      const cleanupSource = jobSource('cleanup-after-preflight');
+      const idx = cleanupSource.indexOf('PRIVILEGED_RESOURCES_WHILE_WAITING_HUMAN_GATE = 0');
+      expect(idx).toBeGreaterThan(-1);
+      const precedingText = cleanupSource.slice(0, idx);
+      // Solo se llega a esa línea dentro de la rama que confirmó las tres
+      // ausencias (ADMIN/DSN/JOB) — nunca incondicionalmente.
+      expect(precedingText).toMatch(/ADMIN_STILL_EXISTS" -ne 0 \] && \[ "\$DSN_SECRET_STILL_EXISTS" -ne 0 \] && \[ "\$JOB_STILL_EXISTS" -ne 0 \]/);
+    });
+
+    it('10. ningún comentario/texto afirma que un timer/lease reactivo elimina recursos por sí solo — el único concepto de tiempo restante es timeout-minutes (MAX_EXECUTION_WINDOW real, de plataforma, nunca un mecanismo de borrado)', () => {
+      expect(source).not.toMatch(/expira.*\d+s.*después de este bootstrap/);
+      expect(source).not.toMatch(/quedan activos indefinidamente/);
+      expect(source).toMatch(/NO REACTIVE LEASE/);
+      expect(source).toMatch(/MAX_EXECUTION_WINDOW/);
+      expect(source).toMatch(/never described as something that deletes a resource on\s+#? ?its own/);
+      // timeout-minutes: sigue presente en todo job que corre gcloud contra
+      // Production — eso es lo real que acota la ventana de ejecución.
+      const timeoutCount = [...source.matchAll(/timeout-minutes:\s*\d+/g)].length;
+      expect(timeoutCount).toBeGreaterThanOrEqual(10);
+    });
+
+    it('11. el strict verify gate (P1-1) sigue enforced tras esta remediación — verify_disposition_ok=YES solo si el proceso Node salió 0', () => {
+      const verifySource = jobSource('verify');
+      expect(verifySource).toMatch(/verify_disposition_ok=YES/);
+      expect(verifySource).toMatch(/HOLD_VERIFY_NOT_FULLY_HARDENED/);
+      expect(jobNeeds('verify')).toContain('remove-target-cloudsqlsuperuser');
+    });
+
+    it('12. el pin de versión de secret ":1" sigue enforced tras esta remediación (ver también el test P1-6 dedicado)', () => {
+      expect(source).not.toMatch(/EPHEMERAL_DSN_SECRET\}?:latest/);
+      expect([...source.matchAll(/EPHEMERAL_DSN_SECRET\}:1"/g)].length).toBeGreaterThanOrEqual(9);
+    });
+
+    it('13. las precondiciones exactas de databaseRoles siguen enforced tras esta remediación (ver también el test P1-5 dedicado)', () => {
+      expect(jobSource('verify-target-role-preconditions')).toMatch(/HOLD_TARGET_DATABASE_ROLES_DRIFT/);
+      expect(jobNeeds('apply')).toContain('verify-target-role-preconditions');
+    });
+
+    it('14. private-VPC-only sigue enforced tras esta remediación — ambos bootstraps y ambos preflights (stage 1 y stage 2) usan la misma red/subnet/vpc-egress privados, cero ExecuteSql/dataApiAccess', () => {
+      for (const jobName of ['bootstrap-ephemeral-admin', 'bootstrap-apply-admin', 'preflight', 'fresh-preflight', 'apply', 'verify']) {
+        const jobText = jobSource(jobName);
+        expect(jobText).toMatch(/--network=korixa-production-vpc/);
+        expect(jobText).toMatch(/--subnet=korixa-production-sa-east1/);
+        expect(jobText).toMatch(/--vpc-egress=private-ranges-only/);
+      }
+      const operationalLinesAllJobs = source.split('\n').filter((line) => !line.trim().startsWith('#'));
+      expect(operationalLinesAllJobs.some((line) => /dataApiAccess|ALLOW_DATA_API|execute-sql/.test(line))).toBe(false);
+    });
+
+    it('15. no existe ninguna arista automática Stage1 -> apply — bootstrap-apply-admin y fresh-preflight se gatean SOLO por mode==apply (nunca por el resultado de preflight/bootstrap-ephemeral-admin/cleanup-after-preflight de Stage 1)', () => {
+      const bootstrapApplyIf = jobSource('bootstrap-apply-admin').match(/if: \|[\s\S]*?\n\n/)?.[0] ?? jobSource('bootstrap-apply-admin');
+      expect(bootstrapApplyIf).toMatch(/mode == 'apply'/);
+      expect(bootstrapApplyIf).not.toMatch(/preflight\.result/);
+      expect(bootstrapApplyIf).not.toMatch(/bootstrap-ephemeral-admin\.result/);
+      const freshPreflightIf = jobSource('fresh-preflight');
+      expect(freshPreflightIf).not.toMatch(/needs\.preflight\.result/);
+      expect(freshPreflightIf).not.toMatch(/needs\.stage1-summary/);
+      // El único puente entre Stage 1 y Stage 2 es un dispatch manual
+      // separado (operation_id + operation_source_sha copiados a mano) —
+      // nunca un job del mismo run que encadene automáticamente.
+      expect(jobNeeds('bootstrap-apply-admin')).not.toContain('preflight');
     });
   });
 });

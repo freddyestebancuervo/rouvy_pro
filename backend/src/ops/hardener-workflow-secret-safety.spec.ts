@@ -32,80 +32,93 @@ describe('production-db-role-hardening.yml — SECRET_LOG_SINKS = 0', () => {
     // RESULT=CLEAN) que contienen la subcadena "dsn"/"password" solo porque
     // describen a QUÉ recurso se refieren — no porque interpolen su valor.
     // Cada una está revisada individualmente contra el texto real del
-    // workflow (PR #115 P1-B remediation: un solo secret DSN global, sin
-    // secret de password), nunca descartada en bloque.
+    // workflow. PR #115 zero-standing-privilege remediation: ahora existen
+    // DOS jobs de bootstrap (Stage 1 y Stage 2, cada uno con su propia
+    // identidad efímera fresca) — cada patrón que antes aparecía una vez
+    // ahora aparece dos veces, una por stage; cada ocurrencia se revisó por
+    // separado, nunca en bloque. El chequeo de lease (createTime,
+    // DSN_VERSIONS_JSON/DSN_SECRET_DESCRIBE_JSON) fue ELIMINADO junto con el
+    // job verify-operation-context — ya no existen esas líneas.
     {
-      lineNumber: 357,
+      lineNumber: 408,
       reason:
-        'echo "ephemeral_dsn_secret_name=${{ env.EPHEMERAL_DSN_SECRET_PREFIX }}${OPERATION_ID}" — deriva y expone el NOMBRE del secret (prefijo fijo + operation_id público), nunca su payload.',
+        'echo "ephemeral_dsn_secret_name=${{ env.EPHEMERAL_DSN_SECRET_PREFIX }}${RESOURCE_ID}" (derive-operation-names) — deriva y expone el NOMBRE del secret (prefijo fijo + id público, sea preflight_operation_id o apply_execution_id), nunca su payload.',
     },
     {
-      lineNumber: 627,
+      lineNumber: 757,
       reason:
-        "printf '%s' \"$DSN\" | gcloud secrets versions add ... --data-file=- — el DSN se canaliza directo al secret DSN global vía stdin, nunca se imprime a stdout/log.",
+        "printf '%s' \"$DSN\" | gcloud secrets versions add ... --data-file=- (bootstrap-ephemeral-admin, Stage 1) — el DSN se canaliza directo al secret DSN global vía stdin, nunca se imprime a stdout/log.",
     },
     {
-      lineNumber: 632,
-      reason: 'echo "EPHEMERAL_DSN_SECRET_CREATED=YES" — flag de estado estático, ningún valor interpolado.',
+      lineNumber: 762,
+      reason: 'echo "EPHEMERAL_DSN_SECRET_CREATED=YES" (bootstrap-ephemeral-admin, Stage 1) — flag de estado estático, ningún valor interpolado.',
     },
     {
-      lineNumber: 633,
+      lineNumber: 763,
       reason:
-        'echo "SECRET_PAYLOAD_PRINTED=NO" — string estático que AFIRMA no-divulgación; contiene la subcadena "secret_payload" pero no imprime ningún payload real.',
+        'echo "SECRET_PAYLOAD_PRINTED=NO" (bootstrap-ephemeral-admin, Stage 1) — string estático que AFIRMA no-divulgación; contiene la subcadena "secret_payload" pero no imprime ningún payload real.',
     },
     {
-      lineNumber: 644,
-      reason: 'echo "EPHEMERAL_DSN_SECRET_IAM_GRANTED=YES" — flag de estado estático, ningún valor interpolado.',
+      lineNumber: 773,
+      reason: 'echo "EPHEMERAL_DSN_SECRET_IAM_GRANTED=YES" (bootstrap-ephemeral-admin, Stage 1) — flag de estado estático, ningún valor interpolado.',
     },
     {
-      lineNumber: 856,
+      lineNumber: 905,
       reason:
-        'echo "- EPHEMERAL_DSN_SECRET_NAME = ${{ needs...outputs.ephemeral_dsn_secret_name }} (global — único secret de este diseño, PR #115 P1-B remediation)" (resumen STAGE 1) — imprime el NOMBRE del secret, nunca su payload.',
+        'echo "Los recursos privilegiados que este dispatch creó (...secret DSN...) son ELIMINADOS SIEMPRE..." (stage1-summary, evidencia no secreta) — prosa estática explicando el comportamiento de cleanup, ningún valor interpolado — contiene la palabra "DSN" solo como sustantivo descriptivo.',
     },
     {
-      lineNumber: 979,
+      lineNumber: 1022,
       reason:
-        'echo "STAGE1_CLEANUP_C_D_SKIPPED=DSN_SECRET_ALREADY_ABSENT" (cleanup-after-stage1-failure, PR #115 P1-2) — flag de estado estático, ningún valor.',
+        'echo "STAGE1_CLEANUP_C_D_SKIPPED=DSN_SECRET_ALREADY_ABSENT" (cleanup-after-preflight) — flag de estado estático, ningún valor.',
     },
     {
-      lineNumber: 1012,
+      lineNumber: 1055,
       reason:
-        'echo "STAGE1_CLEANUP_RESULT = CLEAN (los tres recursos confirmados ausentes: admin, DSN secret, Cloud Run Job)" (cleanup-after-stage1-failure) — string estático de resultado, ningún valor.',
+        'echo "STAGE1_CLEANUP_RESULT = CLEAN (los tres recursos confirmados ausentes: admin, DSN secret, Cloud Run Job)" (cleanup-after-preflight) — string estático de resultado, ningún valor.',
     },
     {
-      lineNumber: 1084,
+      lineNumber: 1181,
       reason:
-        'echo "$DSN_VERSIONS_JSON" | python3 -c "..." (PR #115 P1-6, verify-operation-context) — DSN_VERSIONS_JSON es la salida de `gcloud secrets versions list` (metadata: nombres de versión + estado ENABLED/DISABLED), NUNCA el payload/valor del secret — el nombre de la variable contiene "DSN" solo porque describe A QUÉ secret pertenece esa metadata.',
+        "printf '%s' \"$DSN\" | gcloud secrets versions add ... --data-file=- (bootstrap-apply-admin, Stage 2 — identidad fresca, nunca la de Stage 1) — el DSN se canaliza directo al secret DSN global vía stdin, nunca se imprime a stdout/log.",
     },
     {
-      lineNumber: 1119,
+      lineNumber: 1186,
+      reason: 'echo "EPHEMERAL_DSN_SECRET_CREATED=YES" (bootstrap-apply-admin, Stage 2) — flag de estado estático, ningún valor interpolado.',
+    },
+    {
+      lineNumber: 1187,
       reason:
-        'echo "$DSN_SECRET_DESCRIBE_JSON" | python3 -c "..." (PR #115 P1-3, verify-operation-context) — DSN_SECRET_DESCRIBE_JSON es la salida de `gcloud secrets describe` (metadata: nombre, createTime, replication), NUNCA el payload/valor del secret — usado únicamente para calcular el lease acotado a partir de createTime.',
+        'echo "SECRET_PAYLOAD_PRINTED=NO" (bootstrap-apply-admin, Stage 2) — string estático que AFIRMA no-divulgación, ningún payload real.',
     },
     {
-      lineNumber: 1391,
-      reason: 'echo "DSN secret efímero ya ausente — nada que revocar vía él." — string estático, ningún valor.',
+      lineNumber: 1194,
+      reason: 'echo "EPHEMERAL_DSN_SECRET_IAM_GRANTED=YES" (bootstrap-apply-admin, Stage 2) — flag de estado estático, ningún valor interpolado.',
     },
     {
-      lineNumber: 1461,
-      reason: 'echo "DSN secret efímero ya ausente — cleanup idempotente, éxito." — string estático, ningún valor.',
+      lineNumber: 1537,
+      reason: 'echo "DSN secret efímero ya ausente — nada que revocar vía él." (cleanup-after-apply) — string estático, ningún valor.',
     },
     {
-      lineNumber: 1471,
-      reason: 'echo "::error::Cleanup C/D (delete ephemeral DSN secret) falló — HOLD requerido." — string estático, ningún valor.',
+      lineNumber: 1603,
+      reason: 'echo "DSN secret efímero ya ausente — cleanup idempotente, éxito." (cleanup-after-apply) — string estático, ningún valor.',
     },
     {
-      lineNumber: 1664,
-      reason: 'echo "CLEANUP_A_SKIPPED=DSN_SECRET_ALREADY_ABSENT (nada que revocar vía él)" — flag de estado estático, ningún valor.',
+      lineNumber: 1613,
+      reason: 'echo "::error::Cleanup C/D (delete ephemeral DSN secret) falló — HOLD requerido." (cleanup-after-apply) — string estático, ningún valor.',
     },
     {
-      lineNumber: 1682,
-      reason: 'echo "CLEANUP_C_D_SKIPPED=DSN_SECRET_ALREADY_ABSENT" — flag de estado estático, ningún valor.',
+      lineNumber: 1775,
+      reason: 'echo "CLEANUP_A_SKIPPED=DSN_SECRET_ALREADY_ABSENT (nada que revocar vía él)" (cleanup-only) — flag de estado estático, ningún valor.',
     },
     {
-      lineNumber: 1719,
+      lineNumber: 1793,
+      reason: 'echo "CLEANUP_C_D_SKIPPED=DSN_SECRET_ALREADY_ABSENT" (cleanup-only) — flag de estado estático, ningún valor.',
+    },
+    {
+      lineNumber: 1830,
       reason:
-        'echo "CLEANUP_ONLY_RESULT = CLEAN (los tres recursos confirmados ausentes: admin, DSN secret, Cloud Run Job)" — string estático de resultado, ningún valor.',
+        'echo "CLEANUP_ONLY_RESULT = CLEAN (los tres recursos confirmados ausentes: admin, DSN secret, Cloud Run Job)" (cleanup-only) — string estático de resultado, ningún valor.',
     },
   ];
 

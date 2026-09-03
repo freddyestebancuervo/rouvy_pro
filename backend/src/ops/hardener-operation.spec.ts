@@ -11,6 +11,7 @@ import {
   deriveOperationResourceNames,
   assertValidTransition,
   IllegalOperationTransitionError,
+  hasZeroPrivilegedResources,
   classifyCleanupState,
   isCleanupComplete,
   classifyFinalOutcome,
@@ -141,21 +142,25 @@ describe('nombres derivados', () => {
   });
 });
 
-describe('máquina de estados de la operación (Phase 13)', () => {
+describe('máquina de estados de la operación (PR #115 zero-standing-privilege remediation, Phase 8)', () => {
   const HAPPY_PATH: OperationState[] = [
-    'NOT_STARTED',
-    'BOOTSTRAPPING',
-    'PREFLIGHT_READY',
-    'WAITING_APPLY_GATE',
+    'PREFLIGHT_NOT_STARTED',
+    'PREFLIGHT_BOOTSTRAPPING',
+    'PREFLIGHT_RUNNING',
+    'PREFLIGHT_EVIDENCE_CAPTURED',
+    'PREFLIGHT_CLEANING',
+    'PREFLIGHT_CLEAN',
+    'WAITING_FOR_APPLY_HUMAN_GATE',
+    'APPLY_BOOTSTRAPPING',
+    'APPLY_FRESH_PREFLIGHT',
     'APPLYING',
-    'TARGET_SQL_HARDENED',
     'TARGET_CLOUDSQL_ROLE_REMOVED',
-    'VERIFIED',
-    'CLEANING',
+    'VERIFYING',
+    'APPLY_CLEANING',
     'CLEAN',
   ];
 
-  it('el camino feliz completo es una secuencia de transiciones válidas', () => {
+  it('el camino feliz completo (stage 1 -> gate -> stage 2) es una secuencia de transiciones válidas', () => {
     for (let i = 0; i < HAPPY_PATH.length - 1; i += 1) {
       expect(() => assertValidTransition(HAPPY_PATH[i]!, HAPPY_PATH[i + 1]!)).not.toThrow();
     }
@@ -163,33 +168,94 @@ describe('máquina de estados de la operación (Phase 13)', () => {
 
   it('CLEAN es terminal — ninguna transición posterior es válida, ni siquiera hacia HOLD', () => {
     expect(() => assertValidTransition('CLEAN', 'HOLD')).toThrow(IllegalOperationTransitionError);
-    expect(() => assertValidTransition('CLEAN', 'BOOTSTRAPPING')).toThrow(IllegalOperationTransitionError);
+    expect(() => assertValidTransition('CLEAN', 'PREFLIGHT_BOOTSTRAPPING')).toThrow(IllegalOperationTransitionError);
   });
 
-  it('HOLD es alcanzable desde cualquier estado no terminal', () => {
+  it('HOLD es alcanzable desde cualquier estado no terminal excepto PREFLIGHT_CLEAN y WAITING_FOR_APPLY_HUMAN_GATE (nada puede fallar ahí — no hay recurso privilegiado activo)', () => {
+    const statesWithoutPrivilegedRisk = new Set<OperationState>(['PREFLIGHT_CLEAN', 'WAITING_FOR_APPLY_HUMAN_GATE', 'CLEAN']);
     for (const state of HAPPY_PATH) {
-      if (state === 'CLEAN') continue;
+      if (statesWithoutPrivilegedRisk.has(state)) continue;
       expect(() => assertValidTransition(state, 'HOLD')).not.toThrow();
     }
   });
 
-  it('HOLD solo puede avanzar hacia CLEANING (cleanup_only) — nunca reanuda la operación original', () => {
-    expect(() => assertValidTransition('HOLD', 'CLEANING')).not.toThrow();
+  it('HOLD solo puede avanzar hacia PREFLIGHT_CLEANING o APPLY_CLEANING (cleanup_only) — nunca reanuda la operación original', () => {
+    expect(() => assertValidTransition('HOLD', 'PREFLIGHT_CLEANING')).not.toThrow();
+    expect(() => assertValidTransition('HOLD', 'APPLY_CLEANING')).not.toThrow();
     expect(() => assertValidTransition('HOLD', 'APPLYING')).toThrow(IllegalOperationTransitionError);
-    expect(() => assertValidTransition('HOLD', 'BOOTSTRAPPING')).toThrow(IllegalOperationTransitionError);
+    expect(() => assertValidTransition('HOLD', 'PREFLIGHT_BOOTSTRAPPING')).toThrow(IllegalOperationTransitionError);
   });
 
-  it('nunca se puede saltar preflight -> apply sin pasar por WAITING_APPLY_GATE', () => {
-    expect(() => assertValidTransition('PREFLIGHT_READY', 'APPLYING')).toThrow(IllegalOperationTransitionError);
+  it('nunca se puede saltar preflight -> apply sin pasar por WAITING_FOR_APPLY_HUMAN_GATE', () => {
+    expect(() => assertValidTransition('PREFLIGHT_EVIDENCE_CAPTURED', 'APPLY_BOOTSTRAPPING')).toThrow(
+      IllegalOperationTransitionError,
+    );
+    expect(() => assertValidTransition('PREFLIGHT_CLEAN', 'APPLYING')).toThrow(IllegalOperationTransitionError);
   });
 
-  it('nunca se puede retroceder (p. ej. de APPLYING de vuelta a PREFLIGHT_READY)', () => {
-    expect(() => assertValidTransition('APPLYING', 'PREFLIGHT_READY')).toThrow(IllegalOperationTransitionError);
-    expect(() => assertValidTransition('VERIFIED', 'APPLYING')).toThrow(IllegalOperationTransitionError);
+  it('la limpieza de stage 1 nunca puede saltearse — PREFLIGHT_EVIDENCE_CAPTURED solo avanza hacia PREFLIGHT_CLEANING (o HOLD), nunca directo a WAITING_FOR_APPLY_HUMAN_GATE, sin importar si el preflight fue PASS o FAIL', () => {
+    expect(() => assertValidTransition('PREFLIGHT_EVIDENCE_CAPTURED', 'WAITING_FOR_APPLY_HUMAN_GATE')).toThrow(
+      IllegalOperationTransitionError,
+    );
+  });
+
+  it('stage 2 nunca puede reutilizar la identidad de stage 1 — WAITING_FOR_APPLY_HUMAN_GATE solo avanza hacia APPLY_BOOTSTRAPPING (bootstrap de una identidad NUEVA), nunca directo a APPLYING', () => {
+    expect(() => assertValidTransition('WAITING_FOR_APPLY_HUMAN_GATE', 'APPLYING')).toThrow(
+      IllegalOperationTransitionError,
+    );
+  });
+
+  it('el fresh preflight de stage 2 es obligatorio — APPLY_BOOTSTRAPPING solo avanza hacia APPLY_FRESH_PREFLIGHT (o HOLD), nunca directo a APPLYING', () => {
+    expect(() => assertValidTransition('APPLY_BOOTSTRAPPING', 'APPLYING')).toThrow(IllegalOperationTransitionError);
+  });
+
+  it('nunca se puede retroceder (p. ej. de APPLYING de vuelta a APPLY_FRESH_PREFLIGHT, o de VERIFYING de vuelta a APPLYING)', () => {
+    expect(() => assertValidTransition('APPLYING', 'APPLY_FRESH_PREFLIGHT')).toThrow(IllegalOperationTransitionError);
+    expect(() => assertValidTransition('VERIFYING', 'APPLYING')).toThrow(IllegalOperationTransitionError);
   });
 
   it('nunca se puede saltar la remoción de cloudsqlsuperuser del target antes de verificar', () => {
-    expect(() => assertValidTransition('TARGET_SQL_HARDENED', 'VERIFIED')).toThrow(IllegalOperationTransitionError);
+    expect(() => assertValidTransition('APPLYING', 'VERIFYING')).toThrow(IllegalOperationTransitionError);
+  });
+});
+
+describe('hasZeroPrivilegedResources — prueba machine-checkable de zero-standing-privilege (PR #115 P1 remediation)', () => {
+  it('PREFLIGHT_NOT_STARTED, PREFLIGHT_CLEAN, WAITING_FOR_APPLY_HUMAN_GATE y CLEAN son, y solo ellos, estados sin ningún recurso privilegiado activo', () => {
+    const expectedZero: OperationState[] = [
+      'PREFLIGHT_NOT_STARTED',
+      'PREFLIGHT_CLEAN',
+      'WAITING_FOR_APPLY_HUMAN_GATE',
+      'CLEAN',
+    ];
+    for (const state of expectedZero) {
+      expect(hasZeroPrivilegedResources(state)).toBe(true);
+    }
+  });
+
+  it('ningún estado con una identidad efímera potencialmente viva reporta zero-privileged-resources', () => {
+    const expectedNonZero: OperationState[] = [
+      'PREFLIGHT_BOOTSTRAPPING',
+      'PREFLIGHT_RUNNING',
+      'PREFLIGHT_EVIDENCE_CAPTURED',
+      'PREFLIGHT_CLEANING',
+      'APPLY_BOOTSTRAPPING',
+      'APPLY_FRESH_PREFLIGHT',
+      'APPLYING',
+      'TARGET_CLOUDSQL_ROLE_REMOVED',
+      'VERIFYING',
+      'APPLY_CLEANING',
+    ];
+    for (const state of expectedNonZero) {
+      expect(hasZeroPrivilegedResources(state)).toBe(false);
+    }
+  });
+
+  it('HOLD nunca se asume limpio — un fallo no anticipado nunca se reporta como zero-privileged sin re-verificación real', () => {
+    expect(hasZeroPrivilegedResources('HOLD')).toBe(false);
+  });
+
+  it('WAITING_FOR_APPLY_HUMAN_GATE específicamente reporta cero recursos privilegiados — esta es la propiedad P1 que motivó toda la remediación (una operación de stage 1 exitosa, abandonada para siempre, nunca deja nada activo)', () => {
+    expect(hasZeroPrivilegedResources('WAITING_FOR_APPLY_HUMAN_GATE')).toBe(true);
   });
 });
 
