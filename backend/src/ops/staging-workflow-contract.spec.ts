@@ -88,4 +88,32 @@ describe('backend-deploy-staging.yml — esqueleto inerte, provider-neutral (TAS
   it('permissions de nivel de archivo se limitan a contents: read — nunca write, nunca id-token', () => {
     expect(source).toMatch(/\npermissions:\s*\n\s*contents:\s*read\s*\n/);
   });
+
+  // TASK21-PHASE21B-PR116-FINAL-AUDIT-CERTIFICATION — hallazgo del
+  // auditor B (Area 4): las pruebas anteriores son todas de patrón
+  // prohibido (blocklist) — ninguna prueba que el archivo tenga
+  // EXACTAMENTE un job. Un futuro job agregado junto a `guard` (sin
+  // `needs: [guard]`, sin repetir ninguno de los strings prohibidos de
+  // arriba — p. ej. un `uses:` a un workflow reusable existente, un
+  // `gcloud storage`/`gcloud functions deploy`, un `curl` directo a una
+  // API de GCP, o una referencia a `${{ secrets.* }}`/`${{ vars.* }}`)
+  // pasaría TODAS las pruebas anteriores sin ser detectado. Esta prueba
+  // estructural (allowlist, no blocklist) cierra ese hueco: prueba la
+  // lista COMPLETA de jobs del archivo, no solo la ausencia de patrones
+  // conocidos.
+  it('el archivo declara EXACTAMENTE un job (guard) — ningún job adicional puede agregarse sin que esta prueba falle primero', () => {
+    const jobsBlock = source.split(/\njobs:\n/)[1] ?? '';
+    const jobNames = [...jobsBlock.matchAll(/^ {2}([a-zA-Z_][\w-]*):\s*$/gm)].map((m) => m[1]);
+
+    expect(jobNames).toEqual(['guard']);
+  });
+
+  it('el job guard tiene permissions: {} explícito — ni siquiera contents: read a nivel de job, cero permisos heredados', () => {
+    expect(source).toMatch(/guard:\n(?:.*\n)*?\s*permissions:\s*\{\}/);
+  });
+
+  it('el archivo nunca referencia ${{ secrets.* }} ni ${{ vars.* }} — ninguna configuración de despliegue puede inyectarse hoy, y un futuro edit que lo intente en `guard` mismo (sin agregar un job nuevo) también debe fallar esta prueba', () => {
+    expect(source).not.toMatch(/\$\{\{\s*secrets\./);
+    expect(source).not.toMatch(/\$\{\{\s*vars\./);
+  });
 });
