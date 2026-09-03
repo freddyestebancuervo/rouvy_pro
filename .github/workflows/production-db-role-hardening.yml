@@ -658,12 +658,13 @@ jobs:
 
           # Espejo bash EXACTO de ALL_REQUIRED_DEPLOYER_PERMISSIONS +
           # READINESS_GATE_META_PERMISSIONS en
-          # production-hardener-required-permissions.ts (13 permisos —
+          # production-hardener-required-permissions.ts (12 permisos —
           # probado idéntico por hardener-workflow-contract.spec.ts).
-          # TF12-POINT8C-IAM-P1-INDEPENDENT-AUDIT-REMEDIATION (P1-B) agregó
-          # iam.serviceAccounts.getIamPolicy — necesaria para reprobar, en
-          # vivo, el binding actAs sobre MIGRATION_EXECUTOR_SA más abajo en
-          # este mismo step (nunca "ya se probó antes").
+          # TF12-POINT8C-IAM-P1-EFFECTIVE-ACTAS-FINAL-REMEDIATION:
+          # iam.serviceAccounts.getIamPolicy fue REMOVIDA — el chequeo de
+          # actAs (ver step siguiente) ahora usa testIamPermissions, que no
+          # exige ningún permiso IAM adicional más allá de credenciales
+          # autenticadas válidas (verificado en vivo, de solo lectura).
           REQUIRED_PERMISSIONS=(
             "cloudsql.users.create"
             "cloudsql.users.delete"
@@ -677,7 +678,6 @@ jobs:
             "secretmanager.versions.add"
             "iam.roles.get"
             "resourcemanager.projects.getIamPolicy"
-            "iam.serviceAccounts.getIamPolicy"
           )
           FORBIDDEN_PERMISSIONS=(
             "secretmanager.versions.access"
@@ -710,7 +710,7 @@ jobs:
           print('\n'.join(roles))
           ")"
           if [ -n "$CONDITIONAL_ROLES" ]; then
-            fail "DEPLOYER_SA tiene al menos un binding de rol CONDICIONAL a nivel de proyecto ($(echo "$CONDITIONAL_ROLES" | tr '\n' ',' | sed 's/,$//')) — este gate nunca evalúa condiciones CEL, así que nunca puede confiar en que ese rol esté realmente activo en el momento de la mutación real. Revisar manualmente si ese binding cubre alguno de los 13 permisos requeridos."
+            fail "DEPLOYER_SA tiene al menos un binding de rol CONDICIONAL a nivel de proyecto ($(echo "$CONDITIONAL_ROLES" | tr '\n' ',' | sed 's/,$//')) — este gate nunca evalúa condiciones CEL, así que nunca puede confiar en que ese rol esté realmente activo en el momento de la mutación real. Revisar manualmente si ese binding cubre alguno de los 12 permisos requeridos."
           fi
 
           DEPLOYER_ROLES="$(python3 -c "
@@ -755,73 +755,95 @@ jobs:
 
           echo "DEPLOYER_PERMISSIONS_SUFFICIENT=YES"
 
-      - name: Reprobar en vivo — DEPLOYER_SA puede actAs MIGRATION_EXECUTOR_SA (solo lectura — nunca "ya se probó antes")
+      - name: Reprobar EN VIVO el permiso EFECTIVO actAs sobre MIGRATION_EXECUTOR_SA — testIamPermissions, nunca inferencia de binding (solo lectura)
         shell: bash
         run: |
           set -euo pipefail
           fail() { echo "::error::HOLD_INSUFFICIENT_DEPLOYER_PERMISSIONS — $1"; exit 1; }
           command -v python3 >/dev/null 2>&1 || fail "PARSER_UNAVAILABLE — python3 requerido, FAIL_CLOSED."
 
-          # TF12-POINT8C-IAM-P1-INDEPENDENT-AUDIT-REMEDIATION (P1-B). La
-          # auditoría independiente rechazó explícitamente "ya se probó en
-          # vivo previamente" como justificación de que DEPLOYER_SA puede
-          # `actAs` MIGRATION_EXECUTOR_SA para desplegar cada Cloud Run Job
-          # efímero (`--service-account=${{ env.MIGRATION_EXECUTOR_SA }}`
-          # en todo `gcloud run jobs deploy` de este archivo) — exactamente
-          # el mismo error de categoría (drift-checked != sufficiency-
-          # checked) que motivó P1-A/P1-1..P1-9 de este archivo. Este step
-          # reprueba el binding EN VIVO, en cada dispatch, antes de que
-          # bootstrap-ephemeral-admin/bootstrap-apply-admin puedan correr —
-          # nunca confía en un resultado de auditoría pasado.
-          #
-          # `iam.serviceAccounts.actAs` se otorga vía `roles/iam.
-          # serviceAccountUser` ligado, a nivel de RECURSO (la propia
-          # MIGRATION_EXECUTOR_SA, no el proyecto), a DEPLOYER_SA — la
-          # única forma de leerlo de solo lectura es `gcloud iam
-          # service-accounts get-iam-policy <MIGRATION_EXECUTOR_SA>`, que
-          # exige exactamente `iam.serviceAccounts.getIamPolicy` (ya
-          # incluida arriba en REQUIRED_PERMISSIONS — probada desde este
-          # comando, no asumida).
-          MIGRATION_EXEC_POLICY_JSON="$(mktemp)"
+          # TF12-POINT8C-IAM-P1-EFFECTIVE-ACTAS-FINAL-REMEDIATION. Una
+          # auditoría independiente posterior rechazó también la versión
+          # anterior de este step (leer `get-iam-policy` de
+          # MIGRATION_EXECUTOR_SA e INFERIR `actAs` de la presencia de
+          # `roles/iam.serviceAccountUser`) — inferir un permiso efectivo a
+          # partir de UN binding conocido nunca prueba el permiso efectivo
+          # real (podría existir una deny policy, una condición de
+          # organización, o cualquier otro mecanismo IAM que la inferencia
+          # simplemente no ve). La API de IAM expone exactamente el método
+          # diseñado para esto — `projects.serviceAccounts.
+          # testIamPermissions` — que devuelve el subconjunto REAL de los
+          # permisos consultados que el caller autenticado efectivamente
+          # tiene sobre ese recurso, evaluado por el propio backend de IAM
+          # (incluye cualquier deny policy/condición/mecanismo, no solo los
+          # allow bindings visibles). No existe un subcomando `gcloud`
+          # dedicado para service accounts (confirmado: ausente en gcloud
+          # estable y beta; solo existiría bajo el track `alpha`, que
+          # requiere instalar un componente adicional — evitado
+          # deliberadamente para no ampliar la superficie del runner) — se
+          # invoca el método REST directo, autenticado con el propio access
+          # token de DEPLOYER_SA (mismo scope OAuth cloud-platform que ya
+          # usa toda `gcloud` en este workflow). Verificado en vivo, de
+          # solo lectura, durante esta misma investigación: el método NO
+          # exige ningún permiso IAM adicional más allá de credenciales
+          # autenticadas válidas — por eso `iam.serviceAccounts.
+          # getIamPolicy` se elimina del manifiesto en este mismo cambio,
+          # no se preserva artificialmente.
+          ACCESS_TOKEN="$(gcloud auth print-access-token)"
+          [ -n "$ACCESS_TOKEN" ] || fail "No se pudo obtener un access token de DEPLOYER_SA."
+
+          TESTIAM_BODY="$(mktemp)"
+          trap 'rm -f "$TESTIAM_BODY"' EXIT
           set +e
-          gcloud iam service-accounts get-iam-policy "${{ env.MIGRATION_EXECUTOR_SA }}" --project="${{ env.PRODUCTION_PROJECT }}" --format=json >"$MIGRATION_EXEC_POLICY_JSON" 2>/dev/null
-          MIGRATION_EXEC_POLICY_READ_EXIT=$?
+          HTTP_STATUS="$(curl -s -o "$TESTIAM_BODY" -w '%{http_code}' --max-time 15 -X POST \
+            -H "Authorization: Bearer ${ACCESS_TOKEN}" \
+            -H "Content-Type: application/json" \
+            -d '{"permissions":["iam.serviceAccounts.actAs"]}' \
+            "https://iam.googleapis.com/v1/projects/${{ env.PRODUCTION_PROJECT }}/serviceAccounts/${{ env.MIGRATION_EXECUTOR_SA }}:testIamPermissions")"
+          CURL_EXIT=$?
+          ACCESS_TOKEN=""
           set -e
-          [ "$MIGRATION_EXEC_POLICY_READ_EXIT" -eq 0 ] || fail "No se pudo leer la política IAM de MIGRATION_EXECUTOR_SA — falta iam.serviceAccounts.getIamPolicy en DEPLOYER_SA (meta-permission que este mismo gate necesita para reprobar actAs)."
+          # El token nunca se imprime — ni acá, ni vía `curl -v`/`set -x`
+          # (ninguno de los dos se usa en este archivo), ni en el cuerpo de
+          # la respuesta (testIamPermissions nunca devuelve credenciales).
+          [ "$CURL_EXIT" -eq 0 ] || fail "La llamada HTTP a testIamPermissions falló (curl exit=$CURL_EXIT) — posible timeout/error de red. Nunca se asume actAs ante un fallo de transporte."
+          [ "$HTTP_STATUS" = "200" ] || fail "testIamPermissions devolvió HTTP $HTTP_STATUS (se esperaba 200) — nunca se asume actAs ante un código de error/timeout/auth."
 
-          DEPLOYER_MEMBER="serviceAccount:${{ env.DEPLOYER_SA }}"
-          # Mismo fail-closed ante bindings CONDICIONALES que el step
-          # anterior — un roles/iam.serviceAccountUser condicional nunca se
-          # cuenta como actAs garantizado.
-          ACTAS_CONDITIONAL="$(python3 -c "
+          ACTAS_RESULT="$(python3 -c "
           import json
-          with open('$MIGRATION_EXEC_POLICY_JSON', encoding='utf-8') as handle:
-              policy = json.load(handle)
-          member = '$DEPLOYER_MEMBER'
-          for b in policy.get('bindings', []):
-              if b.get('role') == 'roles/iam.serviceAccountUser' and member in (b.get('members') or []) and b.get('condition'):
-                  print('YES')
-                  break
-          else:
-              print('NO')
+          try:
+              with open('$TESTIAM_BODY', encoding='utf-8') as handle:
+                  data = json.load(handle)
+          except Exception:
+              print('PARSE_ERROR')
+              raise SystemExit(0)
+          if not isinstance(data, dict):
+              print('PARSE_ERROR')
+              raise SystemExit(0)
+          permissions = data.get('permissions')
+          if permissions is None:
+              # Respuesta bien formada pero SIN el campo permissions —
+              # comportamiento documentado de testIamPermissions cuando
+              # NINGÚN permiso consultado está efectivamente otorgado.
+              print('ABSENT')
+              raise SystemExit(0)
+          if not isinstance(permissions, list):
+              print('PARSE_ERROR')
+              raise SystemExit(0)
+          print('PRESENT' if 'iam.serviceAccounts.actAs' in permissions else 'ABSENT')
           ")"
-          [ "$ACTAS_CONDITIONAL" = "NO" ] || fail "El binding roles/iam.serviceAccountUser de DEPLOYER_SA sobre MIGRATION_EXECUTOR_SA es CONDICIONAL — este gate nunca evalúa CEL, nunca confía en que esté activo en el momento real del deploy."
 
-          ACTAS_GRANTED="$(python3 -c "
-          import json
-          with open('$MIGRATION_EXEC_POLICY_JSON', encoding='utf-8') as handle:
-              policy = json.load(handle)
-          member = '$DEPLOYER_MEMBER'
-          for b in policy.get('bindings', []):
-              if b.get('role') == 'roles/iam.serviceAccountUser' and member in (b.get('members') or []) and not b.get('condition'):
-                  print('YES')
-                  break
-          else:
-              print('NO')
-          ")"
-          [ "$ACTAS_GRANTED" = "YES" ] || fail "DEPLOYER_SA no tiene roles/iam.serviceAccountUser (sin condición) sobre MIGRATION_EXECUTOR_SA — no puede actAs para desplegar el Cloud Run Job efímero. dispatch bloqueado hasta que el Human Gate de remediación IAM lo confirme/restaure."
-
-          echo "CAN_DEPLOYER_ACT_AS_MIGRATION_EXECUTOR=YES"
+          case "$ACTAS_RESULT" in
+            PRESENT)
+              echo "CAN_DEPLOYER_ACT_AS_MIGRATION_EXECUTOR=YES"
+              ;;
+            ABSENT)
+              fail "testIamPermissions confirma que DEPLOYER_SA NO tiene EFECTIVAMENTE iam.serviceAccounts.actAs sobre MIGRATION_EXECUTOR_SA — no puede actAs para desplegar el Cloud Run Job efímero. dispatch bloqueado hasta que el Human Gate de remediación IAM lo confirme/restaure."
+              ;;
+            *)
+              fail "Respuesta de testIamPermissions no reconocida/malformada (parser=$ACTAS_RESULT) — FAIL_CLOSED, nunca se asume actAs sin una prueba explícita bien formada."
+              ;;
+          esac
 
   # ===========================================================================
   # Job 6 — prerrequisitos de solo lectura (nunca crea nada, HOLD fail-closed
@@ -1221,6 +1243,19 @@ jobs:
               cloudsql_user) not_found_pattern="HTTPError 404" ;;
               secret) not_found_pattern="NOT_FOUND:" ;;
               cloudrun_job) not_found_pattern="Cannot find job" ;;
+              *)
+                # TF12-POINT8C-IAM-P1-EFFECTIVE-ACTAS-FINAL-REMEDIATION
+                # (P2): un `kind` desconocido NUNCA debe caer al chequeo
+                # genérico de abajo — con `not_found_pattern` vacío,
+                # `grep -q ""` matchea CUALQUIER stderr no vacío,
+                # produciendo ABSENT_CONFIRMED falso. Return inmediato,
+                # fail-closed: un kind no reconocido es, por definición,
+                # una clasificación que este código no sabe hacer con
+                # certeza — nunca ausencia.
+                rm -f "$stderr_file"
+                echo "LOOKUP_FAILED"
+                return 0
+                ;;
             esac
             if grep -q "$not_found_pattern" "$stderr_file"; then
               rm -f "$stderr_file"
@@ -1325,6 +1360,19 @@ jobs:
               cloudsql_user) not_found_pattern="HTTPError 404" ;;
               secret) not_found_pattern="NOT_FOUND:" ;;
               cloudrun_job) not_found_pattern="Cannot find job" ;;
+              *)
+                # TF12-POINT8C-IAM-P1-EFFECTIVE-ACTAS-FINAL-REMEDIATION
+                # (P2): un `kind` desconocido NUNCA debe caer al chequeo
+                # genérico de abajo — con `not_found_pattern` vacío,
+                # `grep -q ""` matchea CUALQUIER stderr no vacío,
+                # produciendo ABSENT_CONFIRMED falso. Return inmediato,
+                # fail-closed: un kind no reconocido es, por definición,
+                # una clasificación que este código no sabe hacer con
+                # certeza — nunca ausencia.
+                rm -f "$stderr_file"
+                echo "LOOKUP_FAILED"
+                return 0
+                ;;
             esac
             if grep -q "$not_found_pattern" "$stderr_file"; then
               rm -f "$stderr_file"
@@ -1845,6 +1893,19 @@ jobs:
               cloudsql_user) not_found_pattern="HTTPError 404" ;;
               secret) not_found_pattern="NOT_FOUND:" ;;
               cloudrun_job) not_found_pattern="Cannot find job" ;;
+              *)
+                # TF12-POINT8C-IAM-P1-EFFECTIVE-ACTAS-FINAL-REMEDIATION
+                # (P2): un `kind` desconocido NUNCA debe caer al chequeo
+                # genérico de abajo — con `not_found_pattern` vacío,
+                # `grep -q ""` matchea CUALQUIER stderr no vacío,
+                # produciendo ABSENT_CONFIRMED falso. Return inmediato,
+                # fail-closed: un kind no reconocido es, por definición,
+                # una clasificación que este código no sabe hacer con
+                # certeza — nunca ausencia.
+                rm -f "$stderr_file"
+                echo "LOOKUP_FAILED"
+                return 0
+                ;;
             esac
             if grep -q "$not_found_pattern" "$stderr_file"; then
               rm -f "$stderr_file"
@@ -1915,6 +1976,19 @@ jobs:
               cloudsql_user) not_found_pattern="HTTPError 404" ;;
               secret) not_found_pattern="NOT_FOUND:" ;;
               cloudrun_job) not_found_pattern="Cannot find job" ;;
+              *)
+                # TF12-POINT8C-IAM-P1-EFFECTIVE-ACTAS-FINAL-REMEDIATION
+                # (P2): un `kind` desconocido NUNCA debe caer al chequeo
+                # genérico de abajo — con `not_found_pattern` vacío,
+                # `grep -q ""` matchea CUALQUIER stderr no vacío,
+                # produciendo ABSENT_CONFIRMED falso. Return inmediato,
+                # fail-closed: un kind no reconocido es, por definición,
+                # una clasificación que este código no sabe hacer con
+                # certeza — nunca ausencia.
+                rm -f "$stderr_file"
+                echo "LOOKUP_FAILED"
+                return 0
+                ;;
             esac
             if grep -q "$not_found_pattern" "$stderr_file"; then
               rm -f "$stderr_file"
@@ -1967,6 +2041,19 @@ jobs:
               cloudsql_user) not_found_pattern="HTTPError 404" ;;
               secret) not_found_pattern="NOT_FOUND:" ;;
               cloudrun_job) not_found_pattern="Cannot find job" ;;
+              *)
+                # TF12-POINT8C-IAM-P1-EFFECTIVE-ACTAS-FINAL-REMEDIATION
+                # (P2): un `kind` desconocido NUNCA debe caer al chequeo
+                # genérico de abajo — con `not_found_pattern` vacío,
+                # `grep -q ""` matchea CUALQUIER stderr no vacío,
+                # produciendo ABSENT_CONFIRMED falso. Return inmediato,
+                # fail-closed: un kind no reconocido es, por definición,
+                # una clasificación que este código no sabe hacer con
+                # certeza — nunca ausencia.
+                rm -f "$stderr_file"
+                echo "LOOKUP_FAILED"
+                return 0
+                ;;
             esac
             if grep -q "$not_found_pattern" "$stderr_file"; then
               rm -f "$stderr_file"
@@ -2019,6 +2106,19 @@ jobs:
               cloudsql_user) not_found_pattern="HTTPError 404" ;;
               secret) not_found_pattern="NOT_FOUND:" ;;
               cloudrun_job) not_found_pattern="Cannot find job" ;;
+              *)
+                # TF12-POINT8C-IAM-P1-EFFECTIVE-ACTAS-FINAL-REMEDIATION
+                # (P2): un `kind` desconocido NUNCA debe caer al chequeo
+                # genérico de abajo — con `not_found_pattern` vacío,
+                # `grep -q ""` matchea CUALQUIER stderr no vacío,
+                # produciendo ABSENT_CONFIRMED falso. Return inmediato,
+                # fail-closed: un kind no reconocido es, por definición,
+                # una clasificación que este código no sabe hacer con
+                # certeza — nunca ausencia.
+                rm -f "$stderr_file"
+                echo "LOOKUP_FAILED"
+                return 0
+                ;;
             esac
             if grep -q "$not_found_pattern" "$stderr_file"; then
               rm -f "$stderr_file"
@@ -2074,6 +2174,19 @@ jobs:
               cloudsql_user) not_found_pattern="HTTPError 404" ;;
               secret) not_found_pattern="NOT_FOUND:" ;;
               cloudrun_job) not_found_pattern="Cannot find job" ;;
+              *)
+                # TF12-POINT8C-IAM-P1-EFFECTIVE-ACTAS-FINAL-REMEDIATION
+                # (P2): un `kind` desconocido NUNCA debe caer al chequeo
+                # genérico de abajo — con `not_found_pattern` vacío,
+                # `grep -q ""` matchea CUALQUIER stderr no vacío,
+                # produciendo ABSENT_CONFIRMED falso. Return inmediato,
+                # fail-closed: un kind no reconocido es, por definición,
+                # una clasificación que este código no sabe hacer con
+                # certeza — nunca ausencia.
+                rm -f "$stderr_file"
+                echo "LOOKUP_FAILED"
+                return 0
+                ;;
             esac
             if grep -q "$not_found_pattern" "$stderr_file"; then
               rm -f "$stderr_file"
@@ -2205,6 +2318,19 @@ jobs:
               cloudsql_user) not_found_pattern="HTTPError 404" ;;
               secret) not_found_pattern="NOT_FOUND:" ;;
               cloudrun_job) not_found_pattern="Cannot find job" ;;
+              *)
+                # TF12-POINT8C-IAM-P1-EFFECTIVE-ACTAS-FINAL-REMEDIATION
+                # (P2): un `kind` desconocido NUNCA debe caer al chequeo
+                # genérico de abajo — con `not_found_pattern` vacío,
+                # `grep -q ""` matchea CUALQUIER stderr no vacío,
+                # produciendo ABSENT_CONFIRMED falso. Return inmediato,
+                # fail-closed: un kind no reconocido es, por definición,
+                # una clasificación que este código no sabe hacer con
+                # certeza — nunca ausencia.
+                rm -f "$stderr_file"
+                echo "LOOKUP_FAILED"
+                return 0
+                ;;
             esac
             if grep -q "$not_found_pattern" "$stderr_file"; then
               rm -f "$stderr_file"
@@ -2297,6 +2423,19 @@ jobs:
               cloudsql_user) not_found_pattern="HTTPError 404" ;;
               secret) not_found_pattern="NOT_FOUND:" ;;
               cloudrun_job) not_found_pattern="Cannot find job" ;;
+              *)
+                # TF12-POINT8C-IAM-P1-EFFECTIVE-ACTAS-FINAL-REMEDIATION
+                # (P2): un `kind` desconocido NUNCA debe caer al chequeo
+                # genérico de abajo — con `not_found_pattern` vacío,
+                # `grep -q ""` matchea CUALQUIER stderr no vacío,
+                # produciendo ABSENT_CONFIRMED falso. Return inmediato,
+                # fail-closed: un kind no reconocido es, por definición,
+                # una clasificación que este código no sabe hacer con
+                # certeza — nunca ausencia.
+                rm -f "$stderr_file"
+                echo "LOOKUP_FAILED"
+                return 0
+                ;;
             esac
             if grep -q "$not_found_pattern" "$stderr_file"; then
               rm -f "$stderr_file"

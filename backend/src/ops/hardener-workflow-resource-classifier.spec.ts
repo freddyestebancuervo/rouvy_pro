@@ -152,4 +152,20 @@ describe('classify_resource — comportamiento real, ejecutado en bash (P1-A, Fa
     const result = runClassifierScenario(canonical, 'secret', 'fake_gcloud', 'echo "ERROR: (gcloud.run.jobs.describe) Cannot find job [x]." >&2; return 1');
     expect(result).toBe('LOOKUP_FAILED');
   });
+
+  it('9. TF12-POINT8C-IAM-P1-EFFECTIVE-ACTAS-FINAL-REMEDIATION (P2): un kind DESCONOCIDO nunca cae al chequeo genérico — con stderr arbitrario (incluso no vacío) siempre da LOOKUP_FAILED, nunca ABSENT_CONFIRMED', () => {
+    const result = runClassifierScenario(
+      canonical,
+      'totally_unknown_kind',
+      'fake_gcloud',
+      'echo "cualquier texto de stderr, incluso no vacío, que con un not_found_pattern vacío matchearía por accidente" >&2; return 1',
+    );
+    expect(result).toBe('LOOKUP_FAILED');
+    expect(result).not.toBe('ABSENT_CONFIRMED');
+  });
+
+  it('9b. un kind desconocido con exit 1 pero stderr VACÍO tampoco produce ABSENT_CONFIRMED — el default branch retorna LOOKUP_FAILED antes de llegar al grep genérico, sin importar el contenido del stderr', () => {
+    const result = runClassifierScenario(canonical, 'totally_unknown_kind', 'fake_gcloud', 'return 1');
+    expect(result).toBe('LOOKUP_FAILED');
+  });
 });

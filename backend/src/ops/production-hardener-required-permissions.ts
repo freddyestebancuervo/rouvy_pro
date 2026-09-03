@@ -112,30 +112,33 @@ const SECRETMANAGER_VERSIONS_ADD = 'secretmanager.versions.add' as const;
 // propio gate no podría ejecutarse como DEPLOYER_SA — se agregan acá,
 // explícitamente, en vez de asumirlos o ampliar IAM en silencio.
 //
-// TF12-POINT8C-IAM-P1-INDEPENDENT-AUDIT-REMEDIATION (P1-B): la auditoría
-// independiente rechazó explícitamente "ya se probó en vivo antes" como
-// justificación de que DEPLOYER_SA puede `actAs` MIGRATION_EXECUTOR_SA —
-// exactamente el mismo error de categoría (drift-checked != sufficiency-
-// checked) que motivó todo este archivo. `iam.serviceAccounts.getIamPolicy`
-// se agrega ahora, PROBADO desde el comando elegido para verificarlo
-// (`gcloud iam service-accounts get-iam-policy <MIGRATION_EXECUTOR_SA>` —
-// la única forma de leer, en vivo y de solo lectura, si el binding
-// `roles/iam.serviceAccountUser` sobre esa SA específica sigue existiendo),
-// no asumido de una lista genérica de permisos "probablemente necesarios".
+// TF12-POINT8C-IAM-P1-INDEPENDENT-AUDIT-REMEDIATION (P1-B, primera
+// versión, SUPERSEDED): esa iteración agregó `iam.serviceAccounts.
+// getIamPolicy` para leer la política IAM de MIGRATION_EXECUTOR_SA e
+// INFERIR `actAs` de la presencia del binding `roles/iam.serviceAccountUser`.
+// Una auditoría independiente posterior rechazó también esa versión — un
+// binding conocido NUNCA prueba el permiso EFECTIVO real (una deny
+// policy, una condición de organización, o cualquier otro mecanismo IAM
+// invisible a `get-iam-policy` podría revocarlo en la práctica).
+//
+// TF12-POINT8C-IAM-P1-EFFECTIVE-ACTAS-FINAL-REMEDIATION: el chequeo de
+// actAs ahora usa `projects.serviceAccounts.testIamPermissions` — el
+// método de la propia API de IAM diseñado exactamente para esto, que
+// devuelve el permiso EFECTIVO real evaluado por el backend de IAM, nunca
+// inferido de un binding visible. Verificado en vivo, de solo lectura,
+// durante esta misma investigación: `testIamPermissions` NO exige ningún
+// permiso IAM adicional más allá de credenciales autenticadas válidas —
+// por eso `iam.serviceAccounts.getIamPolicy` se ELIMINA de este
+// manifiesto, no se preserva artificialmente. El rol propuesto vuelve a
+// 12 permisos.
 // =============================================================================
 
 /** Leer el IAM policy del PROYECTO — necesario para que el gate descubra qué roles tiene DEPLOYER_SA. */
 const RESOURCEMANAGER_PROJECTS_GET_IAM_POLICY = 'resourcemanager.projects.getIamPolicy' as const;
 /** Leer la definición de un rol CUSTOM del proyecto (los roles predefinidos son públicamente legibles sin este permiso — pero el rol nuevo de este manifiesto es custom). */
 const IAM_ROLES_GET = 'iam.roles.get' as const;
-/** Leer el IAM policy de la propia MIGRATION_EXECUTOR_SA — la única forma de probar, en vivo y de solo lectura, que el binding `roles/iam.serviceAccountUser` que habilita `actAs` sigue existiendo AHORA, no "la última vez que se comprobó". */
-const IAM_SERVICE_ACCOUNTS_GET_IAM_POLICY = 'iam.serviceAccounts.getIamPolicy' as const;
 
-export const READINESS_GATE_META_PERMISSIONS = [
-  RESOURCEMANAGER_PROJECTS_GET_IAM_POLICY,
-  IAM_ROLES_GET,
-  IAM_SERVICE_ACCOUNTS_GET_IAM_POLICY,
-] as const;
+export const READINESS_GATE_META_PERMISSIONS = [RESOURCEMANAGER_PROJECTS_GET_IAM_POLICY, IAM_ROLES_GET] as const;
 
 // =============================================================================
 // Permisos PROHIBIDOS explícitamente para DEPLOYER_SA — nunca deben
@@ -233,7 +236,7 @@ export const PROPOSED_HARDENER_ORCHESTRATOR_ROLE: ProposedCustomRoleDefinition =
   includedPermissions: [...ALL_REQUIRED_DEPLOYER_PERMISSIONS, ...READINESS_GATE_META_PERMISSIONS].sort(),
 };
 
-export const EXPECTED_PROPOSED_ROLE_PERMISSION_COUNT = 13;
+export const EXPECTED_PROPOSED_ROLE_PERMISSION_COUNT = 12;
 
 // =============================================================================
 // Validación pura — usada por los tests de contrato, nunca por sí sola en

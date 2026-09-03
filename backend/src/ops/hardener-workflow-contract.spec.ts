@@ -185,6 +185,30 @@ describe('production-db-role-hardening.yml — contrato estructural', () => {
       return text.split('\n').filter((line) => !line.trim().startsWith('#'));
     }
 
+    // Une continuaciones bash (`\` a fin de línea) en una sola sentencia
+    // lógica antes de filtrar comentarios — un `curl` multi-línea (como el
+    // de testIamPermissions) tiene su host en una línea de continuación
+    // distinta a la que contiene el propio token `curl`, así que revisar
+    // línea por línea produciría un falso negativo.
+    function operationalStatements(text: string): string[] {
+      const statements: string[] = [];
+      let buffer = '';
+      for (const rawLine of text.split('\n')) {
+        const trimmedEnd = rawLine.trimEnd();
+        const withoutContinuation = trimmedEnd.endsWith('\\') ? trimmedEnd.slice(0, -1).trim() : trimmedEnd;
+        buffer = buffer ? `${buffer} ${withoutContinuation}` : withoutContinuation;
+        if (trimmedEnd.endsWith('\\')) {
+          continue;
+        }
+        statements.push(buffer);
+        buffer = '';
+      }
+      if (buffer) {
+        statements.push(buffer);
+      }
+      return statements.filter((line) => !line.trim().startsWith('#'));
+    }
+
     it('1. EXECUTE_SQL_REFERENCES = 0 — ninguna línea operativa invoca gcloud sql instances execute-sql (solo prosa histórica en comentarios)', () => {
       const hits = operationalLines(source).filter((line) => /execute-sql/.test(line));
       expect(hits).toEqual([]);
@@ -195,12 +219,20 @@ describe('production-db-role-hardening.yml — contrato estructural', () => {
       expect(hits).toEqual([]);
     });
 
-    it('3. REGIONAL_SECRET_OPERATION_REFERENCES = 0 — ningún --location= operativo, ningún REGIONAL_SM_BASE, ningún curl a secretmanager.*.rep.googleapis.com', () => {
+    it('3. REGIONAL_SECRET_OPERATION_REFERENCES = 0 — ningún --location= operativo, ningún REGIONAL_SM_BASE, ningún curl a secretmanager.*.rep.googleapis.com (curl SÍ existe desde TF12-POINT8C-IAM-P1-EFFECTIVE-ACTAS-FINAL-REMEDIATION, pero exclusivamente contra iam.googleapis.com:testIamPermissions — nunca contra un endpoint regional de Secret Manager)', () => {
       const hits = operationalLines(source).filter(
         (line) => /--location=/.test(line) || /REGIONAL_SM_BASE/.test(line) || /secretmanager\.[^"]*\.rep\.googleapis\.com/.test(line),
       );
       expect(hits).toEqual([]);
-      expect(source).not.toMatch(/curl /);
+      // `curl\s+-` exige un flag inmediatamente después del comando real
+      // (`curl -s ...`) — evita falsos positivos de prosa como "posible
+      // timeout/error de red (curl exit=$CURL_EXIT)" dentro de un fail().
+      const curlStatements = operationalStatements(source).filter((line) => /curl\s+-/.test(line));
+      expect(curlStatements.length).toBeGreaterThan(0);
+      for (const statement of curlStatements) {
+        expect(statement).toMatch(/iam\.googleapis\.com/);
+      }
+      expect(source).not.toMatch(/curl [^\n]*secretmanager\.googleapis\.com/);
     });
 
     it('4. un único secret efímero (DSN global) existe en todo el archivo — ninguna referencia a EPHEMERAL_PASSWORD_SECRET/password secret regional', () => {
@@ -484,6 +516,34 @@ describe('production-db-role-hardening.yml — contrato estructural', () => {
   });
 
   // ===========================================================================
+  // TF12-POINT8C-IAM-P1-EFFECTIVE-ACTAS-FINAL-REMEDIATION (P2) — cobertura de
+  // CONTRATO (call sites, no la lógica interna del clasificador — eso lo
+  // prueba hardener-workflow-resource-classifier.spec.ts): todo invocador
+  // real de classify_resource en el archivo usa exclusivamente uno de los
+  // tres `kind` reconocidos por el case statement. Un `kind` fuera de este
+  // conjunto no es "inválido" por convención — es exactamente el escenario
+  // que el default branch fail-closed debe cubrir, así que aquí probamos
+  // que ese escenario nunca ocurre hoy en la práctica.
+  // ===========================================================================
+  describe('classify_resource — todo call site usa un kind reconocido (P2 contract coverage)', () => {
+    it('cada invocación real de classify_resource pasa cloudsql_user, secret o cloudrun_job como primer argumento — nunca otro valor', () => {
+      const invocationRe = /classify_resource ([A-Za-z0-9_]+) /g;
+      const kinds = [...source.matchAll(invocationRe)].map((m) => m[1]!);
+      expect(kinds.length).toBeGreaterThan(0);
+      const recognizedKinds = new Set(['cloudsql_user', 'secret', 'cloudrun_job']);
+      for (const kind of kinds) {
+        expect(recognizedKinds.has(kind)).toBe(true);
+      }
+    });
+
+    it('cada una de las 3 kinds reconocidas se usa al menos una vez — ningún branch del case statement queda muerto/no ejercitado', () => {
+      const invocationRe = /classify_resource ([A-Za-z0-9_]+) /g;
+      const kinds = new Set([...source.matchAll(invocationRe)].map((m) => m[1]!));
+      expect(kinds).toEqual(new Set(['cloudsql_user', 'secret', 'cloudrun_job']));
+    });
+  });
+
+  // ===========================================================================
   // TF12-POINT8C-PR115-ZERO-STANDING-PRIVILEGE-FINAL-REMEDIATION — el único
   // P1 restante: bajo el diseño anterior, un preflight EXITOSO dejaba el
   // admin/secret/Job efímeros vivos INDEFINIDAMENTE en espera de que un
@@ -652,7 +712,7 @@ describe('production-db-role-hardening.yml — contrato estructural', () => {
       const bashRequired = extractBashArray(gateSource, 'REQUIRED_PERMISSIONS');
       const expected = [...ALL_REQUIRED_DEPLOYER_PERMISSIONS, ...READINESS_GATE_META_PERMISSIONS];
       expect(bashRequired.sort()).toEqual([...expected].sort());
-      expect(bashRequired).toHaveLength(13);
+      expect(bashRequired).toHaveLength(12);
     });
 
     it('el array bash incluye cloudsql.user lifecycle (create/delete/update/get) — nunca cloudsql.users.list', () => {
@@ -735,9 +795,11 @@ describe('production-db-role-hardening.yml — contrato estructural', () => {
       expect(migrationExecutorMentions.length).toBeGreaterThan(0);
     });
 
-    it('el nuevo step de reprueba de actAs (P1-B) solo LEE la política IAM de MIGRATION_EXECUTOR_SA (get-iam-policy) — nunca la muta', () => {
+    it('TF12-POINT8C-IAM-P1-EFFECTIVE-ACTAS-FINAL-REMEDIATION: el step de actAs usa projects.serviceAccounts.testIamPermissions (REST directo vía curl, con el access token de DEPLOYER_SA) — nunca get-iam-policy ni inferencia de binding', () => {
       const gateSource = jobSource('verify-deployer-permissions');
-      expect(gateSource).toMatch(/gcloud iam service-accounts get-iam-policy "\$\{\{ env\.MIGRATION_EXECUTOR_SA \}\}"/);
+      expect(gateSource).toMatch(/iam\.googleapis\.com\/v1\/projects\/\$\{\{ env\.PRODUCTION_PROJECT \}\}\/serviceAccounts\/\$\{\{ env\.MIGRATION_EXECUTOR_SA \}\}:testIamPermissions/);
+      expect(gateSource).toMatch(/"permissions":\["iam\.serviceAccounts\.actAs"\]/);
+      expect(gateSource).not.toMatch(/gcloud iam service-accounts get-iam-policy/);
       expect(gateSource).not.toMatch(/gcloud iam service-accounts (add-iam-policy-binding|remove-iam-policy-binding|set-iam-policy)/);
     });
 
@@ -746,44 +808,74 @@ describe('production-db-role-hardening.yml — contrato estructural', () => {
         (line) =>
           !line.trim().startsWith('#') &&
           line.includes('MIGRATION_EXECUTOR_SA') &&
-          !/get-iam-policy|ACTAS_|fail "|name: Reprobar/.test(line),
+          !/testIamPermissions|serviceAccounts\/\$\{\{|ACTAS_|fail "|name: Reprobar/.test(line),
       );
       for (const line of operationalLines) {
         expect(/--service-account="\$\{\{ env\.MIGRATION_EXECUTOR_SA \}\}"|member="serviceAccount:\$\{\{ env\.MIGRATION_EXECUTOR_SA \}\}"|MIGRATION_EXECUTOR_SA: korixa-prod-migration-exec@/.test(line)).toBe(true);
       }
     });
 
-    it('TEST_11: el gate declara, en su propio comentario, el contrato de meta-permissions que necesita para leerse a sí mismo (resourcemanager.projects.getIamPolicy + iam.roles.get + iam.serviceAccounts.getIamPolicy) — nunca las asume implícitamente', () => {
+    it('TEST_11: el gate declara, en su propio comentario, el contrato de meta-permissions que necesita para leerse a sí mismo (resourcemanager.projects.getIamPolicy + iam.roles.get) — nunca las asume implícitamente, y NUNCA incluye iam.serviceAccounts.getIamPolicy (removida — testIamPermissions no la necesita)', () => {
       const gateSource = jobSource('verify-deployer-permissions');
       expect(gateSource).toMatch(/resourcemanager\.projects\.getIamPolicy/);
       expect(gateSource).toMatch(/iam\.roles\.get/i);
-      expect(gateSource).toMatch(/iam\.serviceAccounts\.getIamPolicy/);
       expect(gateSource).toMatch(/falta resourcemanager\.projects\.getIamPolicy en DEPLOYER_SA/);
-      expect(gateSource).toMatch(/falta iam\.serviceAccounts\.getIamPolicy en DEPLOYER_SA/);
+      const bashRequired = extractBashArray(jobSource('verify-deployer-permissions'), 'REQUIRED_PERMISSIONS');
+      expect(bashRequired).not.toContain('iam.serviceAccounts.getIamPolicy');
     });
 
-    it('P1-B: existe un step dedicado que reprueba EN VIVO el binding roles/iam.serviceAccountUser de DEPLOYER_SA sobre MIGRATION_EXECUTOR_SA — nunca se acepta "ya se probó antes" como evidencia', () => {
+    it('TF12-POINT8C-IAM-P1-EFFECTIVE-ACTAS-FINAL-REMEDIATION: el permiso EFECTIVO actAs se reprueba EN VIVO en cada dispatch vía testIamPermissions — nunca se acepta "ya se probó antes", y nunca se infiere de un binding conocido', () => {
       const gateSource = jobSource('verify-deployer-permissions');
       expect(gateSource).toMatch(/CAN_DEPLOYER_ACT_AS_MIGRATION_EXECUTOR=YES/);
-      expect(gateSource).toMatch(/roles\/iam\.serviceAccountUser/);
       expect(gateSource).toMatch(/no puede actAs para desplegar el Cloud Run Job efímero/);
-      // También fail-closed ante un binding condicional, igual que el
-      // chequeo de permisos de proyecto (Fase 8 red team, generalizado).
-      expect(gateSource).toMatch(/ACTAS_CONDITIONAL/);
+      expect(gateSource).toMatch(/nunca se asume actAs/);
     });
 
-    it('TEST_12: el manifiesto tiene un conteo exacto y documentado — 13 (10 operativos + 3 meta, P1-B agregó iam.serviceAccounts.getIamPolicy), nunca un número mágico sin explicar', () => {
-      expect(ALL_REQUIRED_DEPLOYER_PERMISSIONS.length + READINESS_GATE_META_PERMISSIONS.length).toBe(13);
+    it('el token de acceso de DEPLOYER_SA nunca se imprime — ni con echo, ni con curl -v, ni con set -x', () => {
       const gateSource = jobSource('verify-deployer-permissions');
-      expect(gateSource).toMatch(/13 permisos/);
+      // Solo líneas operativas — el comentario explicativo del propio step
+      // menciona en prosa que NO se usan `curl -v`/`set -x`, y esa prosa
+      // contiene esos mismos literales; excluir comentarios evita que la
+      // aserción se autodispare contra su propia documentación.
+      const operationalGateSource = gateSource
+        .split('\n')
+        .filter((line) => !line.trim().startsWith('#'))
+        .join('\n');
+      expect(operationalGateSource).not.toMatch(/echo "\$ACCESS_TOKEN"/);
+      expect(operationalGateSource).not.toMatch(/curl -v/);
+      expect(operationalGateSource).not.toMatch(/set -x/);
+      // El token se limpia inmediatamente después de usarlo.
+      expect(gateSource).toMatch(/ACCESS_TOKEN=""/);
     });
 
-    it('el gate nunca vuelca la política IAM completa (ni del proyecto ni de MIGRATION_EXECUTOR_SA) ni la lista completa de permisos de un rol a los logs — solo nombres de permisos individuales ya comparados', () => {
+    it('el HTTP 200 se exige explícitamente antes de confiar en el cuerpo de la respuesta — cualquier otro código (403/500/timeout) es HOLD, nunca se asume actAs', () => {
+      const gateSource = jobSource('verify-deployer-permissions');
+      expect(gateSource).toMatch(/HTTP_STATUS" = "200"/);
+      expect(gateSource).toMatch(/se esperaba 200.*nunca se asume actAs/);
+      expect(gateSource).toMatch(/--max-time 15/);
+    });
+
+    it('una respuesta 200 sin el campo permissions (ningún permiso efectivamente otorgado) o con permissions malformado se clasifica ABSENT/PARSE_ERROR — ambos disparan HOLD, nunca PASS', () => {
+      const gateSource = jobSource('verify-deployer-permissions');
+      expect(gateSource).toMatch(/permissions = data\.get\('permissions'\)/);
+      expect(gateSource).toMatch(/if permissions is None:/);
+      expect(gateSource).toMatch(/print\('ABSENT'\)/);
+      expect(gateSource).toMatch(/print\('PRESENT' if 'iam\.serviceAccounts\.actAs' in permissions else 'ABSENT'\)/);
+      expect(gateSource).toMatch(/Respuesta de testIamPermissions no reconocida\/malformada/);
+    });
+
+    it('TEST_12: el manifiesto tiene un conteo exacto y documentado — 12 (10 operativos + 2 meta), nunca un número mágico sin explicar — no se preserva 13 artificialmente', () => {
+      expect(ALL_REQUIRED_DEPLOYER_PERMISSIONS.length + READINESS_GATE_META_PERMISSIONS.length).toBe(12);
+      const gateSource = jobSource('verify-deployer-permissions');
+      expect(gateSource).toMatch(/12 permisos/);
+    });
+
+    it('el gate nunca vuelca la política IAM completa del proyecto ni la lista completa de permisos de un rol a los logs — solo nombres de permisos individuales ya comparados', () => {
       const gateSource = jobSource('verify-deployer-permissions');
       expect(gateSource).not.toMatch(/cat "\$PROJECT_POLICY_JSON"/);
       expect(gateSource).not.toMatch(/echo "\$PROJECT_POLICY_JSON"/);
-      expect(gateSource).not.toMatch(/cat "\$MIGRATION_EXEC_POLICY_JSON"/);
-      expect(gateSource).not.toMatch(/echo "\$MIGRATION_EXEC_POLICY_JSON"/);
+      expect(gateSource).not.toMatch(/cat "\$TESTIAM_BODY"/);
+      expect(gateSource).not.toMatch(/echo "\$TESTIAM_BODY"/);
       expect(gateSource).not.toMatch(/gcloud iam roles describe.*--format=json/);
     });
 

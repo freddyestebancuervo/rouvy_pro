@@ -49,114 +49,119 @@ describe('production-db-role-hardening.yml — SECRET_LOG_SINKS = 0', () => {
     // ESTADO de clasificación (EXISTS/ABSENT_CONFIRMED/LOOKUP_FAILED —
     // nunca el payload real) — cada uno revisado individualmente igual que
     // el resto.
+    // TF12-POINT8C-IAM-P1-EFFECTIVE-ACTAS-FINAL-REMEDIATION (P2) insertó un
+    // default branch fail-closed en las 9 copias de classify_resource() —
+    // cada número de línea posterior a la primera copia (línea ~1231) se
+    // re-verificó otra vez contra el texto real del archivo, nunca por
+    // offset calculado.
     {
       lineNumber: 408,
       reason:
         'echo "ephemeral_dsn_secret_name=${{ env.EPHEMERAL_DSN_SECRET_PREFIX }}${RESOURCE_ID}" (derive-operation-names) — deriva y expone el NOMBRE del secret (prefijo fijo + id público, sea preflight_operation_id o apply_execution_id), nunca su payload.',
     },
     {
-      lineNumber: 983,
+      lineNumber: 1005,
       reason:
         "printf '%s' \"$DSN\" | gcloud secrets versions add ... --data-file=- (bootstrap-ephemeral-admin, Stage 1) — el DSN se canaliza directo al secret DSN global vía stdin, nunca se imprime a stdout/log.",
     },
     {
-      lineNumber: 988,
+      lineNumber: 1010,
       reason: 'echo "EPHEMERAL_DSN_SECRET_CREATED=YES" (bootstrap-ephemeral-admin, Stage 1) — flag de estado estático, ningún valor interpolado.',
     },
     {
-      lineNumber: 989,
+      lineNumber: 1011,
       reason:
         'echo "SECRET_PAYLOAD_PRINTED=NO" (bootstrap-ephemeral-admin, Stage 1) — string estático que AFIRMA no-divulgación; contiene la subcadena "secret_payload" pero no imprime ningún payload real.',
     },
     {
-      lineNumber: 999,
+      lineNumber: 1021,
       reason: 'echo "EPHEMERAL_DSN_SECRET_IAM_GRANTED=YES" (bootstrap-ephemeral-admin, Stage 1) — flag de estado estático, ningún valor interpolado.',
     },
     {
-      lineNumber: 1131,
+      lineNumber: 1153,
       reason:
         'echo "Los recursos privilegiados que este dispatch creó (...secret DSN...) son ELIMINADOS SIEMPRE..." (stage1-summary, evidencia no secreta) — prosa estática explicando el comportamiento de cleanup, ningún valor interpolado — contiene la palabra "DSN" solo como sustantivo descriptivo.',
     },
     {
-      lineNumber: 1244,
+      lineNumber: 1279,
       reason:
         'echo "::warning::LOOKUP_FAILED al comprobar el secret DSN antes de revocar ADMIN OPTION..." (cleanup-after-preflight, Estado A, P1-A) — string estático de advertencia, ningún valor interpolado — el texto contiene "secret DSN" solo como sustantivo describiendo A QUÉ recurso se refiere el fallo de lookup.',
     },
     {
-      lineNumber: 1284,
+      lineNumber: 1319,
       reason:
         'echo "STAGE1_CLEANUP_C_D_SKIPPED=DSN_SECRET_ALREADY_ABSENT" (cleanup-after-preflight) — flag de estado estático, ningún valor.',
     },
     {
-      lineNumber: 1349,
+      lineNumber: 1397,
       reason:
         'echo "STAGE1_CLEANUP_RESULT = HOLD_STILL_PRESENT_OR_UNVERIFIED (admin=$ADMIN_STATE, secret=$DSN_SECRET_STATE, job=$JOB_STATE)" (cleanup-after-preflight, P1-A) — $DSN_SECRET_STATE solo puede valer EXISTS/ABSENT_CONFIRMED/LOOKUP_FAILED (un label de clasificación), nunca el payload/DSN real.',
     },
     {
-      lineNumber: 1473,
+      lineNumber: 1521,
       reason:
         "printf '%s' \"$DSN\" | gcloud secrets versions add ... --data-file=- (bootstrap-apply-admin, Stage 2 — identidad fresca, nunca la de Stage 1) — el DSN se canaliza directo al secret DSN global vía stdin, nunca se imprime a stdout/log.",
     },
     {
-      lineNumber: 1478,
+      lineNumber: 1526,
       reason: 'echo "EPHEMERAL_DSN_SECRET_CREATED=YES" (bootstrap-apply-admin, Stage 2) — flag de estado estático, ningún valor interpolado.',
     },
     {
-      lineNumber: 1479,
+      lineNumber: 1527,
       reason:
         'echo "SECRET_PAYLOAD_PRINTED=NO" (bootstrap-apply-admin, Stage 2) — string estático que AFIRMA no-divulgación, ningún payload real.',
     },
     {
-      lineNumber: 1486,
+      lineNumber: 1534,
       reason: 'echo "EPHEMERAL_DSN_SECRET_IAM_GRANTED=YES" (bootstrap-apply-admin, Stage 2) — flag de estado estático, ningún valor interpolado.',
     },
     {
-      lineNumber: 1860,
+      lineNumber: 1921,
       reason: 'echo "DSN secret efímero ya ausente (ABSENT_CONFIRMED) — nada que revocar vía él." (cleanup-after-apply, Estado A) — string estático, ningún valor.',
     },
     {
-      lineNumber: 1866,
+      lineNumber: 1927,
       reason:
         'echo "::warning::LOOKUP_FAILED al comprobar el secret DSN antes de revocar ADMIN OPTION..." (cleanup-after-apply, Estado A, P1-A) — string estático de advertencia, ningún valor.',
     },
     {
-      lineNumber: 1982,
+      lineNumber: 2069,
       reason: 'echo "DSN secret efímero ya ausente (ABSENT_CONFIRMED) — cleanup idempotente, éxito." (cleanup-after-apply, Estado C/D) — string estático, ningún valor.',
     },
     {
-      lineNumber: 1985,
+      lineNumber: 2072,
       reason:
         'echo "::warning::LOOKUP_FAILED al comprobar el secret DSN..." (cleanup-after-apply, Estado C/D, P1-A) — string estático de advertencia, ningún valor.',
     },
     {
-      lineNumber: 1993,
+      lineNumber: 2080,
       reason: 'echo "::error::Cleanup C/D (delete ephemeral DSN secret) falló — HOLD requerido." (cleanup-after-apply) — string estático, ningún valor.',
     },
     {
-      lineNumber: 2092,
+      lineNumber: 2205,
       reason:
         'echo "independent_verify_secret_state=$DSN_SECRET_STATE" >> "$GITHUB_OUTPUT" (cleanup-after-apply, Estado F, P1-A) — $DSN_SECRET_STATE es un label de clasificación (EXISTS/ABSENT_CONFIRMED/LOOKUP_FAILED), nunca el payload/DSN real.',
     },
     {
-      lineNumber: 2222,
+      lineNumber: 2348,
       reason:
         'echo "::warning::LOOKUP_FAILED al comprobar el secret DSN..." (cleanup-only, P1-A) — string estático de advertencia, ningún valor.',
     },
     {
-      lineNumber: 2242,
+      lineNumber: 2368,
       reason: 'echo "CLEANUP_A_SKIPPED=DSN_SECRET_ALREADY_ABSENT (nada que revocar vía él)" (cleanup-only) — flag de estado estático, ningún valor.',
     },
     {
-      lineNumber: 2256,
+      lineNumber: 2382,
       reason: 'echo "CLEANUP_C_D_SKIPPED=DSN_SECRET_ALREADY_ABSENT" (cleanup-only) — flag de estado estático, ningún valor.',
     },
     {
-      lineNumber: 2258,
+      lineNumber: 2384,
       reason:
         'echo "::warning::LOOKUP_FAILED al comprobar el secret DSN..." (cleanup-only, Estado C/D, P1-A) — string estático de advertencia, ningún valor.',
     },
     {
-      lineNumber: 2323,
+      lineNumber: 2462,
       reason:
         'echo "CLEANUP_ONLY_RESULT = HOLD_STILL_PRESENT_OR_UNVERIFIED (admin=$ADMIN_STATE, secret=$DSN_SECRET_STATE, job=$JOB_STATE)" (cleanup-only, P1-A) — $DSN_SECRET_STATE es un label de clasificación, nunca el payload/DSN real.',
     },
