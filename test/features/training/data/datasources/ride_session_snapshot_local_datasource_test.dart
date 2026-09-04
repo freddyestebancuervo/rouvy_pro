@@ -187,10 +187,11 @@ void main() {
       // `jsonDecode` de un valor guardado como entero produce un `int` de
       // Dart, no un `double` — `(num?)?.toDouble()` ya cubre este caso
       // (mismo patrón que `distanceMeters`/`caloriesKcal` existentes).
-      final Map<String, dynamic> decoded = jsonDecode(jsonEncode(<String, dynamic>{
+      final Map<String, dynamic> intJson = <String, dynamic>{
         ...buildRouteSnapshot().toJson(),
         'routeTotalDistanceMeters': 3000, // entero, no 3000.0
-      })) as Map<String, dynamic>;
+      };
+      final Map<String, dynamic> decoded = jsonDecode(jsonEncode(intJson)) as Map<String, dynamic>;
 
       final RideSessionSnapshotData restored = RideSessionSnapshotData.fromJson(decoded);
 

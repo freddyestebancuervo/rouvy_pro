@@ -74,27 +74,6 @@ void main() {
   late MockDeviceRepository repository;
   late StreamController<List<BleDevice>> devicesController;
 
-  Widget wrap({
-    required FakeSnapshotDataSource snapshotDataSource,
-    required RoutesRepository routesRepository,
-    required String? routeId,
-  }) {
-    return ProviderScope(
-      overrides: <Override>[
-        rideSessionSnapshotDataSourceProvider.overrideWithValue(snapshotDataSource),
-        routesRepositoryProvider.overrideWithValue(routesRepository),
-        observeConnectedDevicesUseCaseProvider.overrideWithValue(ObserveConnectedDevicesUseCase(repository)),
-        observeTelemetryUseCaseProvider.overrideWithValue(ObserveTelemetryUseCase(repository)),
-      ],
-      child: MaterialApp(
-        locale: const Locale('es'),
-        localizationsDelegates: AppLocalizations.localizationsDelegates,
-        supportedLocales: AppLocalizations.supportedLocales,
-        home: TrainingHudPage(routeId: routeId),
-      ),
-    );
-  }
-
   RideSessionSnapshotData routeASnapshot() {
     return RideSessionSnapshotData(
       startTimeIso: DateTime(2026, 1, 1, 8).toIso8601String(),
