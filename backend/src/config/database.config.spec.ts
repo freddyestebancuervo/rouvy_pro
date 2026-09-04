@@ -1,3 +1,6 @@
+import { mkdtempSync, rmSync, writeFileSync } from 'fs';
+import { tmpdir } from 'os';
+import { join } from 'path';
 import { createDatabasePool } from './database.config';
 
 /**
@@ -69,13 +72,14 @@ describe('database.config', () => {
       expect(pool.options.ssl).toBeUndefined();
     });
 
-    it('DATABASE_SSL=true -> ssl se activa con rejectUnauthorized:false (patrón estándar para Postgres administrado — Cloud SQL, RDS, o cualquier otro)', () => {
+    it('DATABASE_SSL=true sin CA propia -> ssl:true (verificación de certificado con el store por defecto del runtime, NUNCA rejectUnauthorized:false)', () => {
       process.env.DATABASE_URL = 'postgres://ridepro:secret@managed-host.example:5432/ridepro_staging';
       process.env.DATABASE_SSL = 'true';
+      delete process.env.DATABASE_SSL_CA_PATH;
 
       const pool = createDatabasePool();
 
-      expect(pool.options.ssl).toEqual({ rejectUnauthorized: false });
+      expect(pool.options.ssl).toBe(true);
     });
 
     it('DATABASE_SSL con cualquier valor distinto de la string exacta "true" NO activa TLS (nunca truthy laxo)', () => {
@@ -85,6 +89,68 @@ describe('database.config', () => {
       const pool = createDatabasePool();
 
       expect(pool.options.ssl).toBeUndefined();
+    });
+
+    describe('DATABASE_SSL_CA_PATH (CA propia opcional — KORIXA-MVP-SAFETY-01)', () => {
+      let tmpDir: string;
+      let caPath: string;
+      const CA_CONTENT = '-----BEGIN CERTIFICATE-----\nFAKE-TEST-CA-NEVER-A-REAL-SECRET\n-----END CERTIFICATE-----\n';
+
+      beforeAll(() => {
+        tmpDir = mkdtempSync(join(tmpdir(), 'korixa-db-ssl-ca-test-'));
+        caPath = join(tmpDir, 'ca.pem');
+        writeFileSync(caPath, CA_CONTENT, 'utf8');
+      });
+
+      afterAll(() => {
+        rmSync(tmpDir, { recursive: true, force: true });
+      });
+
+      it('DATABASE_SSL=true + DATABASE_SSL_CA_PATH -> ssl = { ca: <contenido del archivo> }, sin rejectUnauthorized:false', () => {
+        process.env.DATABASE_URL = 'postgres://ridepro:secret@managed-host.example:5432/ridepro_staging';
+        process.env.DATABASE_SSL = 'true';
+        process.env.DATABASE_SSL_CA_PATH = caPath;
+
+        const pool = createDatabasePool();
+
+        expect(pool.options.ssl).toEqual({ ca: CA_CONTENT });
+      });
+
+      it('DATABASE_SSL_CA_PATH sin DATABASE_SSL=true se ignora — no activa TLS por sí sola', () => {
+        process.env.DATABASE_URL = 'postgres://ridepro:secret@localhost:5432/ridepro_dev';
+        delete process.env.DATABASE_SSL;
+        process.env.DATABASE_SSL_CA_PATH = caPath;
+
+        const pool = createDatabasePool();
+
+        expect(pool.options.ssl).toBeUndefined();
+      });
+    });
+
+    it('en ningún escenario de configuración el `ssl` efectivo contiene rejectUnauthorized:false — la verificación de certificado nunca se debilita desde este archivo', () => {
+      const scenarios: Array<Record<string, string | undefined>> = [
+        { DATABASE_SSL: undefined },
+        { DATABASE_SSL: 'true' },
+        { DATABASE_SSL: 'yes' },
+        { DATABASE_SSL: 'false' },
+      ];
+
+      for (const scenario of scenarios) {
+        process.env.DATABASE_URL = 'postgres://ridepro:secret@managed-host.example:5432/ridepro_staging';
+        if (scenario.DATABASE_SSL === undefined) {
+          delete process.env.DATABASE_SSL;
+        } else {
+          process.env.DATABASE_SSL = scenario.DATABASE_SSL;
+        }
+        delete process.env.DATABASE_SSL_CA_PATH;
+
+        const pool = createDatabasePool();
+
+        const ssl = pool.options.ssl;
+        if (typeof ssl === 'object' && ssl !== null) {
+          expect((ssl as { rejectUnauthorized?: boolean }).rejectUnauthorized).not.toBe(false);
+        }
+      }
     });
 
     it('nunca lee MIGRATION_DATABASE_URL — la identidad runtime y la identidad de migración están estructuralmente separadas, nunca se cruzan', () => {
