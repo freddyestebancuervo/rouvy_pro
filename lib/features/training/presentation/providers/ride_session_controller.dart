@@ -141,13 +141,18 @@ class RideSessionController extends Notifier<RideSessionState> {
   /// diferencia de `start()`, no resetea el acumulado de distancia ni
   /// calorías: sigue integrando sobre lo que ya se había guardado.
   ///
-  /// KORIXA-MVP-VERTICAL-SLICE-01 — límite conocido, documentado a
-  /// propósito: `RideSessionSnapshotData` (recuperación tras cierre
-  /// inesperado, tarea B1) todavía no persiste el `RideSessionTarget` de
-  /// la sesión. Una sesión "route-aware" que se recupera así vuelve como
-  /// sesión libre (sin ruta asociada, `routeProgress == 0`) — no pierde
-  /// datos de telemetría/distancia, solo el vínculo con la ruta. Ampliar
-  /// el snapshot para incluir el `target` queda fuera de este slice.
+  /// KORIXA-MVP-VERTICAL-SLICE-02 — a diferencia del slice anterior, el
+  /// `RideSessionTarget` de una sesión route-aware SÍ se reconstruye acá,
+  /// a partir de `snapshot.recoveredTarget` (nunca de ningún `target`
+  /// externo/de otra ruta — ver el docblock de `recoveredTarget` para la
+  /// validación de campos corruptos/incompletos, que recupera como
+  /// sesión LIBRE en vez de fabricar una ruta a medias). Esto es,
+  /// deliberadamente, la ÚNICA fuente del target al recuperar: si
+  /// `TrainingHudPage` se abrió con el id de OTRA ruta (deep-link/URL
+  /// distinta a la que se venía corriendo), esa otra ruta se descarta
+  /// sin más — la identidad de la sesión recuperada es la que YA estaba
+  /// guardada, nunca la de la pantalla que el usuario tenía abierta al
+  /// momento de recuperar.
   void resumeFromSnapshot(RideSessionSnapshotData snapshot) {
     _aggregator.reset();
     _autoCompletionTriggered = false;
@@ -169,11 +174,22 @@ class RideSessionController extends Notifier<RideSessionState> {
       telemetry: _aggregator.currentState,
       elapsed: Duration(seconds: snapshot.elapsedSeconds),
       connectedDeviceCount: snapshot.connectedDeviceCount,
+      target: snapshot.recoveredTarget,
     );
 
     _subscribeToConnectedDevices();
     _startTicker();
     _startSnapshotTimer();
+
+    // KORIXA-MVP-VERTICAL-SLICE-02 — caso límite (distancia recuperada ya
+    // >= total de la ruta, p. ej. la app murió justo al cruzar la meta
+    // antes de que el snapshot de recuperación se limpiara): reusa el
+    // MISMO mecanismo de finalización única que la telemetría en vivo,
+    // nunca un segundo camino de "auto-completar". `finish()` es
+    // idempotente por construcción, así que esto no crea un guardado
+    // duplicado ni una segunda navegación aunque después llegue más
+    // telemetría o el usuario interactúe con la pantalla.
+    _maybeAutoCompleteRoute();
   }
 
   void pause() {
@@ -344,6 +360,12 @@ class RideSessionController extends Notifier<RideSessionState> {
   void _persistSnapshot() {
     if (_startTime == null) return;
     final AggregatedTelemetry t = state.telemetry;
+    // KORIXA-MVP-VERTICAL-SLICE-02 — una sesión libre (`target == null`)
+    // sigue guardando los 3 campos de ruta como `null`, exactamente el
+    // formato histórico; una sesión route-aware los incluye para que
+    // `resumeFromSnapshot()` pueda reconstruir el mismo `RideSessionTarget`
+    // tras un cierre inesperado.
+    final RideSessionTarget? target = state.target;
     unawaited(
       _snapshotDataSource.save(
         RideSessionSnapshotData(
@@ -353,6 +375,9 @@ class RideSessionController extends Notifier<RideSessionState> {
           caloriesKcal: t.caloriesKcal,
           connectedDeviceCount: state.connectedDeviceCount,
           savedAtIso: DateTime.now().toIso8601String(),
+          routeId: target?.routeId,
+          routeName: target?.routeName,
+          routeTotalDistanceMeters: target?.routeTotalDistanceMeters,
         ),
       ),
     );
