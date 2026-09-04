@@ -10,6 +10,7 @@ import '../../../device_connection/domain/services/telemetry_aggregator.dart';
 import '../../../device_connection/presentation/providers/device_providers.dart';
 import '../../data/datasources/ride_session_snapshot_local_datasource.dart';
 import '../../domain/entities/ride_session_summary.dart';
+import '../../domain/entities/ride_session_target.dart';
 import 'ride_session_snapshot_providers.dart';
 
 enum RideSessionPhase { idle, active, paused, finished }
@@ -21,6 +22,7 @@ class RideSessionState {
     this.elapsed = Duration.zero,
     this.connectedDeviceCount = 0,
     this.summary,
+    this.target,
   });
 
   final RideSessionPhase phase;
@@ -29,12 +31,36 @@ class RideSessionState {
   final int connectedDeviceCount;
   final RideSessionSummary? summary;
 
+  /// KORIXA-MVP-VERTICAL-SLICE-01 — `null` para una sesión libre (el
+  /// comportamiento histórico, sin cambios). Fijado una única vez en
+  /// `start()`, nunca reasignado durante la sesión.
+  final RideSessionTarget? target;
+
+  bool get isRouteBacked => target != null;
+
+  /// Progreso 0.0–1.0 a lo largo de la ruta, derivado DIRECTAMENTE de
+  /// `telemetry.distanceMeters` (el acumulado que ya calcula
+  /// `TelemetryAggregator`) — deliberadamente no es un contador paralelo,
+  /// para heredar gratis su comportamiento ya correcto ante velocidad
+  /// cero (no integra), pausa (deja de integrar) y huecos largos de
+  /// reconexión (los descarta, no crea saltos falsos). Clamped a [0, 1]:
+  /// nunca negativo, nunca por encima de 1.0 aunque el ciclista siga
+  /// pedaleando después de completar la ruta.
+  double get routeProgress {
+    final RideSessionTarget? t = target;
+    if (t == null || t.routeTotalDistanceMeters <= 0) return 0;
+    final double raw = telemetry.distanceMeters / t.routeTotalDistanceMeters;
+    if (raw.isNaN || raw < 0) return 0;
+    return raw > 1 ? 1 : raw;
+  }
+
   RideSessionState copyWith({
     RideSessionPhase? phase,
     AggregatedTelemetry? telemetry,
     Duration? elapsed,
     int? connectedDeviceCount,
     RideSessionSummary? summary,
+    RideSessionTarget? target,
   }) {
     return RideSessionState(
       phase: phase ?? this.phase,
@@ -42,6 +68,7 @@ class RideSessionState {
       elapsed: elapsed ?? this.elapsed,
       connectedDeviceCount: connectedDeviceCount ?? this.connectedDeviceCount,
       summary: summary ?? this.summary,
+      target: target ?? this.target,
     );
   }
 }
@@ -66,6 +93,13 @@ class RideSessionController extends Notifier<RideSessionState> {
   DateTime? _pausedAt;
   Duration _pausedDurationTotal = Duration.zero;
 
+  /// KORIXA-MVP-VERTICAL-SLICE-01 — evita que dos snapshots ya en vuelo
+  /// (llegados antes de que `finish()` alcance a cancelar la
+  /// suscripción) disparen una segunda finalización automática. Se
+  /// resetea en `start()`; no hace falta en `resumeFromSnapshot()` porque
+  /// esa vía nunca trae un `target` (ver su propio docblock).
+  bool _autoCompletionTriggered = false;
+
   RideSessionSnapshotLocalDataSource get _snapshotDataSource =>
       ref.read(rideSessionSnapshotDataSourceProvider);
 
@@ -87,11 +121,16 @@ class RideSessionController extends Notifier<RideSessionState> {
     return _snapshotDataSource.clear();
   }
 
-  void start() {
+  /// [target] es opcional (KORIXA-MVP-VERTICAL-SLICE-01): `null` arranca
+  /// una sesión libre, exactamente el comportamiento histórico. Con un
+  /// `target`, la sesión queda "route-aware" — ver `RideSessionState.routeProgress`
+  /// y `_maybeAutoCompleteRoute`.
+  void start({RideSessionTarget? target}) {
     _aggregator.reset();
     _startTime = DateTime.now();
     _pausedDurationTotal = Duration.zero;
-    state = const RideSessionState(phase: RideSessionPhase.active);
+    _autoCompletionTriggered = false;
+    state = RideSessionState(phase: RideSessionPhase.active, target: target);
 
     _subscribeToConnectedDevices();
     _startTicker();
@@ -101,8 +140,17 @@ class RideSessionController extends Notifier<RideSessionState> {
   /// Continúa una sesión a partir de un snapshot recuperado — a
   /// diferencia de `start()`, no resetea el acumulado de distancia ni
   /// calorías: sigue integrando sobre lo que ya se había guardado.
+  ///
+  /// KORIXA-MVP-VERTICAL-SLICE-01 — límite conocido, documentado a
+  /// propósito: `RideSessionSnapshotData` (recuperación tras cierre
+  /// inesperado, tarea B1) todavía no persiste el `RideSessionTarget` de
+  /// la sesión. Una sesión "route-aware" que se recupera así vuelve como
+  /// sesión libre (sin ruta asociada, `routeProgress == 0`) — no pierde
+  /// datos de telemetría/distancia, solo el vínculo con la ruta. Ampliar
+  /// el snapshot para incluir el `target` queda fuera de este slice.
   void resumeFromSnapshot(RideSessionSnapshotData snapshot) {
     _aggregator.reset();
+    _autoCompletionTriggered = false;
     _aggregator.seed(
       AggregatedTelemetry(
         distanceMeters: snapshot.distanceMeters,
@@ -149,7 +197,20 @@ class RideSessionController extends Notifier<RideSessionState> {
     _startSnapshotTimer();
   }
 
+  /// KORIXA-MVP-VERTICAL-SLICE-01 — idempotente: si ya está `finished`
+  /// (llamada manual mientras la finalización automática ya corrió, o
+  /// cualquier doble-tap/reentrada), devuelve el MISMO resumen ya
+  /// construido sin repetir el teardown ni reconstruir el estado — así
+  /// nunca hay un segundo guardado en Firestore ni una segunda
+  /// navegación disparada por un segundo cambio de fase (`ref.listen` en
+  /// `TrainingHudPage` solo reacciona a una transición real a
+  /// `finished`, que solo ocurre una vez).
   RideSessionSummary finish() {
+    final RideSessionSummary? existing = state.summary;
+    if (state.phase == RideSessionPhase.finished && existing != null) {
+      return existing;
+    }
+
     final DateTime endTime = DateTime.now();
     _unsubscribeAllDevices();
     _devicesSub?.cancel();
@@ -157,11 +218,26 @@ class RideSessionController extends Notifier<RideSessionState> {
     _snapshotTimer?.cancel();
     unawaited(_snapshotDataSource.clear()); // ya no hay nada que recuperar
 
+    final RideSessionTarget? target = state.target;
+    // `routeCompleted` se deriva del estado en el momento de finalizar —
+    // nunca de si `finish()` fue llamado "automáticamente" o "a mano":
+    // una finalización automática solo ocurre cuando la distancia ya
+    // alcanzó el total (ver `_maybeAutoCompleteRoute`), así que esta
+    // misma condición cubre ambos casos sin necesitar un parámetro extra.
+    final bool? routeCompleted = target == null
+        ? null
+        : (target.routeTotalDistanceMeters > 0 &&
+            _aggregator.currentState.distanceMeters >= target.routeTotalDistanceMeters);
+
     final RideSessionSummary summary = RideSessionSummary(
       startTime: _startTime ?? endTime,
       endTime: endTime,
       finalTelemetry: _aggregator.currentState,
       connectedDeviceCount: state.connectedDeviceCount,
+      routeId: target?.routeId,
+      routeName: target?.routeName,
+      routeTotalDistanceMeters: target?.routeTotalDistanceMeters,
+      routeCompleted: routeCompleted,
     );
 
     state = state.copyWith(phase: RideSessionPhase.finished, summary: summary);
@@ -201,6 +277,7 @@ class RideSessionController extends Notifier<RideSessionState> {
         _deviceSubs[id] = ref.read(observeTelemetryUseCaseProvider)(id).listen((TelemetrySnapshot snapshot) {
           final AggregatedTelemetry updated = _aggregator.ingest(snapshot);
           state = state.copyWith(telemetry: updated);
+          _maybeAutoCompleteRoute();
         });
       }
 
@@ -213,6 +290,31 @@ class RideSessionController extends Notifier<RideSessionState> {
       sub.cancel();
     }
     _deviceSubs.clear();
+  }
+
+  // ---------------------------------------------------------------------
+  // Finalización automática de ruta (KORIXA-MVP-VERTICAL-SLICE-01)
+  // ---------------------------------------------------------------------
+
+  /// Se llama tras CADA snapshot de telemetría ingerido. Dispara
+  /// `finish()` exactamente una vez cuando la distancia acumulada
+  /// alcanza el total de la ruta — nunca navega ni toca `BuildContext`
+  /// (eso lo hace `TrainingHudPage`, observando la transición de fase).
+  ///
+  /// Doble guarda contra reentrada: `_autoCompletionTriggered` (evita que
+  /// un snapshot ya en vuelo cuando `finish()` cancela la suscripción
+  /// dispare una segunda vez) y `state.phase != active` (además,
+  /// `finish()` en sí mismo ya es idempotente — ver su docblock).
+  void _maybeAutoCompleteRoute() {
+    if (_autoCompletionTriggered) return;
+    if (state.phase != RideSessionPhase.active) return;
+
+    final RideSessionTarget? target = state.target;
+    if (target == null || target.routeTotalDistanceMeters <= 0) return;
+    if (state.telemetry.distanceMeters < target.routeTotalDistanceMeters) return;
+
+    _autoCompletionTriggered = true;
+    finish();
   }
 
   // ---------------------------------------------------------------------

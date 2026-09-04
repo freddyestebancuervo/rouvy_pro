@@ -18,6 +18,10 @@ class RideSessionSummary extends Equatable {
     required this.endTime,
     required this.finalTelemetry,
     required this.connectedDeviceCount,
+    this.routeId,
+    this.routeName,
+    this.routeTotalDistanceMeters,
+    this.routeCompleted,
   });
 
   final DateTime startTime;
@@ -29,8 +33,34 @@ class RideSessionSummary extends Equatable {
   /// dato de frecuencia cardíaca si entrenó sin pulsómetro.
   final int connectedDeviceCount;
 
+  /// KORIXA-MVP-VERTICAL-SLICE-01 — `null` en los tres (`routeId`,
+  /// `routeName`, `routeTotalDistanceMeters`) para una sesión libre (sin
+  /// ruta), nunca solo alguno — `RideSessionController.finish()` los
+  /// fija juntos a partir de un mismo `RideSessionTarget` o los deja los
+  /// tres sin definir.
+  final String? routeId;
+  final String? routeName;
+  final double? routeTotalDistanceMeters;
+
+  /// `null` para una sesión libre (no aplica). `true` solo cuando la
+  /// distancia acumulada alcanzó `routeTotalDistanceMeters` en el
+  /// momento de finalizar (automático o manual); `false` si se finalizó
+  /// antes de llegar al 100%.
+  final bool? routeCompleted;
+
+  bool get isRouteBacked => routeId != null;
+
   Duration get duration => endTime.difference(startTime);
 
   @override
-  List<Object?> get props => [startTime, endTime, finalTelemetry, connectedDeviceCount];
+  List<Object?> get props => [
+        startTime,
+        endTime,
+        finalTelemetry,
+        connectedDeviceCount,
+        routeId,
+        routeName,
+        routeTotalDistanceMeters,
+        routeCompleted,
+      ];
 }

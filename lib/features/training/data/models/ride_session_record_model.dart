@@ -14,6 +14,10 @@ class RideSessionRecordModel extends RideSessionRecord {
     super.lastCadenceRpm,
     super.lastHeartRateBpm,
     super.deviceCount,
+    super.routeId,
+    super.routeName,
+    super.routeDistanceMeters,
+    super.routeCompleted,
   });
 
   factory RideSessionRecordModel.fromSummary(RideSessionSummary summary) {
@@ -28,9 +32,19 @@ class RideSessionRecordModel extends RideSessionRecord {
       lastCadenceRpm: telemetry.cadenceRpm,
       lastHeartRateBpm: telemetry.heartRateBpm,
       deviceCount: summary.connectedDeviceCount,
+      routeId: summary.routeId,
+      routeName: summary.routeName,
+      routeDistanceMeters: summary.routeTotalDistanceMeters,
+      routeCompleted: summary.routeCompleted,
     );
   }
 
+  /// KORIXA-MVP-VERTICAL-SLICE-01 — los 4 campos `route*` son opcionales
+  /// y se leen con `as T?` (nunca `as T`): un documento viejo, guardado
+  /// antes de este slice, simplemente no los tiene en el mapa y estas
+  /// líneas devuelven `null` sin lanzar — ver
+  /// `ride_session_record_model_test.dart` para la prueba explícita de
+  /// compatibilidad hacia atrás.
   factory RideSessionRecordModel.fromMap(Map<String, dynamic> map, String documentId) {
     return RideSessionRecordModel(
       id: documentId,
@@ -42,6 +56,10 @@ class RideSessionRecordModel extends RideSessionRecord {
       lastCadenceRpm: map['lastCadenceRpm'] as int?,
       lastHeartRateBpm: map['lastHeartRateBpm'] as int?,
       deviceCount: map['deviceCount'] as int? ?? 0,
+      routeId: map['routeId'] as String?,
+      routeName: map['routeName'] as String?,
+      routeDistanceMeters: (map['routeDistanceMeters'] as num?)?.toDouble(),
+      routeCompleted: map['routeCompleted'] as bool?,
     );
   }
 
@@ -55,6 +73,10 @@ class RideSessionRecordModel extends RideSessionRecord {
       'lastCadenceRpm': lastCadenceRpm,
       'lastHeartRateBpm': lastHeartRateBpm,
       'deviceCount': deviceCount,
+      'routeId': routeId,
+      'routeName': routeName,
+      'routeDistanceMeters': routeDistanceMeters,
+      'routeCompleted': routeCompleted,
     };
   }
 }

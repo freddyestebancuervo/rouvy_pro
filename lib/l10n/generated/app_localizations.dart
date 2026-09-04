@@ -63,7 +63,7 @@ import 'app_localizations_es.dart';
 /// property.
 abstract class AppLocalizations {
   AppLocalizations(String locale)
-      : localeName = intl.Intl.canonicalizedLocale(locale.toString());
+    : localeName = intl.Intl.canonicalizedLocale(locale.toString());
 
   final String localeName;
 
@@ -86,16 +86,16 @@ abstract class AppLocalizations {
   /// of delegates is preferred or required.
   static const List<LocalizationsDelegate<dynamic>> localizationsDelegates =
       <LocalizationsDelegate<dynamic>>[
-    delegate,
-    GlobalMaterialLocalizations.delegate,
-    GlobalCupertinoLocalizations.delegate,
-    GlobalWidgetsLocalizations.delegate,
-  ];
+        delegate,
+        GlobalMaterialLocalizations.delegate,
+        GlobalCupertinoLocalizations.delegate,
+        GlobalWidgetsLocalizations.delegate,
+      ];
 
   /// A list of this localizations delegate's supported locales.
   static const List<Locale> supportedLocales = <Locale>[
     Locale('en'),
-    Locale('es')
+    Locale('es'),
   ];
 
   /// No description provided for @appName.
@@ -1202,6 +1202,12 @@ abstract class AppLocalizations {
   /// **'Terreno 3D'**
   String get routeContentTerrain3d;
 
+  /// No description provided for @routeContentStatic.
+  ///
+  /// In es, this message translates to:
+  /// **'Ruta local'**
+  String get routeContentStatic;
+
   /// No description provided for @startTrainingOnRouteAction.
   ///
   /// In es, this message translates to:
@@ -1211,8 +1217,44 @@ abstract class AppLocalizations {
   /// No description provided for @routeTrainingNote.
   ///
   /// In es, this message translates to:
-  /// **'El entrenamiento con esta ruta específica (video/3D sincronizado) llega en un módulo futuro — por ahora inicia una sesión libre.'**
+  /// **'Tu progreso se rastrea por distancia a lo largo de esta ruta. La reproducción de video/3D sincronizado todavía no está implementada.'**
   String get routeTrainingNote;
+
+  /// No description provided for @routeNotFoundTitle.
+  ///
+  /// In es, this message translates to:
+  /// **'Ruta no encontrada'**
+  String get routeNotFoundTitle;
+
+  /// No description provided for @routeNotFoundMessage.
+  ///
+  /// In es, this message translates to:
+  /// **'No se pudo cargar esta ruta. Volvé y elegí otra desde el catálogo.'**
+  String get routeNotFoundMessage;
+
+  /// No description provided for @backToRoutesAction.
+  ///
+  /// In es, this message translates to:
+  /// **'Volver a rutas'**
+  String get backToRoutesAction;
+
+  /// No description provided for @routeProgressLabel.
+  ///
+  /// In es, this message translates to:
+  /// **'Progreso de ruta'**
+  String get routeProgressLabel;
+
+  /// No description provided for @routeCompletedLabel.
+  ///
+  /// In es, this message translates to:
+  /// **'Ruta completada'**
+  String get routeCompletedLabel;
+
+  /// No description provided for @routeStoppedEarlyLabel.
+  ///
+  /// In es, this message translates to:
+  /// **'Detenida antes de terminar la ruta'**
+  String get routeStoppedEarlyLabel;
 
   /// No description provided for @settingsTitle.
   ///
@@ -1578,8 +1620,9 @@ AppLocalizations lookupAppLocalizations(Locale locale) {
   }
 
   throw FlutterError(
-      'AppLocalizations.delegate failed to load unsupported locale "$locale". This is likely '
-      'an issue with the localizations generation tool. Please file an issue '
-      'on GitHub with a reproducible sample app and the gen-l10n configuration '
-      'that was used.');
+    'AppLocalizations.delegate failed to load unsupported locale "$locale". This is likely '
+    'an issue with the localizations generation tool. Please file an issue '
+    'on GitHub with a reproducible sample app and the gen-l10n configuration '
+    'that was used.',
+  );
 }

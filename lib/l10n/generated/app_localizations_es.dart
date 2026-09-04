@@ -604,11 +604,33 @@ class AppLocalizationsEs extends AppLocalizations {
   String get routeContentTerrain3d => 'Terreno 3D';
 
   @override
+  String get routeContentStatic => 'Ruta local';
+
+  @override
   String get startTrainingOnRouteAction => 'Entrenar esta ruta';
 
   @override
   String get routeTrainingNote =>
-      'El entrenamiento con esta ruta específica (video/3D sincronizado) llega en un módulo futuro — por ahora inicia una sesión libre.';
+      'Tu progreso se rastrea por distancia a lo largo de esta ruta. La reproducción de video/3D sincronizado todavía no está implementada.';
+
+  @override
+  String get routeNotFoundTitle => 'Ruta no encontrada';
+
+  @override
+  String get routeNotFoundMessage =>
+      'No se pudo cargar esta ruta. Volvé y elegí otra desde el catálogo.';
+
+  @override
+  String get backToRoutesAction => 'Volver a rutas';
+
+  @override
+  String get routeProgressLabel => 'Progreso de ruta';
+
+  @override
+  String get routeCompletedLabel => 'Ruta completada';
+
+  @override
+  String get routeStoppedEarlyLabel => 'Detenida antes de terminar la ruta';
 
   @override
   String get settingsTitle => 'Configuración';

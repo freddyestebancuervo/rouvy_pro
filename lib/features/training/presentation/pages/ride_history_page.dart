@@ -59,7 +59,13 @@ class _SessionTile extends StatelessWidget {
           backgroundColor: Theme.of(context).colorScheme.primaryContainer,
           child: Icon(Icons.directions_bike, color: Theme.of(context).colorScheme.onPrimaryContainer),
         ),
-        title: Text(_formatDate(record.startTime)),
+        // KORIXA-MVP-VERTICAL-SLICE-01 — `record.routeName` es `null`
+        // para toda sesión libre (histórica o nueva); un registro
+        // route-aware antepone el nombre de la ruta al título de
+        // siempre, sin cambiar nada más de la tarjeta.
+        title: Text(
+          record.routeName != null ? '${record.routeName!} · ${_formatDate(record.startTime)}' : _formatDate(record.startTime),
+        ),
         subtitle: Text(
           '${DurationFormatter.format(record.duration)}  ·  '
           '${(record.distanceMeters / 1000).toStringAsFixed(2)} km  ·  '

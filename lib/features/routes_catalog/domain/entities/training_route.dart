@@ -2,7 +2,19 @@ import 'package:equatable/equatable.dart';
 
 enum RouteDifficulty { easy, moderate, hard, extreme }
 
-enum RouteContentType { video, terrain3d }
+/// `video`/`terrain3d`: contenido audiovisual sincronizado que **no existe
+/// todavía** — hoy son solo una etiqueta descriptiva sobre las 6 entradas
+/// fijas de `RoutesMockDataSource`, sin ningún video ni motor 3D real
+/// detrás (ver KORIXA-MVP-ROUTEFIRST-01, hallazgo de auditoría
+/// independiente: esas 6 entradas no deben presentarse como prueba de un
+/// contenido real).
+///
+/// `staticRoute`: lo único honesto de representar hoy — una ruta con
+/// distancia/desnivel fijos, sin ningún contenido audiovisual ni de
+/// terreno generado asociado. Es el tipo que usa la ruta MVP de Route-First
+/// (KORIXA-MVP-VERTICAL-SLICE-01) para no reclamar un video/3D que no
+/// existe mientras sigue probando el progreso real de una ride.
+enum RouteContentType { video, terrain3d, staticRoute }
 
 /// Entidad de dominio del catálogo de rutas — a diferencia de
 /// `auth`/`device_connection`/`training`/`wearables`, este módulo **no

@@ -97,7 +97,17 @@ class RouteDetailPage extends ConsumerWidget {
                       ),
                       const SizedBox(height: 28),
                       FilledButton.icon(
-                        onPressed: () => context.push(AppRoute.training),
+                        // KORIXA-MVP-VERTICAL-SLICE-01 — antes navegaba a
+                        // `/training` sin ningún argumento (defecto
+                        // conocido: la ruta seleccionada nunca llegaba a
+                        // la sesión, que arrancaba como libre). Ahora
+                        // lleva el id como query param — sobrevive un
+                        // refresh en Web y GoRoute lo resuelve del lado de
+                        // `TrainingHudPage`.
+                        onPressed: () => context.push(
+                          Uri(path: AppRoute.training, queryParameters: <String, String>{'routeId': route.id})
+                              .toString(),
+                        ),
                         icon: const Icon(Icons.play_arrow),
                         label: Text(l10n.startTrainingOnRouteAction),
                       ),

@@ -23,11 +23,13 @@ extension RouteContentTypeUi on RouteContentType {
   IconData get icon => switch (this) {
         RouteContentType.video => Icons.videocam_outlined,
         RouteContentType.terrain3d => Icons.terrain,
+        RouteContentType.staticRoute => Icons.straighten,
       };
 
   String label(AppLocalizations l10n) => switch (this) {
         RouteContentType.video => l10n.routeContentVideo,
         RouteContentType.terrain3d => l10n.routeContentTerrain3d,
+        RouteContentType.staticRoute => l10n.routeContentStatic,
       };
 }
 
