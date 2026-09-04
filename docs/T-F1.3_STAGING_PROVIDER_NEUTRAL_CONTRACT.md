@@ -94,7 +94,7 @@ this behavior must consciously update this document.
 | `RUNTIME_DSN_ENV` | `DATABASE_URL` |
 | `MIGRATION_DSN_ENV` | `MIGRATION_DATABASE_URL` |
 | `RUNTIME_IDENTITY_DISTINCT_FROM_MIGRATION_IDENTITY` | REQUIRED — enforced structurally: `createDatabasePool()` only ever reads `DATABASE_URL` |
-| `TLS_SUPPORTED` | YES — opt-in via `DATABASE_SSL=true` (`rejectUnauthorized:false`, the standard `pg` pattern for managed Postgres whose CA isn't in Node's default trust store) |
+| `TLS_SUPPORTED` | YES — opt-in via `DATABASE_SSL=true` (`ssl: true`, full certificate verification against the runtime's default CA store — never `rejectUnauthorized: false`; an optional `DATABASE_SSL_CA_PATH` supplies a provider-specific CA file when needed, e.g. Cloud SQL over public IP. Updated by KORIXA-MVP-SAFETY-01, which retired the previous `rejectUnauthorized: false` pattern this row used to describe.) |
 | `APPLICATION_CONNECTION_LAYER` | `pg.Pool` (no ORM, no external connection pooler) |
 | `MIGRATION_ENGINE` | `node-pg-migrate` — all 7 existing migration files are portable, standard PostgreSQL DDL; `gen_random_uuid()` is PG13+ core, deliberately avoiding `CREATE EXTENSION` (which Cloud SQL restricts to `cloudsqlsuperuser`) |
 | `EXTERNAL_POOLER_REQUIRED` | NO |

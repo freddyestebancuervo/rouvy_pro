@@ -49,7 +49,9 @@ la suite e2e completa contra un Postgres 16 real en cada push/PR.
 - `pg.Pool` directo, sin ORM — decisión deliberada del scaffold original, revisitable
   cuando haya más lógica de negocio que lo justifique.
 - Pool cerrado correctamente en `OnApplicationShutdown` (sin fugas de conexión).
-- SSL ya soportado (`DATABASE_SSL=true`) para Postgres administrado (RDS, Cloud SQL, etc.).
+- SSL ya soportado (`DATABASE_SSL=true`) para Postgres administrado (RDS, Cloud SQL, etc.) —
+  verificación de certificado activa (nunca `rejectUnauthorized: false`); CA propia opcional
+  vía `DATABASE_SSL_CA_PATH` (ver `.env.example`).
 - **Migraciones** (`node-pg-migrate`, `migrations/*.sql`, 4 archivos aplicados en orden):
   1. `0001_init.sql` — usuarios, roles, refresh tokens, sesiones de entrenamiento, audit log.
   2. `0002_users_email_case_insensitive_unique.sql` — cierre de condición de carrera de email.
@@ -74,14 +76,22 @@ la suite e2e completa contra un Postgres 16 real en cada push/PR.
 - **Secretos**: `.env` y `secrets/*.pem` nunca se commitean (ver `.gitignore`),
   confirmado con `git check-ignore`.
 
-## Health check
+## Liveness / readiness (KORIXA-MVP-SAFETY-01)
 
-`GET /v1/health` verifica conexión **real** a Postgres (`SELECT 1`), no solo que el
-proceso esté vivo:
-```json
-{"status":"ok","database":"connected"}
-```
-Responde `503` si la base no responde.
+- `GET /v1/live` — liveness: el proceso Node está arriba. Nunca consulta Postgres.
+  ```json
+  {"status":"ok"}
+  ```
+- `GET /v1/ready` — readiness: verifica conexión **real** a Postgres (`SELECT 1`), no
+  solo que el proceso esté vivo.
+  ```json
+  {"status":"ok","database":"connected"}
+  ```
+  Responde `503` (sobre único `ApiExceptionFilter`, código `DATABASE_UNAVAILABLE`) si la
+  base no responde — nunca expone el error interno de Postgres/red/TLS al cliente.
+- `GET /v1/health` — alias de compatibilidad hacia atrás, mismo comportamiento que
+  `/v1/ready` (consumido por CI, los workflows de deploy y el `HEALTHCHECK` del
+  `Dockerfile`). Código nuevo debe preferir `/v1/live` o `/v1/ready` explícitamente.
 
 ## Pruebas disponibles
 
@@ -121,7 +131,7 @@ backend/
 ├── src/
 │   ├── main.ts                      # bootstrap: helmet, CORS, prefijo /v1, ValidationPipe
 │   ├── app.module.ts                 # módulo raíz
-│   ├── app.controller.ts             # GET /v1/health
+│   ├── app.controller.ts             # GET /v1/live, /v1/ready, /v1/health (alias)
 │   ├── config/                       # database.config.ts, cors.config.ts
 │   ├── database/database.module.ts   # pool global de pg.Pool
 │   ├── jwt/                          # TokenService (RS256), JwtModule
