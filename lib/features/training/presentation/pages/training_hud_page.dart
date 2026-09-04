@@ -30,7 +30,7 @@ class TrainingHudPage extends ConsumerStatefulWidget {
   ConsumerState<TrainingHudPage> createState() => _TrainingHudPageState();
 }
 
-enum _RouteResolutionStatus { none, loading, resolved, failed }
+enum _RouteResolutionStatus { none, loading, resolved, failed, unavailable }
 
 class _TrainingHudPageState extends ConsumerState<TrainingHudPage> {
   _RouteResolutionStatus _routeStatus = _RouteResolutionStatus.none;
@@ -72,6 +72,19 @@ class _TrainingHudPageState extends ConsumerState<TrainingHudPage> {
     if (route == null) {
       setState(() => _routeStatus = _RouteResolutionStatus.failed);
       return; // FAIL SAFE — nunca arranca controller.start() desde acá
+    }
+
+    // KORIXA-MVP-VERTICAL-SLICE-01A — defensa en profundidad: un
+    // `routeId` VÁLIDO (existe en el catálogo) pero de un tipo de
+    // contenido no soportado todavía (`video`/`terrain3d`) tampoco debe
+    // arrancar una sesión — ni siquiera vía deep-link directo
+    // (`/training?routeId=route-alpe-dhuez`) saltándose el botón
+    // deshabilitado de `RouteDetailPage`. Mismo predicado
+    // (`route.isRunnable`) que usa la UI del catálogo — nunca un id
+    // hardcodeado acá.
+    if (!route!.isRunnable) {
+      setState(() => _routeStatus = _RouteResolutionStatus.unavailable);
+      return; // FAIL SAFE — nunca arranca una ride "solo distancia" fingiendo ser una ruta de video/3D
     }
 
     setState(() => _routeStatus = _RouteResolutionStatus.resolved);
@@ -179,7 +192,15 @@ class _TrainingHudPageState extends ConsumerState<TrainingHudPage> {
     });
 
     if (_routeStatus == _RouteResolutionStatus.failed) {
-      return _RouteNotFoundView(l10n: l10n);
+      return _RouteUnavailableView(title: l10n.routeNotFoundTitle, message: l10n.routeNotFoundMessage);
+    }
+
+    if (_routeStatus == _RouteResolutionStatus.unavailable) {
+      // KORIXA-MVP-VERTICAL-SLICE-01A — distinto del caso anterior a
+      // propósito: acá la ruta SÍ existe, solo que su contenido
+      // (video/3D) no está construido todavía — un mensaje distinto evita
+      // que el usuario piense que escribió mal el id.
+      return _RouteUnavailableView(title: l10n.routeNotAvailableTitle, message: l10n.routeNotAvailableMessage);
     }
 
     if (_routeStatus == _RouteResolutionStatus.loading) {
@@ -384,19 +405,25 @@ class _TrainingHudPageState extends ConsumerState<TrainingHudPage> {
   }
 }
 
-/// KORIXA-MVP-VERTICAL-SLICE-01 — fail-safe explícito: un `routeId`
-/// inválido/inexistente NUNCA debe arrancar una sesión libre fingiendo
-/// que la ruta pedida existe. Se muestra en su lugar, con una salida
-/// clara de vuelta al catálogo — nunca un HUD "a medias".
-class _RouteNotFoundView extends StatelessWidget {
-  const _RouteNotFoundView({required this.l10n});
+/// KORIXA-MVP-VERTICAL-SLICE-01 / 01A — fail-safe explícito, con dos
+/// causas distintas que comparten la misma forma: un `routeId`
+/// inválido/inexistente (`title`/`message` = "ruta no encontrada"), o un
+/// `routeId` que SÍ existe pero cuyo contenido (video/3D) todavía no está
+/// construido (`title`/`message` = "ruta no disponible todavía"). En
+/// ningún caso arranca una sesión fingiendo que la ruta pedida está
+/// realmente disponible — siempre una salida clara de vuelta al catálogo,
+/// nunca un HUD "a medias".
+class _RouteUnavailableView extends StatelessWidget {
+  const _RouteUnavailableView({required this.title, required this.message});
 
-  final AppLocalizations l10n;
+  final String title;
+  final String message;
 
   @override
   Widget build(BuildContext context) {
+    final AppLocalizations l10n = AppLocalizations.of(context);
     return Scaffold(
-      appBar: AppBar(title: Text(l10n.routeNotFoundTitle)),
+      appBar: AppBar(title: Text(title)),
       body: SafeArea(
         child: Center(
           child: Padding(
@@ -407,7 +434,7 @@ class _RouteNotFoundView extends StatelessWidget {
                 Icon(Icons.error_outline, size: 48, color: Theme.of(context).colorScheme.error),
                 const SizedBox(height: 16),
                 Text(
-                  l10n.routeNotFoundMessage,
+                  message,
                   textAlign: TextAlign.center,
                   style: Theme.of(context).textTheme.bodyMedium,
                 ),

@@ -50,15 +50,42 @@ class RouteCard extends StatelessWidget {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: <Widget>[
-            Container(
-              height: 90,
-              width: double.infinity,
-              color: Theme.of(context).colorScheme.primaryContainer.withValues(alpha: 0.4),
-              child: Icon(
-                route.contentType.icon,
-                size: 36,
-                color: Theme.of(context).colorScheme.primary,
-              ),
+            Stack(
+              children: <Widget>[
+                Container(
+                  height: 90,
+                  width: double.infinity,
+                  color: Theme.of(context).colorScheme.primaryContainer.withValues(alpha: 0.4),
+                  child: Icon(
+                    route.contentType.icon,
+                    size: 36,
+                    color: Theme.of(context).colorScheme.primary,
+                  ),
+                ),
+                // KORIXA-MVP-VERTICAL-SLICE-01A — visible en el catálogo,
+                // ANTES de entrar al detalle: la ruta sigue listada (no se
+                // borra, no se oculta), pero queda claro de entrada que
+                // todavía no se puede entrenar.
+                if (!route.isRunnable)
+                  Positioned(
+                    top: 6,
+                    right: 6,
+                    child: Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+                      decoration: BoxDecoration(
+                        color: Theme.of(context).colorScheme.surface.withValues(alpha: 0.9),
+                        borderRadius: BorderRadius.circular(6),
+                      ),
+                      child: Text(
+                        l10n.routeComingSoonLabel,
+                        style: Theme.of(context)
+                            .textTheme
+                            .labelSmall
+                            ?.copyWith(color: Theme.of(context).colorScheme.outline, fontWeight: FontWeight.w600),
+                      ),
+                    ),
+                  ),
+              ],
             ),
             Padding(
               padding: const EdgeInsets.all(12),

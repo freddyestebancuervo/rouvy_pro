@@ -69,7 +69,23 @@ void main() {
       expect(find.byType(RoutesCatalogPage), findsOneWidget);
 
       // --- Catálogo → Detalle de una ruta ---
-      await tester.tap(find.text("Alpe d'Huez"));
+      // KORIXA-MVP-VERTICAL-SLICE-01A — "Alpe d'Huez" es
+      // `RouteContentType.video` (sin contenido de video real detrás) y,
+      // desde este fix, ya NO expone un botón de inicio activo (aviso
+      // "Próximamente" en su lugar — ver `RouteDetailPage`). Se navega en
+      // su lugar a la ruta MVP local (`RouteContentType.staticRoute`),
+      // la única realmente entrenable hoy, para seguir probando el flujo
+      // completo de punta a punta con un botón real y activo.
+      // Es la 7ª (última) entrada del catálogo — `GridView.builder` no la
+      // construye hasta que entra en viewport, así que hay que
+      // desplazarse hasta ella antes de poder tocarla.
+      await tester.scrollUntilVisible(
+        find.text('Vuelta de prueba MVP'),
+        200,
+        scrollable: find.byType(Scrollable).first,
+      );
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Vuelta de prueba MVP'));
       await tester.pumpAndSettle();
       expect(find.text('Entrenar esta ruta'), findsOneWidget);
 

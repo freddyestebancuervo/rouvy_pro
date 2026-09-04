@@ -633,6 +633,20 @@ class AppLocalizationsEs extends AppLocalizations {
   String get routeStoppedEarlyLabel => 'Detenida antes de terminar la ruta';
 
   @override
+  String get routeComingSoonLabel => 'Próximamente';
+
+  @override
+  String get routeComingSoonNote =>
+      'Esta ruta necesita contenido de video/3D que todavía no existe — no se puede iniciar hasta entonces.';
+
+  @override
+  String get routeNotAvailableTitle => 'Ruta no disponible todavía';
+
+  @override
+  String get routeNotAvailableMessage =>
+      'Esta ruta necesita contenido de video/3D que todavía no existe. Volvé y elegí una ruta disponible del catálogo.';
+
+  @override
   String get settingsTitle => 'Configuración';
 
   @override

@@ -96,30 +96,70 @@ class RouteDetailPage extends ConsumerWidget {
                         style: Theme.of(context).textTheme.bodyMedium,
                       ),
                       const SizedBox(height: 28),
-                      FilledButton.icon(
-                        // KORIXA-MVP-VERTICAL-SLICE-01 — antes navegaba a
-                        // `/training` sin ningún argumento (defecto
-                        // conocido: la ruta seleccionada nunca llegaba a
-                        // la sesión, que arrancaba como libre). Ahora
-                        // lleva el id como query param — sobrevive un
-                        // refresh en Web y GoRoute lo resuelve del lado de
-                        // `TrainingHudPage`.
-                        onPressed: () => context.push(
-                          Uri(path: AppRoute.training, queryParameters: <String, String>{'routeId': route.id})
-                              .toString(),
+                      // KORIXA-MVP-VERTICAL-SLICE-01A — solo las rutas
+                      // realmente entrenables hoy (`route.isRunnable`,
+                      // hoy únicamente `RouteContentType.staticRoute`)
+                      // exponen una acción de inicio activa. Las 6
+                      // entradas `video`/`terrain3d` siguen visibles en el
+                      // catálogo (no se borran, no se ocultan) pero
+                      // reemplazan el botón por un aviso "Próximamente" —
+                      // nunca un botón deshabilitado ambiguo, y nunca
+                      // navegación hacia `/training` para un contenido que
+                      // no existe.
+                      if (route.isRunnable) ...<Widget>[
+                        FilledButton.icon(
+                          // KORIXA-MVP-VERTICAL-SLICE-01 — antes navegaba a
+                          // `/training` sin ningún argumento (defecto
+                          // conocido: la ruta seleccionada nunca llegaba a
+                          // la sesión, que arrancaba como libre). Ahora
+                          // lleva el id como query param — sobrevive un
+                          // refresh en Web y GoRoute lo resuelve del lado de
+                          // `TrainingHudPage`.
+                          onPressed: () => context.push(
+                            Uri(path: AppRoute.training, queryParameters: <String, String>{'routeId': route.id})
+                                .toString(),
+                          ),
+                          icon: const Icon(Icons.play_arrow),
+                          label: Text(l10n.startTrainingOnRouteAction),
                         ),
-                        icon: const Icon(Icons.play_arrow),
-                        label: Text(l10n.startTrainingOnRouteAction),
-                      ),
-                      const SizedBox(height: 8),
-                      Text(
-                        l10n.routeTrainingNote,
-                        textAlign: TextAlign.center,
-                        style: Theme.of(context)
-                            .textTheme
-                            .labelSmall
-                            ?.copyWith(color: Theme.of(context).colorScheme.outline),
-                      ),
+                        const SizedBox(height: 8),
+                        Text(
+                          l10n.routeTrainingNote,
+                          textAlign: TextAlign.center,
+                          style: Theme.of(context)
+                              .textTheme
+                              .labelSmall
+                              ?.copyWith(color: Theme.of(context).colorScheme.outline),
+                        ),
+                      ] else ...<Widget>[
+                        Container(
+                          width: double.infinity,
+                          padding: const EdgeInsets.symmetric(vertical: 14),
+                          decoration: BoxDecoration(
+                            color: Theme.of(context).colorScheme.surfaceContainerHighest,
+                            borderRadius: BorderRadius.circular(12),
+                          ),
+                          child: Column(
+                            children: <Widget>[
+                              Icon(Icons.schedule, color: Theme.of(context).colorScheme.outline),
+                              const SizedBox(height: 4),
+                              Text(
+                                l10n.routeComingSoonLabel,
+                                style: Theme.of(context).textTheme.titleSmall,
+                              ),
+                            ],
+                          ),
+                        ),
+                        const SizedBox(height: 8),
+                        Text(
+                          l10n.routeComingSoonNote,
+                          textAlign: TextAlign.center,
+                          style: Theme.of(context)
+                              .textTheme
+                              .labelSmall
+                              ?.copyWith(color: Theme.of(context).colorScheme.outline),
+                        ),
+                      ],
                     ],
                   ),
                 ),

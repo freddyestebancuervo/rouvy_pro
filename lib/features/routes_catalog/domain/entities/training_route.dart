@@ -16,6 +16,18 @@ enum RouteDifficulty { easy, moderate, hard, extreme }
 /// existe mientras sigue probando el progreso real de una ride.
 enum RouteContentType { video, terrain3d, staticRoute }
 
+/// KORIXA-MVP-VERTICAL-SLICE-01A — única fuente de verdad de qué rutas
+/// son realmente entrenables HOY, usada tanto por la UI (deshabilitar el
+/// botón de inicio) como por `TrainingHudPage` (defensa en profundidad
+/// contra un deep-link directo a una ruta no soportada). Deliberadamente
+/// un predicado sobre `contentType`, nunca una lista de ids hardcodeados
+/// — cualquier ruta futura con `staticRoute` queda entrenable
+/// automáticamente, y `video`/`terrain3d` quedan bloqueadas hasta que
+/// exista contenido real (M4) sin tener que tocar este archivo otra vez.
+extension RouteContentTypeCapability on RouteContentType {
+  bool get isRunnable => this == RouteContentType.staticRoute;
+}
+
 /// Entidad de dominio del catálogo de rutas — a diferencia de
 /// `auth`/`device_connection`/`training`/`wearables`, este módulo **no
 /// tiene todavía ninguna implementación real** (ni Firestore, ni backend
@@ -49,6 +61,9 @@ class TrainingRoute extends Equatable {
 
   /// `null` para rutas 3D genéricas sin ubicación real asociada.
   final String? locationName;
+
+  /// KORIXA-MVP-VERTICAL-SLICE-01A — ver `RouteContentTypeCapability`.
+  bool get isRunnable => contentType.isRunnable;
 
   @override
   List<Object?> get props => [
