@@ -139,6 +139,7 @@ class _RegisterPageState extends ConsumerState<RegisterPage> {
               decoration: InputDecoration(
                 labelText: l10n.passwordLabel,
                 suffixIcon: Semantics(
+                  key: const Key('register-password-visibility-semantics'),
                   label: _obscurePassword ? l10n.showPasswordAction : l10n.hidePasswordAction,
                   toggled: !_obscurePassword,
                   child: IconButton(

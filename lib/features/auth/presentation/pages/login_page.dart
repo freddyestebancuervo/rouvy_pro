@@ -126,6 +126,7 @@ class _LoginPageState extends ConsumerState<LoginPage> {
                   // dirían "botón, doble toque para activar", sin
                   // que la persona sepa qué hace ni en qué estado
                   // está.
+                  key: const Key('login-password-visibility-semantics'),
                   label: _obscurePassword ? l10n.showPasswordAction : l10n.hidePasswordAction,
                   toggled: !_obscurePassword,
                   child: IconButton(

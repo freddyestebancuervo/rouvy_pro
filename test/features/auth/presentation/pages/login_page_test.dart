@@ -147,24 +147,27 @@ void main() {
 
     // El propio botón expone su estado vía `Semantics.toggled` — no solo
     // color/ícono (Sección 17: no depender solo del color para estados).
-    // Se ubica el nodo por su `Semantics.label` (el texto exacto que
-    // anuncia el lector de pantalla) en vez de `find.byType(IconButton)`:
-    // `IconButton` trae su propia semántica interna de botón, que Flutter
-    // puede fusionar en un nodo distinto al de la `Semantics(toggled:)`
-    // que lo envuelve.
+    // Se ubica el nodo por una `Key` estable puesta en el propio
+    // `Semantics(toggled:)` en vez de por su `label` (texto): el label
+    // final que ve un lector de pantalla puede fusionarse con la
+    // semántica interna de `IconButton` de forma distinta según la
+    // versión de Flutter (confirmado: pasaba localmente pero
+    // `find.bySemanticsLabel` no encontraba nada en CI, que fija Flutter
+    // 3.32.0) — la `Key` no depende de esa fusión.
     //
     // `hasFlag` (no `flagsCollection`) porque CI fija Flutter 3.32.0 (ver
     // .github/workflows/ci.yml), donde `flagsCollection` no existe todavía
     // — mismo criterio ya aplicado en dark_tech_buttons_test.dart.
+    const Key toggleKey = Key('login-password-visibility-semantics');
     // ignore: deprecated_member_use
-    expect(tester.getSemantics(find.bySemanticsLabel('Mostrar contraseña')).hasFlag(SemanticsFlag.isToggled), isFalse);
+    expect(tester.getSemantics(find.byKey(toggleKey)).hasFlag(SemanticsFlag.isToggled), isFalse);
 
     await tester.tap(find.byType(IconButton));
     await tester.pumpAndSettle();
 
     expect(tester.widget<EditableText>(passwordEditable()).obscureText, isFalse);
     // ignore: deprecated_member_use
-    expect(tester.getSemantics(find.bySemanticsLabel('Ocultar contraseña')).hasFlag(SemanticsFlag.isToggled), isTrue);
+    expect(tester.getSemantics(find.byKey(toggleKey)).hasFlag(SemanticsFlag.isToggled), isTrue);
 
     handle.dispose();
   });

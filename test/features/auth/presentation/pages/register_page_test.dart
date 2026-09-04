@@ -138,15 +138,20 @@ void main() {
         find.descendant(of: find.byType(TextFormField).at(2), matching: find.byType(EditableText));
     expect(tester.widget<EditableText>(passwordEditable).obscureText, isTrue);
 
+    // Se ubica el nodo por una `Key` estable (no por `Semantics.label`):
+    // el label final puede fusionarse con la semántica interna de
+    // `IconButton` de forma distinta según la versión de Flutter — ver
+    // nota equivalente en login_page_test.dart.
+    const Key toggleKey = Key('register-password-visibility-semantics');
     // ignore: deprecated_member_use
-    expect(tester.getSemantics(find.bySemanticsLabel('Mostrar contraseña')).hasFlag(SemanticsFlag.isToggled), isFalse);
+    expect(tester.getSemantics(find.byKey(toggleKey)).hasFlag(SemanticsFlag.isToggled), isFalse);
 
     await tester.tap(find.byType(IconButton));
     await tester.pumpAndSettle();
 
     expect(tester.widget<EditableText>(passwordEditable).obscureText, isFalse);
     // ignore: deprecated_member_use
-    expect(tester.getSemantics(find.bySemanticsLabel('Ocultar contraseña')).hasFlag(SemanticsFlag.isToggled), isTrue);
+    expect(tester.getSemantics(find.byKey(toggleKey)).hasFlag(SemanticsFlag.isToggled), isTrue);
 
     handle.dispose();
   });
