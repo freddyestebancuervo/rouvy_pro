@@ -159,7 +159,15 @@ final routerProvider = Provider<GoRouter>((Ref ref) {
       ),
       GoRoute(
         path: AppRoute.training,
-        builder: (BuildContext context, GoRouterState state) => const TrainingHudPage(),
+        // KORIXA-MVP-VERTICAL-SLICE-01 — `routeId` como query param
+        // (`/training?routeId=<id>`), no como `extra` en memoria: así
+        // sobrevive un refresh/deep-link en Web (`extra` se pierde en
+        // cualquier recarga completa, ver la doc de `GoRouterState.extra`).
+        // Ausente -> sesión libre (comportamiento histórico sin cambios).
+        builder: (BuildContext context, GoRouterState state) {
+          final String? routeId = state.uri.queryParameters['routeId'];
+          return TrainingHudPage(routeId: routeId);
+        },
       ),
       GoRoute(
         path: AppRoute.trainingSummary,

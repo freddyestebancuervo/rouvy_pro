@@ -602,11 +602,47 @@ class AppLocalizationsEn extends AppLocalizations {
   String get routeContentTerrain3d => '3D terrain';
 
   @override
+  String get routeContentStatic => 'Local route';
+
+  @override
   String get startTrainingOnRouteAction => 'Train this route';
 
   @override
   String get routeTrainingNote =>
-      'Training on this specific route (synchronized video/3D) is coming in a future module — for now it starts a free session.';
+      'Your progress is tracked by distance along this route. Synchronized video/3D playback is not implemented yet.';
+
+  @override
+  String get routeNotFoundTitle => 'Route not found';
+
+  @override
+  String get routeNotFoundMessage =>
+      'This route could not be loaded. Go back and pick another one from the catalog.';
+
+  @override
+  String get backToRoutesAction => 'Back to routes';
+
+  @override
+  String get routeProgressLabel => 'Route progress';
+
+  @override
+  String get routeCompletedLabel => 'Route completed';
+
+  @override
+  String get routeStoppedEarlyLabel => 'Stopped before finishing the route';
+
+  @override
+  String get routeComingSoonLabel => 'Coming soon';
+
+  @override
+  String get routeComingSoonNote =>
+      'This route needs video/3D content that isn\'t built yet — you can\'t start it until then.';
+
+  @override
+  String get routeNotAvailableTitle => 'Route not available yet';
+
+  @override
+  String get routeNotAvailableMessage =>
+      'This route needs video/3D content that isn\'t built yet. Go back and pick an available route from the catalog.';
 
   @override
   String get settingsTitle => 'Settings';

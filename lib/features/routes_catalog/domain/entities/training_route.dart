@@ -2,7 +2,31 @@ import 'package:equatable/equatable.dart';
 
 enum RouteDifficulty { easy, moderate, hard, extreme }
 
-enum RouteContentType { video, terrain3d }
+/// `video`/`terrain3d`: contenido audiovisual sincronizado que **no existe
+/// todavía** — hoy son solo una etiqueta descriptiva sobre las 6 entradas
+/// fijas de `RoutesMockDataSource`, sin ningún video ni motor 3D real
+/// detrás (ver KORIXA-MVP-ROUTEFIRST-01, hallazgo de auditoría
+/// independiente: esas 6 entradas no deben presentarse como prueba de un
+/// contenido real).
+///
+/// `staticRoute`: lo único honesto de representar hoy — una ruta con
+/// distancia/desnivel fijos, sin ningún contenido audiovisual ni de
+/// terreno generado asociado. Es el tipo que usa la ruta MVP de Route-First
+/// (KORIXA-MVP-VERTICAL-SLICE-01) para no reclamar un video/3D que no
+/// existe mientras sigue probando el progreso real de una ride.
+enum RouteContentType { video, terrain3d, staticRoute }
+
+/// KORIXA-MVP-VERTICAL-SLICE-01A — única fuente de verdad de qué rutas
+/// son realmente entrenables HOY, usada tanto por la UI (deshabilitar el
+/// botón de inicio) como por `TrainingHudPage` (defensa en profundidad
+/// contra un deep-link directo a una ruta no soportada). Deliberadamente
+/// un predicado sobre `contentType`, nunca una lista de ids hardcodeados
+/// — cualquier ruta futura con `staticRoute` queda entrenable
+/// automáticamente, y `video`/`terrain3d` quedan bloqueadas hasta que
+/// exista contenido real (M4) sin tener que tocar este archivo otra vez.
+extension RouteContentTypeCapability on RouteContentType {
+  bool get isRunnable => this == RouteContentType.staticRoute;
+}
 
 /// Entidad de dominio del catálogo de rutas — a diferencia de
 /// `auth`/`device_connection`/`training`/`wearables`, este módulo **no
@@ -37,6 +61,9 @@ class TrainingRoute extends Equatable {
 
   /// `null` para rutas 3D genéricas sin ubicación real asociada.
   final String? locationName;
+
+  /// KORIXA-MVP-VERTICAL-SLICE-01A — ver `RouteContentTypeCapability`.
+  bool get isRunnable => contentType.isRunnable;
 
   @override
   List<Object?> get props => [

@@ -1,10 +1,18 @@
 import '../../domain/entities/training_route.dart';
 
-/// Catálogo fijo de 6 rutas — hoy es la ÚNICA fuente de datos de este
+/// Catálogo fijo de 7 rutas — hoy es la ÚNICA fuente de datos de este
 /// módulo (no hay Firestore ni backend real todavía para rutas). Cuando
 /// se implemente uno real, este archivo se sustituye por un datasource
 /// que sí llame a esa fuente, sin tocar `RoutesRepository` ni ninguna
 /// capa por encima.
+///
+/// KORIXA-MVP-VERTICAL-SLICE-01 — de las 7, 6 (`RouteContentType.video`/
+/// `terrain3d`) siguen siendo únicamente etiquetas descriptivas de un
+/// futuro módulo M4 (sin video ni 3D real detrás, ver el docblock de
+/// `RouteContentType`). La séptima (`route-mvp-local-loop`,
+/// `RouteContentType.staticRoute`) es la única que este slice usa para
+/// probar una ride real de principio a fin — no reclama ningún contenido
+/// audiovisual ni geográfico verificado, solo una distancia fija.
 abstract class RoutesMockDataSource {
   static List<TrainingRoute> fetchAll() => _catalog;
 
@@ -104,6 +112,26 @@ abstract class RoutesMockDataSource {
       descriptionEn:
           'Video of a calm ride through flat rural areas — designed for '
           'active recovery days, with no real physical demand.',
+    ),
+    TrainingRoute(
+      id: 'route-mvp-local-loop',
+      name: 'Vuelta de prueba MVP',
+      distanceMeters: 3000,
+      elevationGainMeters: 0,
+      difficulty: RouteDifficulty.easy,
+      contentType: RouteContentType.staticRoute,
+      descriptionEs:
+          'Ruta local de prueba del Route-First MVP: solo distancia fija '
+          '(3 km, sin desnivel real medido). Sin video ni terreno 3D — '
+          'sirve para probar de punta a punta que la app rastrea tu '
+          'progreso real (telemetría → distancia → % de ruta) mientras '
+          'pedaleás, no para representar un lugar ni un paisaje real.',
+      descriptionEn:
+          'Local test route for the Route-First MVP: fixed distance only '
+          '(3 km, no real elevation measured). No video, no 3D terrain — '
+          'it exists to prove the app tracks your real progress '
+          '(telemetry → distance → route %) while you ride, not to '
+          'represent an actual place or scenery.',
     ),
   ];
 }

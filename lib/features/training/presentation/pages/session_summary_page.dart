@@ -77,6 +77,45 @@ class _SessionSummaryPageState extends ConsumerState<SessionSummaryPage> {
                     style: Theme.of(context).textTheme.headlineSmall,
                   ),
                   const SizedBox(height: 24),
+                  // KORIXA-MVP-VERTICAL-SLICE-01 — solo para sesiones
+                  // "route-aware" (`routeName != null`); una sesión libre
+                  // no muestra esta tarjeta, comportamiento histórico intacto.
+                  if (summary.routeName != null) ...<Widget>[
+                    Card(
+                      child: Padding(
+                        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+                        child: Row(
+                          children: <Widget>[
+                            Icon(
+                              summary.routeCompleted == true ? Icons.flag_circle : Icons.flag_outlined,
+                              color: summary.routeCompleted == true
+                                  ? Theme.of(context).colorScheme.primary
+                                  : Theme.of(context).colorScheme.outline,
+                            ),
+                            const SizedBox(width: 12),
+                            Expanded(
+                              child: Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: <Widget>[
+                                  Text(summary.routeName!, style: Theme.of(context).textTheme.titleSmall),
+                                  Text(
+                                    summary.routeCompleted == true
+                                        ? l10n.routeCompletedLabel
+                                        : l10n.routeStoppedEarlyLabel,
+                                    style: Theme.of(context)
+                                        .textTheme
+                                        .bodySmall
+                                        ?.copyWith(color: Theme.of(context).colorScheme.outline),
+                                  ),
+                                ],
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ),
+                    const SizedBox(height: 12),
+                  ],
                   Card(
                     child: Padding(
                       padding: const EdgeInsets.all(20),

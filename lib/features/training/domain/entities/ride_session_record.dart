@@ -22,6 +22,10 @@ class RideSessionRecord extends Equatable {
     this.lastCadenceRpm,
     this.lastHeartRateBpm,
     this.deviceCount = 0,
+    this.routeId,
+    this.routeName,
+    this.routeDistanceMeters,
+    this.routeCompleted,
   });
 
   final String id;
@@ -41,6 +45,17 @@ class RideSessionRecord extends Equatable {
 
   final int deviceCount;
 
+  /// KORIXA-MVP-VERTICAL-SLICE-01 — `null` en los cuatro para una sesión
+  /// libre grabada antes (o después) de este slice; registros viejos sin
+  /// estos campos en Firestore se parsean igual (ver
+  /// `RideSessionRecordModel.fromMap`), nunca fallan por su ausencia.
+  final String? routeId;
+  final String? routeName;
+  final double? routeDistanceMeters;
+  final bool? routeCompleted;
+
+  bool get isRouteBacked => routeId != null;
+
   Duration get duration => endTime.difference(startTime);
 
   @override
@@ -54,5 +69,9 @@ class RideSessionRecord extends Equatable {
         lastCadenceRpm,
         lastHeartRateBpm,
         deviceCount,
+        routeId,
+        routeName,
+        routeDistanceMeters,
+        routeCompleted,
       ];
 }

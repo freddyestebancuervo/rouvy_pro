@@ -1202,6 +1202,12 @@ abstract class AppLocalizations {
   /// **'Terreno 3D'**
   String get routeContentTerrain3d;
 
+  /// No description provided for @routeContentStatic.
+  ///
+  /// In es, this message translates to:
+  /// **'Ruta local'**
+  String get routeContentStatic;
+
   /// No description provided for @startTrainingOnRouteAction.
   ///
   /// In es, this message translates to:
@@ -1211,8 +1217,68 @@ abstract class AppLocalizations {
   /// No description provided for @routeTrainingNote.
   ///
   /// In es, this message translates to:
-  /// **'El entrenamiento con esta ruta específica (video/3D sincronizado) llega en un módulo futuro — por ahora inicia una sesión libre.'**
+  /// **'Tu progreso se rastrea por distancia a lo largo de esta ruta. La reproducción de video/3D sincronizado todavía no está implementada.'**
   String get routeTrainingNote;
+
+  /// No description provided for @routeNotFoundTitle.
+  ///
+  /// In es, this message translates to:
+  /// **'Ruta no encontrada'**
+  String get routeNotFoundTitle;
+
+  /// No description provided for @routeNotFoundMessage.
+  ///
+  /// In es, this message translates to:
+  /// **'No se pudo cargar esta ruta. Volvé y elegí otra desde el catálogo.'**
+  String get routeNotFoundMessage;
+
+  /// No description provided for @backToRoutesAction.
+  ///
+  /// In es, this message translates to:
+  /// **'Volver a rutas'**
+  String get backToRoutesAction;
+
+  /// No description provided for @routeProgressLabel.
+  ///
+  /// In es, this message translates to:
+  /// **'Progreso de ruta'**
+  String get routeProgressLabel;
+
+  /// No description provided for @routeCompletedLabel.
+  ///
+  /// In es, this message translates to:
+  /// **'Ruta completada'**
+  String get routeCompletedLabel;
+
+  /// No description provided for @routeStoppedEarlyLabel.
+  ///
+  /// In es, this message translates to:
+  /// **'Detenida antes de terminar la ruta'**
+  String get routeStoppedEarlyLabel;
+
+  /// No description provided for @routeComingSoonLabel.
+  ///
+  /// In es, this message translates to:
+  /// **'Próximamente'**
+  String get routeComingSoonLabel;
+
+  /// No description provided for @routeComingSoonNote.
+  ///
+  /// In es, this message translates to:
+  /// **'Esta ruta necesita contenido de video/3D que todavía no existe — no se puede iniciar hasta entonces.'**
+  String get routeComingSoonNote;
+
+  /// No description provided for @routeNotAvailableTitle.
+  ///
+  /// In es, this message translates to:
+  /// **'Ruta no disponible todavía'**
+  String get routeNotAvailableTitle;
+
+  /// No description provided for @routeNotAvailableMessage.
+  ///
+  /// In es, this message translates to:
+  /// **'Esta ruta necesita contenido de video/3D que todavía no existe. Volvé y elegí una ruta disponible del catálogo.'**
+  String get routeNotAvailableMessage;
 
   /// No description provided for @settingsTitle.
   ///

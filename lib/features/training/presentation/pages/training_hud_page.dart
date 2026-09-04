@@ -6,42 +6,108 @@ import '../../../../app/router/app_router.dart';
 import '../../../../core/utils/duration_formatter.dart';
 import '../../../../l10n/generated/app_localizations.dart';
 import '../../../device_connection/domain/entities/aggregated_telemetry.dart';
+import '../../../routes_catalog/domain/entities/training_route.dart';
+import '../../../routes_catalog/presentation/providers/routes_providers.dart';
 import '../../data/datasources/ride_session_snapshot_local_datasource.dart';
+import '../../domain/entities/ride_session_target.dart';
 import '../providers/ride_session_controller.dart';
 import '../widgets/metric_display.dart';
 
-/// HUD de entrenamiento libre — sin ruta de video/3D todavía (eso llega
-/// con el módulo de rutas, M4). Consume directamente la telemetría
-/// combinada de `device_connection` a través de `RideSessionController`.
+/// HUD de entrenamiento — libre (sin ruta) o "route-aware"
+/// (KORIXA-MVP-VERTICAL-SLICE-01, `routeId` recibido por query param desde
+/// `RouteDetailPage`). Sin video/3D sincronizado todavía (eso llega con un
+/// módulo M4 posterior) — acá "ruta" significa únicamente distancia
+/// objetivo y progreso propio, nunca contenido audiovisual. Consume
+/// directamente la telemetría combinada de `device_connection` a través de
+/// `RideSessionController`.
 class TrainingHudPage extends ConsumerStatefulWidget {
-  const TrainingHudPage({super.key});
+  const TrainingHudPage({this.routeId, super.key});
+
+  /// `null` → sesión libre, comportamiento histórico sin cambios.
+  final String? routeId;
 
   @override
   ConsumerState<TrainingHudPage> createState() => _TrainingHudPageState();
 }
 
+enum _RouteResolutionStatus { none, loading, resolved, failed, unavailable }
+
 class _TrainingHudPageState extends ConsumerState<TrainingHudPage> {
+  _RouteResolutionStatus _routeStatus = _RouteResolutionStatus.none;
+
+  /// Evita una segunda navegación si, por lo que sea, `ref.listen` viera
+  /// más de una transición a `finished` (defensivo — `finish()` en el
+  /// controller ya es idempotente por su cuenta).
+  bool _navigatedToSummary = false;
+
   @override
   void initState() {
     super.initState();
     // Igual que en `DeviceScanSheet`: se difiere al final del frame actual
     // porque arrancar la sesión dispara `state =` y Flutter no permite
     // eso durante el build inicial del widget.
-    WidgetsBinding.instance.addPostFrameCallback((_) => _startOrOfferRecovery());
+    WidgetsBinding.instance.addPostFrameCallback((_) => _resolveRouteThenStart());
+  }
+
+  /// Resuelve `widget.routeId` (si vino uno) ANTES de arrancar cualquier
+  /// sesión — requisito explícito: un `routeId` inválido/inexistente
+  /// nunca debe caer en silencio a una sesión libre fingiendo que la
+  /// ruta existe (fail-safe). Reusa `routesRepositoryProvider`
+  /// (`routes_catalog`), que ya devuelve `Left(Failure)` para un id
+  /// desconocido — ver `RoutesRepositoryImpl.fetchById`.
+  Future<void> _resolveRouteThenStart() async {
+    if (widget.routeId == null) {
+      await _startOrOfferRecovery(target: null);
+      return;
+    }
+
+    setState(() => _routeStatus = _RouteResolutionStatus.loading);
+
+    final result = await ref.read(routesRepositoryProvider).fetchById(widget.routeId!);
+    if (!mounted) return;
+
+    TrainingRoute? route;
+    result.fold((_) => route = null, (r) => route = r);
+
+    if (route == null) {
+      setState(() => _routeStatus = _RouteResolutionStatus.failed);
+      return; // FAIL SAFE — nunca arranca controller.start() desde acá
+    }
+
+    // KORIXA-MVP-VERTICAL-SLICE-01A — defensa en profundidad: un
+    // `routeId` VÁLIDO (existe en el catálogo) pero de un tipo de
+    // contenido no soportado todavía (`video`/`terrain3d`) tampoco debe
+    // arrancar una sesión — ni siquiera vía deep-link directo
+    // (`/training?routeId=route-alpe-dhuez`) saltándose el botón
+    // deshabilitado de `RouteDetailPage`. Mismo predicado
+    // (`route.isRunnable`) que usa la UI del catálogo — nunca un id
+    // hardcodeado acá.
+    if (!route!.isRunnable) {
+      setState(() => _routeStatus = _RouteResolutionStatus.unavailable);
+      return; // FAIL SAFE — nunca arranca una ride "solo distancia" fingiendo ser una ruta de video/3D
+    }
+
+    setState(() => _routeStatus = _RouteResolutionStatus.resolved);
+    final RideSessionTarget target = RideSessionTarget(
+      routeId: route!.id,
+      routeName: route!.name,
+      routeTotalDistanceMeters: route!.distanceMeters,
+    );
+    await _startOrOfferRecovery(target: target);
   }
 
   /// Tarea B1 del roadmap: antes de arrancar una sesión nueva, comprueba
   /// si quedó un snapshot de una sesión anterior sin finalizar (cierre
   /// inesperado de la app) y, si lo hay, deja elegir al usuario en vez de
   /// descartarlo en silencio.
-  Future<void> _startOrOfferRecovery() async {
+  Future<void> _startOrOfferRecovery({required RideSessionTarget? target}) async {
     final controller = ref.read(rideSessionControllerProvider.notifier);
     final RideSessionSnapshotData? recoverable = await controller.checkForRecoverableSnapshot();
 
     if (!mounted) return;
 
     if (recoverable == null) {
-      controller.start();
+      controller.start(target: target);
       return;
     }
 
@@ -76,7 +142,7 @@ class _TrainingHudPageState extends ConsumerState<TrainingHudPage> {
       controller.resumeFromSnapshot(recoverable);
     } else {
       await controller.discardRecoverableSnapshot();
-      controller.start();
+      controller.start(target: target);
     }
   }
 
@@ -101,13 +167,49 @@ class _TrainingHudPageState extends ConsumerState<TrainingHudPage> {
 
     if (confirmed != true || !mounted) return;
 
+    // KORIXA-MVP-VERTICAL-SLICE-01 — solo cambia la fase; la navegación
+    // real vive en un único `ref.listen` en `build()`, que reacciona a
+    // ESTA transición (finalización manual) exactamente igual que a una
+    // finalización automática por ruta completada — un solo punto de
+    // navegación para ambos casos, sin duplicar el push.
     ref.read(rideSessionControllerProvider.notifier).finish();
-    context.pushReplacement(AppRoute.trainingSummary);
   }
 
   @override
   Widget build(BuildContext context) {
     final AppLocalizations l10n = AppLocalizations.of(context);
+
+    // Navega al resumen exactamente una vez, al ver la transición a
+    // `finished` — cubre TANTO la finalización manual (botón/back gesture,
+    // `_handleFinish`) COMO la automática por ruta completada
+    // (`RideSessionController._maybeAutoCompleteRoute`), sin que el
+    // controller (dominio) toque `BuildContext`/navegación.
+    ref.listen<RideSessionState>(rideSessionControllerProvider, (RideSessionState? previous, RideSessionState next) {
+      if (_navigatedToSummary) return;
+      if (next.phase != RideSessionPhase.finished) return;
+      _navigatedToSummary = true;
+      context.pushReplacement(AppRoute.trainingSummary);
+    });
+
+    if (_routeStatus == _RouteResolutionStatus.failed) {
+      return _RouteUnavailableView(title: l10n.routeNotFoundTitle, message: l10n.routeNotFoundMessage);
+    }
+
+    if (_routeStatus == _RouteResolutionStatus.unavailable) {
+      // KORIXA-MVP-VERTICAL-SLICE-01A — distinto del caso anterior a
+      // propósito: acá la ruta SÍ existe, solo que su contenido
+      // (video/3D) no está construido todavía — un mensaje distinto evita
+      // que el usuario piense que escribió mal el id.
+      return _RouteUnavailableView(title: l10n.routeNotAvailableTitle, message: l10n.routeNotAvailableMessage);
+    }
+
+    if (_routeStatus == _RouteResolutionStatus.loading) {
+      // Evita mostrar brevemente el HUD en fase `idle` (telemetría en
+      // cero) mientras todavía se resuelve la ruta — el usuario nunca
+      // debe ver un HUD "arrancado" antes de saber si la ruta existe.
+      return const Scaffold(body: Center(child: CircularProgressIndicator()));
+    }
+
     final RideSessionState session = ref.watch(rideSessionControllerProvider);
     final AggregatedTelemetry t = session.telemetry;
 
@@ -149,6 +251,48 @@ class _TrainingHudPageState extends ConsumerState<TrainingHudPage> {
                       const SizedBox(width: 8),
                       Expanded(
                         child: Text(l10n.noDevicesConnectedHint, style: Theme.of(context).textTheme.bodySmall),
+                      ),
+                    ],
+                  ),
+                ),
+              // KORIXA-MVP-VERTICAL-SLICE-01 — solo visible en una sesión
+              // "route-aware"; una sesión libre (`target == null`) no
+              // muestra ninguna barra de progreso, comportamiento
+              // histórico intacto.
+              if (session.isRouteBacked)
+                Padding(
+                  padding: const EdgeInsets.fromLTRB(16, 12, 16, 0),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: <Widget>[
+                      Row(
+                        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                        children: <Widget>[
+                          Expanded(
+                            child: Text(
+                              session.target!.routeName,
+                              style: Theme.of(context).textTheme.labelLarge,
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                            ),
+                          ),
+                          Text(
+                            '${(session.routeProgress * 100).toStringAsFixed(0)}%',
+                            style: Theme.of(context)
+                                .textTheme
+                                .labelLarge
+                                ?.copyWith(fontWeight: FontWeight.w700),
+                          ),
+                        ],
+                      ),
+                      const SizedBox(height: 6),
+                      ClipRRect(
+                        borderRadius: BorderRadius.circular(6),
+                        child: LinearProgressIndicator(
+                          value: session.routeProgress,
+                          minHeight: 8,
+                          semanticsLabel: l10n.routeProgressLabel,
+                        ),
                       ),
                     ],
                   ),
@@ -254,6 +398,53 @@ class _TrainingHudPageState extends ConsumerState<TrainingHudPage> {
                 ),
               ),
             ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+/// KORIXA-MVP-VERTICAL-SLICE-01 / 01A — fail-safe explícito, con dos
+/// causas distintas que comparten la misma forma: un `routeId`
+/// inválido/inexistente (`title`/`message` = "ruta no encontrada"), o un
+/// `routeId` que SÍ existe pero cuyo contenido (video/3D) todavía no está
+/// construido (`title`/`message` = "ruta no disponible todavía"). En
+/// ningún caso arranca una sesión fingiendo que la ruta pedida está
+/// realmente disponible — siempre una salida clara de vuelta al catálogo,
+/// nunca un HUD "a medias".
+class _RouteUnavailableView extends StatelessWidget {
+  const _RouteUnavailableView({required this.title, required this.message});
+
+  final String title;
+  final String message;
+
+  @override
+  Widget build(BuildContext context) {
+    final AppLocalizations l10n = AppLocalizations.of(context);
+    return Scaffold(
+      appBar: AppBar(title: Text(title)),
+      body: SafeArea(
+        child: Center(
+          child: Padding(
+            padding: const EdgeInsets.all(24),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: <Widget>[
+                Icon(Icons.error_outline, size: 48, color: Theme.of(context).colorScheme.error),
+                const SizedBox(height: 16),
+                Text(
+                  message,
+                  textAlign: TextAlign.center,
+                  style: Theme.of(context).textTheme.bodyMedium,
+                ),
+                const SizedBox(height: 24),
+                FilledButton(
+                  onPressed: () => context.go(AppRoute.routesCatalog),
+                  child: Text(l10n.backToRoutesAction),
+                ),
+              ],
+            ),
           ),
         ),
       ),
