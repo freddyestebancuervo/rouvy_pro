@@ -183,13 +183,14 @@ inert skeleton**:
 - No `google-github-actions/auth` step, no `gcloud`/`docker`/`firebase`
   command anywhere in the file.
 - Its only job always fails explicitly (`exit 1`) with a message naming the
-  missing Human Gates for resource provisioning (Phase 21C/D/E). That
-  message's literal text still mentions "D8... sin reconciliar" — written
-  before the D8 reconciliation audit above — which is now stale prose, not
-  a functional problem: the workflow remains correctly inert regardless of
-  its message wording, since it fails unconditionally either way. Updating
-  that text is optional documentation debt, not a blocker to anything in
-  this contract.
+  missing Human Gates for resource provisioning (Phase 21C/D/E). This debt
+  is now resolved (`KORIXA-PR117-FINAL-D8-WORKFLOW-REMEDIATION-20260903`):
+  the message no longer claims D8 is unreconciled — it states D8 is
+  satisfied and names the still-pending resource-creation gates (21C/21D/
+  21E) as the actual, current reason Staging remains unauthorized.
+  Regression-tested by `backend/src/ops/staging-workflow-contract.spec.ts`,
+  which now asserts the old stale token is absent and the current-state
+  wording is present.
 - Contains zero identifiers — project ID, project number, WIF provider,
   service account, Cloud Run service name, Cloud SQL instance name — from
   either Production or Development. Verified by
