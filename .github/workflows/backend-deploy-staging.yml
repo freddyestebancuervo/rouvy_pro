@@ -1,15 +1,19 @@
 name: Backend — publish Staging (SKELETON — mechanically inert, no real resources)
 
-# TASK21-PHASE21B (T-F1.3, Fase 21B — preparación provider-neutral). Este
+# TASK21-PHASE21B (T-F1.3, Fase 21B — preparación provider-neutral),
+# actualizado por KORIXA-PR117-FINAL-D8-WORKFLOW-REMEDIATION-20260903. Este
 # archivo es DELIBERADAMENTE un esqueleto sin capacidad de despliegue
 # real — no existe ningún proyecto GCP/Firebase de staging (Fase 21A,
 # `docs/audits/AUDITORIA_FINAL/23_MATRIZ_FORMAL_ENTORNOS.md`: "No
 # iniciado" en las 16 dimensiones), ningún WIF provider, ninguna cuenta
 # de servicio, ningún Cloud Run service, ninguna Cloud SQL/Postgres
-# instance. Además, `Documento 15 §D8` (reconfirmado en el Documento 23,
-# fila 16) pospuso deliberadamente TODA creación de recurso de Staging
-# hasta que Development esté completo — decisión del propietario, no
-# resuelta todavía (`D8_STAGING_POSTPONEMENT_UNRECONCILED`).
+# instance. La condición de la decisión D8 del propietario (Documento 15
+# §D8) ya está SATISFECHA — la auditoría de reconciliación dedicada
+# (`TASK21-D8-STAGING-RECONCILIATION-PREFLIGHT-20260903`) probó en vivo
+# que las 10 puertas de Development están cumplidas; D8 ya NO bloquea
+# Staging. Eso NO autoriza, por sí solo, crear ningún recurso real de
+# Staging — la creación de esos recursos sigue exigiendo sus propios
+# Human Gates explícitos y separados (Fases 21C/21D/21E de T-F1.3).
 #
 # Por eso este workflow:
 #   - NO otorga el permiso OIDC de emisión de token — no hay ningún step
@@ -48,8 +52,8 @@ jobs:
     timeout-minutes: 5
     permissions: {}
     steps:
-      - name: Bloquear siempre — ningún recurso de Staging existe, D8 sin reconciliar
+      - name: Bloquear siempre — ningún recurso real de Staging existe todavía (D8 ya satisfecha, no es el bloqueo)
         shell: bash
         run: |
-          echo "::error::HOLD_STAGING_DEPLOY_NOT_AUTHORIZED — este workflow es un esqueleto provider-neutral (TASK21-PHASE21B). No existe ningún proyecto GCP/Firebase de staging, ningún WIF provider, ninguna cuenta de servicio, ningún Cloud Run service ni ninguna base de datos de staging (Documento 23, Matriz Formal de Entornos: 'No iniciado' en las 16 dimensiones). Además, la decisión D8 del propietario (Documento 15, reconfirmada en el Documento 23 fila 16) pospuso deliberadamente la creación de cualquier recurso de Staging hasta que Development esté completo — todavía sin reconciliar (D8_STAGING_POSTPONEMENT_UNRECONCILED=YES). Este dispatch nunca desplegará nada, sin importar qué inputs se le den, hasta que: (1) el propietario reconcilie D8, y (2) las Fases 21C/21D/21E de T-F1.3 provisionen los recursos reales bajo sus propios Human Gates explícitos."
+          echo "::error::HOLD_STAGING_DEPLOY_NOT_AUTHORIZED — este workflow es un esqueleto provider-neutral (TASK21-PHASE21B). No existe ningún proyecto GCP/Firebase de staging, ningún WIF provider, ninguna cuenta de servicio, ningún Cloud Run service ni ninguna base de datos de staging (Documento 23, Matriz Formal de Entornos: 'No iniciado' en las 16 dimensiones). La decisión D8 del propietario (Documento 15) ya está SATISFECHA — reconciliada de forma independiente y en vivo (TASK21-D8-STAGING-RECONCILIATION-PREFLIGHT-20260903) — y ya NO es la razón de este bloqueo. Este dispatch nunca desplegará nada, sin importar qué inputs se le den, hasta que las Fases 21C/21D/21E de T-F1.3 provisionen los recursos reales de Staging bajo sus propios Human Gates explícitos y separados (creación del proyecto Firebase/GCP, decisión del proveedor de PostgreSQL, e infraestructura real)."
           exit 1

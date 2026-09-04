@@ -18,7 +18,13 @@ import * as path from 'path';
  * job de deploy).
  */
 const WORKFLOW_PATH = path.resolve(__dirname, '../../../.github/workflows/backend-deploy-staging.yml');
-const source = fs.readFileSync(WORKFLOW_PATH, 'utf8');
+// Normalizado a LF: un checkout local con `core.autocrlf=true` (Windows)
+// convierte este YAML a CRLF, lo que rompería cada regex ancorado a `\n`
+// de abajo sin cambiar nada del contenido real que se está probando.
+// GitHub Actions (runners Linux) nunca aplica esa conversión, así que
+// esto no oculta ningún comportamiento distinto en CI — solo hace la
+// prueba correcta en cualquier entorno de checkout.
+const source = fs.readFileSync(WORKFLOW_PATH, 'utf8').replace(/\r\n/g, '\n');
 
 // Identificadores reales conocidos de Development y Producción — nunca
 // deben aparecer en el esqueleto de Staging. Extraídos de los propios
@@ -80,9 +86,27 @@ describe('backend-deploy-staging.yml — esqueleto inerte, provider-neutral (TAS
     expect(source).toMatch(/HOLD_STAGING_DEPLOY_NOT_AUTHORIZED/);
   });
 
-  it('el mensaje de guard documenta la razón exacta (D8 sin reconciliar, sin recursos de staging) — nunca un fallo silencioso/genérico', () => {
-    expect(source).toMatch(/D8_STAGING_POSTPONEMENT_UNRECONCILED/);
+  // KORIXA-PR117-FINAL-D8-WORKFLOW-REMEDIATION-20260903 — D8 fue
+  // reconciliada (TASK21-D8-STAGING-RECONCILIATION-PREFLIGHT-20260903,
+  // prueba en vivo de las 10 puertas de Development). El token viejo
+  // (`D8_STAGING_POSTPONEMENT_UNRECONCILED`) afirmaba lo contrario y ya
+  // no es verdad — su presencia sería, en sí misma, un hallazgo de
+  // regresión documental, no solo un detalle de redacción.
+  it('NUNCA contiene el token viejo D8_STAGING_POSTPONEMENT_UNRECONCILED — D8 ya está reconciliada, afirmar lo contrario sería una regresión documental', () => {
+    expect(source).not.toMatch(/D8_STAGING_POSTPONEMENT_UNRECONCILED/);
+  });
+
+  it('el mensaje de guard documenta el estado ACTUAL de D8 (satisfecha, ya no es el bloqueo) — nunca la afirma como sin resolver', () => {
+    expect(source).toMatch(/D8[^\n]*SATISFECHA/);
+    expect(source).toMatch(/ya NO (es|bloquea)/);
     expect(source).toMatch(/Documento 23/);
+  });
+
+  it('el mensaje de guard sigue nombrando las Fases 21C/21D/21E como los Human Gates reales pendientes — Staging sigue sin autorización de creación de recursos, D8 satisfecha o no', () => {
+    expect(source).toMatch(/21C/);
+    expect(source).toMatch(/21D/);
+    expect(source).toMatch(/21E/);
+    expect(source).toMatch(/HOLD_STAGING_DEPLOY_NOT_AUTHORIZED/);
   });
 
   it('permissions de nivel de archivo se limitan a contents: read — nunca write, nunca id-token', () => {
