@@ -1,5 +1,7 @@
 import 'package:dartz/dartz.dart';
+import 'package:flutter/foundation.dart' show debugDefaultTargetPlatformOverride;
 import 'package:flutter/material.dart';
+import 'package:flutter/semantics.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:mocktail/mocktail.dart';
@@ -10,6 +12,7 @@ import 'package:rouvy_pro/features/auth/domain/usecases/sign_in_with_apple_useca
 import 'package:rouvy_pro/features/auth/domain/usecases/sign_in_with_google_usecase.dart';
 import 'package:rouvy_pro/features/auth/presentation/pages/register_page.dart';
 import 'package:rouvy_pro/features/auth/presentation/providers/auth_providers.dart';
+import 'package:rouvy_pro/features/auth/presentation/widgets/social_sign_in_buttons.dart';
 
 import 'auth_page_test_utils.dart';
 
@@ -124,6 +127,66 @@ void main() {
     await tester.pumpAndSettle();
 
     expect(find.text('EMAIL_VERIFICATION'), findsOneWidget);
+  });
+
+  testWidgets('el toggle de visibilidad de contraseña mantiene su semántica', (WidgetTester tester) async {
+    final SemanticsHandle handle = tester.ensureSemantics();
+
+    await pumpRegisterPage(tester, repository);
+
+    final Finder passwordEditable =
+        find.descendant(of: find.byType(TextFormField).at(2), matching: find.byType(EditableText));
+    expect(tester.widget<EditableText>(passwordEditable).obscureText, isTrue);
+
+    // ignore: deprecated_member_use
+    expect(tester.getSemantics(find.bySemanticsLabel('Mostrar contraseña')).hasFlag(SemanticsFlag.isToggled), isFalse);
+
+    await tester.tap(find.byType(IconButton));
+    await tester.pumpAndSettle();
+
+    expect(tester.widget<EditableText>(passwordEditable).obscureText, isFalse);
+    // ignore: deprecated_member_use
+    expect(tester.getSemantics(find.bySemanticsLabel('Ocultar contraseña')).hasFlag(SemanticsFlag.isToggled), isTrue);
+
+    handle.dispose();
+  });
+
+  testWidgets('Iniciar sesión (link) sigue navegando a Login', (WidgetTester tester) async {
+    await pumpRegisterPage(tester, repository);
+
+    // El formulario de Register es más largo que el viewport de prueba por
+    // defecto — el link vive dentro del `SingleChildScrollView` del shell,
+    // hay que desplazarlo a la vista antes de tocarlo.
+    await tester.ensureVisible(find.text('Inicia sesión'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Inicia sesión'));
+    await tester.pumpAndSettle();
+
+    expect(find.text('LOGIN'), findsOneWidget);
+  });
+
+  testWidgets('el botón de Apple solo aparece en la plataforma Apple soportada', (WidgetTester tester) async {
+    await pumpRegisterPage(tester, repository);
+    expect(find.byType(AppleSignInButton), findsNothing);
+
+    debugDefaultTargetPlatformOverride = TargetPlatform.iOS;
+    await pumpRegisterPage(tester, repository);
+    expect(find.byType(AppleSignInButton), findsOneWidget);
+
+    debugDefaultTargetPlatformOverride = null;
+  });
+
+  testWidgets('el botón de Google Sign-In navega a Home cuando el proveedor social tiene éxito',
+      (WidgetTester tester) async {
+    when(() => repository.signInWithGoogle()).thenAnswer((_) async => const Right(tUser));
+
+    await pumpRegisterPage(tester, repository);
+    await tester.ensureVisible(find.byType(GoogleSignInButton));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byType(GoogleSignInButton));
+    await tester.pumpAndSettle();
+
+    expect(find.text('HOME'), findsOneWidget);
   });
 
   testWidgets('muestra un SnackBar con el mensaje de error cuando el registro falla',

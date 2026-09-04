@@ -16,7 +16,7 @@ class AppLocalizationsEn extends AppLocalizations {
 
   @override
   String get welcomeSubtitle =>
-      'Real-world routes, live multiplayer and AI training plans — all in a faster app.';
+      'Real-world routes and focused indoor training, in one fast app.';
 
   @override
   String get welcomeCreateAccount => 'Create account';

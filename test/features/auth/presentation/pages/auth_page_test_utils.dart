@@ -25,6 +25,7 @@ Widget _placeholder(String label) => Scaffold(body: Center(child: Text(label)));
 /// están cubiertas por `test/navigation/demo_navigation_test.dart`.
 Widget authPageHarness({
   required String initialLocation,
+  Widget? welcomePage,
   Widget? loginPage,
   Widget? registerPage,
   Widget? forgotPasswordPage,
@@ -33,6 +34,7 @@ Widget authPageHarness({
   final GoRouter router = GoRouter(
     initialLocation: initialLocation,
     routes: <RouteBase>[
+      GoRoute(path: AppRoute.welcome, builder: (_, __) => welcomePage ?? _placeholder('WELCOME')),
       GoRoute(path: AppRoute.login, builder: (_, __) => loginPage ?? _placeholder('LOGIN')),
       GoRoute(
         path: AppRoute.register,

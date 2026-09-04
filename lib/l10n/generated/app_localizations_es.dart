@@ -16,7 +16,7 @@ class AppLocalizationsEs extends AppLocalizations {
 
   @override
   String get welcomeSubtitle =>
-      'Rutas reales, multijugador en vivo y planes con IA — todo en una app más rápida.';
+      'Rutas del mundo real y entrenamiento indoor enfocado, en una sola app rápida.';
 
   @override
   String get welcomeCreateAccount => 'Crear cuenta';
