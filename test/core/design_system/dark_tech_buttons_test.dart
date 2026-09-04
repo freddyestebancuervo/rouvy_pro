@@ -64,7 +64,12 @@ void main() {
       await tester.pumpWidget(_wrap(PrimaryGradientButton(label: 'Crear cuenta', onPressed: () {})));
 
       final SemanticsNode node = tester.getSemantics(find.byType(PrimaryGradientButton));
-      expect(node.flagsCollection.isButton, isTrue);
+      // `hasFlag` es la API compatible con el Flutter 3.32.0 fijado en CI
+      // (.github/workflows/ci.yml) — `flagsCollection` (su reemplazo) no
+      // existe todavía en esa versión. El SDK local puede marcar `hasFlag`
+      // como obsoleto; se ignora deliberadamente acá por esa razón.
+      // ignore: deprecated_member_use
+      expect(node.hasFlag(SemanticsFlag.isButton), isTrue);
       expect(node.label, contains('Crear cuenta'));
 
       handle.dispose();
