@@ -1,4 +1,4 @@
-import { INestApplication } from '@nestjs/common';
+import { INestApplication, Logger } from '@nestjs/common';
 import * as request from 'supertest';
 import { PG_POOL } from '../src/database/database.module';
 import { createTestApp } from './utils/test-app';
@@ -17,6 +17,12 @@ import { createTestApp } from './utils/test-app';
  *   Además: `/v1/health` (alias de compatibilidad) se comporta
  *        exactamente igual que `/v1/ready` en ambos casos — ver
  *        `app.controller.ts`.
+ *
+ * KORIXA-MVP-SAFETY-01A — hallazgo de auditoría independiente: el HTTP
+ * ya estaba saneado, pero `checkDatabaseReadiness` seguía mandando
+ * `error.stack`/`String(error)` a `Logger.error`. El bloque de más abajo
+ * ("logging no debe contener el error interno") prueba lo mismo que C/D
+ * pero contra `Logger.prototype.error` en vez del body HTTP.
  */
 const INTERNAL_ERROR_MARKER = 'SUPER_SECRET_INTERNAL_DB_ERROR host=internal-db.private user=admin password=hunter2';
 
@@ -118,6 +124,75 @@ describe('Liveness / readiness (e2e)', () => {
           expect(rawBody).not.toContain(INTERNAL_ERROR_MARKER);
           expect(res.body.error.details).toEqual({ status: 'error', database: 'unreachable' });
         });
+    });
+  });
+
+  describe('logging no debe contener el error interno (KORIXA-MVP-SAFETY-01A)', () => {
+    let app: INestApplication;
+    let errorSpy: jest.SpyInstance;
+
+    beforeAll(async () => {
+      // Se intercepta a nivel de prototipo — `this.logger` en
+      // `AppController` es una instancia de `Logger`, así que cualquier
+      // `.error(...)` que llame resuelve a este método sin importar la
+      // instancia. `mockImplementation` evita ensuciar stdout del runner
+      // de test con el mensaje genérico (que sí es seguro, pero no aporta
+      // nada acá).
+      errorSpy = jest.spyOn(Logger.prototype, 'error').mockImplementation(() => undefined);
+      app = await createTestApp([{ provide: PG_POOL, useValue: failingPool() }]);
+      // Descarta cualquier llamada de bootstrap previa a nuestro request —
+      // no relacionada con el hallazgo que esta suite prueba.
+      errorSpy.mockClear();
+    });
+
+    beforeEach(() => {
+      errorSpy.mockClear();
+    });
+
+    afterAll(async () => {
+      errorSpy.mockRestore();
+      await app.close();
+    });
+
+    it('el marcador interno del error real NUNCA aparece en ningún argumento pasado a Logger.error', async () => {
+      await request(app.getHttpServer()).get('/v1/ready').expect(503);
+
+      expect(errorSpy).toHaveBeenCalled();
+
+      const serializedArgs = errorSpy.mock.calls
+        .flat()
+        .map((arg) => (typeof arg === 'string' ? arg : JSON.stringify(arg)))
+        .join('\n');
+
+      expect(serializedArgs).not.toContain(INTERNAL_ERROR_MARKER);
+      expect(serializedArgs).not.toContain('SUPER_SECRET_INTERNAL_DB_ERROR');
+      expect(serializedArgs).not.toContain('hunter2');
+      expect(serializedArgs).not.toContain('internal-db.private');
+      expect(serializedArgs).not.toContain('user=admin');
+    });
+
+    it('mismo resultado a través del alias /v1/health', async () => {
+      await request(app.getHttpServer()).get('/v1/health').expect(503);
+
+      const serializedArgs = errorSpy.mock.calls
+        .flat()
+        .map((arg) => (typeof arg === 'string' ? arg : JSON.stringify(arg)))
+        .join('\n');
+
+      expect(serializedArgs).not.toContain(INTERNAL_ERROR_MARKER);
+      expect(serializedArgs).not.toContain('hunter2');
+    });
+
+    it('sigue ocurriendo un log genérico y controlado — la sanitización no elimina toda observabilidad', async () => {
+      await request(app.getHttpServer()).get('/v1/ready').expect(503);
+
+      expect(errorSpy).toHaveBeenCalledWith('Readiness check failed: PostgreSQL is unavailable.');
+      // Exactamente un argumento por llamada — nada adjunto (segundo
+      // parámetro con stack/contexto) que pudiera reintroducir el error
+      // real más adelante sin que este assert lo note.
+      for (const call of errorSpy.mock.calls) {
+        expect(call.length).toBe(1);
+      }
     });
   });
 });

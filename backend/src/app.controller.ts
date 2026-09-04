@@ -52,17 +52,16 @@ export class AppController {
     try {
       await this.pool.query('SELECT 1');
       return { status: 'ok', database: 'connected' };
-    } catch (error) {
-      // El error real (mensaje/stack de `pg`, que puede incluir host,
-      // nombre de base o detalle de TLS) queda SOLO en el log del
-      // servidor — nunca en la respuesta al cliente. `ApiException` fija
-      // `code`/`message` a valores constantes controlados por este
-      // archivo, nunca derivados de `error`, así que
-      // `ApiExceptionFilter` no tiene ningún dato interno que reenviar.
-      this.logger.error(
-        'Readiness check falló: la conexión a Postgres no respondió.',
-        error instanceof Error ? error.stack : String(error),
-      );
+    } catch {
+      // KORIXA-MVP-SAFETY-01A — el catch NO liga el `error` a ninguna
+      // variable: así queda estructuralmente imposible que este bloque
+      // termine logueando `error.message`/`error.stack`/`String(error)`
+      // (mensaje/stack de `pg`, que puede incluir host, nombre de base,
+      // usuario o detalle de TLS) por accidente en un futuro edit. Se
+      // loguea únicamente un mensaje fijo, controlado por este archivo,
+      // nunca derivado de `error` — ni al log ni (como ya hacía
+      // `ApiException`, sin cambios acá) a la respuesta HTTP.
+      this.logger.error('Readiness check failed: PostgreSQL is unavailable.');
       throw new ApiException(HttpStatus.SERVICE_UNAVAILABLE, 'DATABASE_UNAVAILABLE', 'El servicio no está disponible en este momento.', {
         status: 'error',
         database: 'unreachable',
