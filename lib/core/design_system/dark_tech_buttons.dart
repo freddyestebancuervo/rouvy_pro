@@ -130,6 +130,13 @@ class SecondaryOutlinedButton extends StatelessWidget {
 
 /// Botón fantasma — sin fondo ni borde, solo texto en color de marca. Para
 /// acciones de bajo énfasis (enlaces en línea, "Olvidé mi contraseña").
+///
+/// KORIXA-UI-DARK-TECH-DESIGN-SYSTEM-01A (auditoría de accesibilidad,
+/// defecto #2): usaba `DarkTech.brandPurple` como color de texto, que
+/// reprueba AA texto normal sobre las 3 superficies oscuras (3.02–3.42:1,
+/// ver `DarkTech.interactiveText`). Que blanco SOBRE `brandPurple` pase
+/// AA no implica que `brandPurple` sirva COMO texto sobre fondo oscuro —
+/// son pares de contraste opuestos.
 class GhostButton extends StatelessWidget {
   const GhostButton({required this.label, required this.onPressed, super.key});
 
@@ -141,11 +148,11 @@ class GhostButton extends StatelessWidget {
     return TextButton(
       onPressed: onPressed,
       style: TextButton.styleFrom(
-        foregroundColor: DarkTech.brandPurple,
+        foregroundColor: DarkTech.interactiveText,
         disabledForegroundColor: DarkTech.disabledForeground,
         textStyle: AppTypography.textTheme(
-          onSurface: DarkTech.brandPurple,
-          onSurfaceMuted: DarkTech.brandPurple,
+          onSurface: DarkTech.interactiveText,
+          onSurfaceMuted: DarkTech.interactiveText,
         ).labelLarge,
       ),
       child: Text(label),

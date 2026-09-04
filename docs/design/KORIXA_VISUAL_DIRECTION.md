@@ -58,14 +58,28 @@ is allowed to reach for, not a second palette.
   purple-bordered card ambiguous ("is this selected, or is something
   wrong?").
 - Every token here was measured against `lib/core/utils/color_contrast.dart`
-  before being finalized, not copied from the original proposal as-is.
-  Two concrete adjustments were required — see `app_colors.dart`'s
-  `DarkTech` doc comment for the measured numbers:
+  before being finalized, not copied from the original proposal as-is —
+  but a token's own measurement only tells you about the specific pairing
+  that was measured; it isn't automatically true for the opposite pairing
+  (e.g. this color *as text*, versus this color *as a background under
+  text*). Every actual foreground/background pairing this design system
+  uses is verified individually — see `KORIXA_DESIGN_SYSTEM.md` §1.1.
+  Notable adjustments — see `app_colors.dart`'s `DarkTech` doc comment for
+  the measured numbers:
   - `textMuted` was underspecified in the proposal ("a suitable darker
     neutral"); fixed at `#8A90A0`, which clears AA normal-text contrast
     against all three surface tones.
-  - `brandCyan` (`#00D9FF`) cannot carry white text (1.70:1, far below the
-    4.5:1 AA minimum) and no reasonably-cyan variant fixes this — see §4.
+  - `brandCyan` (`#00D9FF`) cannot carry white text as a background
+    (1.70:1, far below the 4.5:1 AA minimum) and no reasonably-cyan
+    variant fixes this — see §4. As *text* on a dark surface, the same
+    color passes with wide margin (10.54–11.93:1) — reused as
+    `DarkTech.interactiveText` for exactly that purpose.
+  - `brandPurple`/`brandBlue` pass AA as a background under white text
+    (5.93:1 / 5.12:1) but fail as a *text* color on the app's dark
+    surfaces (3.02–3.42:1 / 3.50:1) — an independent accessibility audit
+    (KORIXA-UI-DARK-TECH-DESIGN-SYSTEM-01A) caught two real components
+    that had used them the wrong way round; both were corrected — see
+    `KORIXA_DESIGN_SYSTEM.md` §1.1.
 
 ## 4. Gradient usage
 

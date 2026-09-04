@@ -29,7 +29,9 @@ abstract class AppTheme {
       secondary: DarkTech.brandCyan,
       onSecondary: DarkTech.background, // ver nota de contraste en app_colors.dart: cian nunca lleva texto blanco
       error: DarkTech.error,
-      onError: Colors.white,
+      // KORIXA-UI-DARK-TECH-DESIGN-SYSTEM-01A: blanco sobre `error` da
+      // solo 3.03:1 (reprueba AA texto normal) — ver `DarkTech.onError`.
+      onError: DarkTech.onError,
       surface: DarkTech.surface,
       onSurface: DarkTech.textPrimary,
       outline: DarkTech.border,
@@ -87,7 +89,10 @@ abstract class AppTheme {
 
       textButtonTheme: TextButtonThemeData(
         style: TextButton.styleFrom(
-          foregroundColor: DarkTech.brandPurple,
+          // KORIXA-UI-DARK-TECH-DESIGN-SYSTEM-01A: `brandPurple` como
+          // texto sobre superficies oscuras reprueba AA (3.02–3.42:1) —
+          // ver `DarkTech.interactiveText`.
+          foregroundColor: DarkTech.interactiveText,
           textStyle: textTheme.labelLarge,
         ),
       ),

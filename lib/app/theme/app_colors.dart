@@ -76,6 +76,26 @@ abstract class AppColors {
 //      `app_gradients.dart`: `primary` (3 paradas, decorativo, nunca con
 //      texto encima) y `primaryCta` (2 paradas, morado→azul, el único
 //      gradiente donde un texto blanco puede apoyarse con seguridad).
+//
+// ⚠️ KORIXA-UI-DARK-TECH-DESIGN-SYSTEM-01A (parche de accesibilidad,
+// auditoría final independiente): la validación anterior medía cada color
+// de forma AISLADA (p. ej. "¿pasa X contra blanco?") — eso NO garantiza
+// que todo PAR foreground/background real en el código pase. Dos pares
+// opuestos pueden usar el mismo color con resultados distintos: blanco
+// SOBRE `brandPurple` pasa (5.93:1) pero `brandPurple` COMO TEXTO sobre
+// una superficie oscura NO (3.02–3.42:1). La auditoría encontró y este
+// parche corrige 3 pares reales que quedaron sin validar:
+//   1. `onError` (blanco sobre `error`, 3.03:1) → ver [onError].
+//   2. Texto interactivo (`brandPurple` sobre superficies oscuras,
+//      3.02–3.42:1) → ver [interactiveText].
+//   3. Etiqueta seleccionada de navegación (`brandBlue` sobre
+//      `surfaceElevated`, 3.50:1) → ver `DarkTechBottomNavStyle` en
+//      `dark_tech_controls.dart`.
+// Ningún matiz de marca cambió — solo qué primer plano se usa sobre qué
+// fondo. Contraste de TEXTO exige ≥4.5:1 (WCAG AA normal); contraste
+// NO-textual (bordes, íconos, indicadores) exige solo ≥3.0:1 (WCAG
+// 1.4.11) — un valor que pasa el segundo umbral no necesariamente pasa
+// el primero, y viceversa no aplica.
 abstract class DarkTech {
   // --- Superficies (profundidad tonal, sin sombras Material) ---
   static const Color background = Color(0xFF05060A);
@@ -92,6 +112,14 @@ abstract class DarkTech {
   /// que no necesita pasar 4.5:1; solo debe leerse como "apagado".
   static const Color disabledSurface = Color(0xFF1A1E29);
   static const Color disabledForeground = textMuted;
+
+  /// Primer plano de texto sobre `error` — KORIXA-UI-DARK-TECH-DESIGN-
+  /// SYSTEM-01A (auditoría de accesibilidad, defecto #1): blanco sobre
+  /// `error` (#FF5C5C) da solo 3.03:1, reprueba AA texto normal (4.5:1).
+  /// Se conserva el rojo brillante aprobado sin oscurecerlo — el ajuste es
+  /// el PRIMER PLANO, no el tono: `background` sobre `error` da 6.69:1,
+  /// con margen real.
+  static const Color onError = background;
 
   /// Scrim para diálogos/bottom sheets y overlays de foto en pantallas
   /// emocionales (Sección 13 — legibilidad de texto sobre imagen).
@@ -110,16 +138,38 @@ abstract class DarkTech {
 
   static const Color brandBlue = Color(0xFF315CFF);
 
-  /// Uso EXCLUSIVAMENTE decorativo/gráfico (bordes, íconos, extremo de
-  /// `AppGradients.primary`) — nunca con texto encima, ver nota de
-  /// arriba. Como acento/ícono sobre `surface` sí pasa el umbral no
-  /// textual (3.0:1): 11.21:1, con muchísimo margen.
+  /// Como FONDO bajo texto: uso EXCLUSIVAMENTE decorativo/gráfico (bordes,
+  /// íconos, extremo de `AppGradients.primary`) — nunca con texto encima,
+  /// ver nota de arriba (1.70:1 contra blanco, reprueba AA). Como acento/
+  /// ícono sobre `surface` sí pasa el umbral no textual (3.0:1): 11.21:1,
+  /// con muchísimo margen.
+  ///
+  /// Es el par de contraste OPUESTO al de arriba: como COLOR DE TEXTO
+  /// sobre una superficie oscura (`background`/`surface`/`surfaceElevated`)
+  /// sí pasa AA texto normal con margen amplio (10.54–11.93:1) — ver
+  /// [interactiveText], que reusa este mismo valor con ese propósito.
   static const Color brandCyan = Color(0xFF00D9FF);
 
   // --- Texto ---
   static const Color textPrimary = Color(0xFFF7F8FC);
   static const Color textSecondary = Color(0xFFA7ADBA);
   static const Color textMuted = Color(0xFF8A90A0);
+
+  /// Texto interactivo de marca (enlaces, botones fantasma/texto) sobre
+  /// superficies oscuras — KORIXA-UI-DARK-TECH-DESIGN-SYSTEM-01A
+  /// (auditoría de accesibilidad, defecto #2): `brandPurple` como COLOR DE
+  /// TEXTO sobre `surfaceElevated` da solo 3.02:1 (`surface`: 3.21:1,
+  /// `background`: 3.42:1) — reprueba AA texto normal (4.5:1) en las 3.
+  /// `brandPurpleBright` tampoco alcanza en `surfaceElevated` (3.89:1).
+  /// Que blanco sobre `brandPurple` pase AA (5.93:1, ver arriba) NO
+  /// implica que `brandPurple` sirva como texto sobre fondo oscuro — es
+  /// el par de contraste opuesto.
+  ///
+  /// No es un color nuevo: reusa `brandCyan`, que sí pasa AA texto normal
+  /// contra las 3 superficies oscuras con margen amplio (10.54–11.93:1) —
+  /// ver la nota de [brandCyan]. Nombrado por su propósito para que quede
+  /// claro por qué no es simplemente `brandPurple`.
+  static const Color interactiveText = brandCyan;
 
   // --- Semánticos (status — ver Sección 11: verde=conectado/éxito,
   // ámbar=advertencia, rojo=error/desconexión crítica; el morado/azul/

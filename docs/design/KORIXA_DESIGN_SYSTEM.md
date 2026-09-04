@@ -29,22 +29,61 @@ references it. Migrating real screens is a later task — see
 | `disabledSurface` | `#1A1E29` | disabled controls are exempt from AA contrast (WCAG 1.4.3) |
 | `disabledForeground` | = `textMuted` | |
 | `overlayScrim` | `#000000` @ 60% alpha | dialogs, bottom sheets, unavailable-route overlay |
-| `brandPurple` | `#8B00FF` | 5.93:1 vs white — safe for text-bearing surfaces |
-| `brandPurpleBright` | `#B026FF` | 4.60:1 vs white — at the AA floor; prefer for accents/icons, not small body text |
-| `brandBlue` | `#315CFF` | 5.12:1 vs white |
-| `brandCyan` | `#00D9FF` | 1.70:1 vs white — **decorative/graphic only, never under text**; 11.21:1 vs `surface` as a non-text accent |
+| `onError` | = `background` | text/icon **on top of** `error`; 6.69:1 — see §1.1 |
+| `brandPurple` | `#8B00FF` | **as a background** under white text: 5.93:1, passes. **As text color** on a dark surface: 3.02–3.42:1, fails — see §1.1 |
+| `brandPurpleBright` | `#B026FF` | as a background under white text: 4.60:1, at the AA floor; prefer for accents/icons, not small body text. As text color on `surfaceElevated`: 3.89:1, fails |
+| `brandBlue` | `#315CFF` | as a background under white text: 5.12:1, passes. As text color on `surfaceElevated`: 3.50:1, fails non-text-only — see §1.1 |
+| `brandCyan` | `#00D9FF` | **as a background** under white text: 1.70:1, fails — decorative/graphic use only there; 11.21:1 vs `surface` as a non-text accent. **As text color** on a dark surface: 10.54–11.93:1, passes — see `interactiveText` |
+| `interactiveText` | = `brandCyan` | the accessible pairing direction of `brandCyan` above — reused for text, not a new color |
 | `textPrimary` | `#F7F8FC` | |
 | `textSecondary` | `#A7ADBA` | |
 | `textMuted` | `#8A90A0` | not in the original proposal; validated at 5.61–6.34:1 across all three surfaces |
 | `success` | `#22C55E` | status semantics only, see §6 |
 | `warning` | `#F5A623` | |
-| `error` | `#FF5C5C` | |
+| `error` | `#FF5C5C` | background only — pair with `onError`, never with white, see §1.1 |
 | `difficultyEasy/Moderate/Hard/Extreme` | reuse `brandCyan/Blue/Purple/PurpleBright` | route-difficulty scale, see §7 |
 
-Every value here was checked against `lib/core/utils/color_contrast.dart`,
-not copied from the task's example palette verbatim — see the class-level
-doc comment in `app_colors.dart` for the two adjustments that were
-necessary (`textMuted`, `brandCyan`/dual-gradient split).
+Every value here was checked against `lib/core/utils/color_contrast.dart` in
+isolation, not copied from the task's example palette verbatim — see the
+class-level doc comment in `app_colors.dart` for the two adjustments that
+were necessary (`textMuted`, `brandCyan`/dual-gradient split). **A token's
+own measurement is not a guarantee for every foreground/background pairing
+it gets used in** — checking a color in isolation only tells you about the
+specific pairing that was measured (e.g. "white on top of this color").
+The opposite pairing (this color as text, on top of something else) is a
+different measurement entirely and can fail even when the first one
+passes. §1.1 below is the actual set of pairings this design system uses
+and has verified.
+
+### 1.1 Verified foreground/background pairings
+
+The table above lists individual token measurements; this is the list of
+*pairings actually used by a component or theme role* in this codebase,
+each contrast-tested on its own — not inferred from a token's other
+measurements. Every entry marked **text** requires WCAG AA normal text
+(≥4.5:1); every entry marked **non-text** only requires the WCAG 1.4.11
+threshold (≥3.0:1), which is a materially lower bar and does not imply the
+text threshold is also met.
+
+| Pairing | Kind | Ratio | Passes |
+|---|---|---|---|
+| `onError` on `error` | text | 6.69:1 | ✅ |
+| `interactiveText` on `background`/`surface`/`surfaceElevated` | text | 10.54–11.93:1 | ✅ |
+| `borderActive` (`brandBlue`) on `surface` | non-text | 3.72:1 | ✅ |
+| `DarkTechBottomNavStyle.selectedIconColor` (`brandBlue`) on nav `background` | non-text | 3.50:1 | ✅ |
+| `DarkTechBottomNavStyle.selectedLabelColor` (`textPrimary`) on nav `background` | text | 16.86:1 | ✅ |
+| `DarkTechBottomNavStyle.unselectedLabelColor` (`textMuted`) on nav `background` | text | 5.61:1 | ✅ |
+| `AppGradients.primaryCta` under white text, sampled at t=0/0.25/0.5/0.75/1.0 | text | 5.12–6.34:1 | ✅ |
+| `textPrimary`/`textSecondary`/`textMuted` on `background`/`surface`/`surfaceElevated` | text | 5.61–19.08:1 | ✅ |
+
+Two pairings that were previously used and are now retired, kept here as
+the documented reason they were replaced:
+
+| Retired pairing | Kind | Ratio | Passes |
+|---|---|---|---|
+| `brandPurple` as text on `background`/`surface`/`surfaceElevated` (old `GhostButton`/`TextButton` foreground) | text | 3.02–3.42:1 | ❌ |
+| `brandBlue` as the bottom-nav selected *label* color (old single `selectedColor` shared by icon and label) | text | 3.50:1 | ❌ |
+| white on `error` (old `onError`) | text | 3.03:1 | ❌ |
 
 The legacy `AppColors` class (`primary`/`secondary`/`zone1-5`/etc.) is
 untouched and remains the live theme's source — `DarkTech` is additive,
@@ -220,9 +259,17 @@ asserts no physiological claim. See §11.
 ## 10. Navigation foundation
 
 `DarkTechBottomNavStyle` (`dark_tech_controls.dart`) is a **style-tokens
-class only** — `background`, `selectedColor`, `unselectedColor`,
-`iconSize`, `selectedLabelStyle`, `unselectedLabelStyle` — matching the
-approved Home design's "Inicio / Rutas / Entrenar / Perfil" bottom nav.
+class only** — `background`, `selectedIconColor`, `unselectedIconColor`,
+`selectedLabelColor`, `unselectedLabelColor`, `iconSize`,
+`selectedLabelStyle`, `unselectedLabelStyle` — matching the approved Home
+design's "Inicio / Rutas / Entrenar / Perfil" bottom nav.
+
+Icon and label color are deliberately separate tokens, not one shared
+`selectedColor` (KORIXA-UI-DARK-TECH-DESIGN-SYSTEM-01A accessibility
+patch): the brand-blue accent that works as a non-text icon color
+(3.50:1, clears the WCAG 1.4.11 ≥3.0:1 non-text threshold) fails as a
+label color (fails the WCAG AA ≥4.5:1 text threshold). The selected icon
+keeps the brand accent; the selected label uses `textPrimary` instead.
 
 It is deliberately **not** a functional navigation widget. `lib/app/router/
 app_router.dart` was audited: it is a flat list of `GoRoute`s with no
