@@ -59,14 +59,28 @@ describe('redis.config', () => {
       expect(resolveThrottlerStrategy()).toBe('memory');
     });
 
-    it('caso 4: BACKEND_ENVIRONMENT=staging + REDIS_URL ausente -> FAIL FAST', () => {
+    it('caso 4: BACKEND_ENVIRONMENT=staging + REDIS_URL ausente -> memory (KORIXA-Z1-Z2: staging se agrega al allowlist de fallback en memoria)', () => {
       process.env.BACKEND_ENVIRONMENT = 'staging';
       delete process.env.REDIS_URL;
 
-      expect(() => resolveThrottlerStrategy()).toThrow(/REDIS_URL no está definida/);
+      expect(resolveThrottlerStrategy()).toBe('memory');
     });
 
-    it('caso 5: BACKEND_ENVIRONMENT=production + REDIS_URL ausente -> FAIL FAST', () => {
+    it('caso 4b: BACKEND_ENVIRONMENT=staging + REDIS_URL vacía -> memory (mismo criterio que development, caso 3)', () => {
+      process.env.BACKEND_ENVIRONMENT = 'staging';
+      process.env.REDIS_URL = '';
+
+      expect(resolveThrottlerStrategy()).toBe('memory');
+    });
+
+    it('caso 4c: BACKEND_ENVIRONMENT=staging + REDIS_URL presente -> redis (staging sigue pudiendo usar Redis real si se configura explícitamente)', () => {
+      process.env.BACKEND_ENVIRONMENT = 'staging';
+      process.env.REDIS_URL = 'redis://redis:6379';
+
+      expect(resolveThrottlerStrategy()).toBe('redis');
+    });
+
+    it('caso 5: BACKEND_ENVIRONMENT=production + REDIS_URL ausente -> FAIL FAST (production NUNCA se agrega al allowlist de memoria, sin excepción)', () => {
       process.env.BACKEND_ENVIRONMENT = 'production';
       delete process.env.REDIS_URL;
 

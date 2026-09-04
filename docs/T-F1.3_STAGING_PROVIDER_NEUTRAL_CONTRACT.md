@@ -26,12 +26,17 @@ redesign.
 The backend's environment/DB/Redis/CORS layer was already provider-neutral
 and staging-aware before this task — verified, not assumed:
 
-- `BACKEND_ENVIRONMENT=staging` already fails closed if `REDIS_URL` is
-  absent (`redis.config.ts`, `resolveThrottlerStrategy` — Development's
-  in-memory throttler fallback is hard-restricted to
-  `BACKEND_ENVIRONMENT=development` only, by exact string match; any other
-  value, including `staging`, `production`, unset, or unknown, throws).
-  Already covered by `redis.config.spec.ts` casos 4-7.
+- **Updated by KORIXA-Z1-Z2-FINOPS-POLICY-AND-STAGING-MEMORY-THROTTLER
+  (2026-09-03), superseding this paragraph's original text**:
+  `BACKEND_ENVIRONMENT=staging` now shares the in-memory throttler
+  fallback with `development` when `REDIS_URL` is absent
+  (`redis.config.ts`, `resolveThrottlerStrategy`,
+  `MEMORY_FALLBACK_ENVIRONMENTS` allowlist) — this is the code change that
+  makes `NO_MANAGED_REDIS_MVP` in
+  `docs/KORIXA_MVP_FINOPS_AND_PORTABILITY_POLICY.md` true for Staging, not
+  just Development. `production`, unset, and unknown values still throw,
+  unchanged. Covered by `redis.config.spec.ts` casos 4/4b/4c (staging) and
+  5-7 (production/absent/unknown still fail closed).
 - `DATABASE_URL` is a plain `postgres://` DSN consumed by `pg.Pool` — no
   Cloud SQL, RDS, or any other provider is assumed anywhere in
   `database.config.ts`. Newly covered by `database.config.spec.ts` (this
