@@ -510,4 +510,187 @@ void main() {
       },
     );
   });
+
+  // -------------------------------------------------------------------
+  // KORIXA-MVP-VERTICAL-SLICE-02 — recuperación de sesión route-aware
+  // (Sección 9 del encargo, items 6-15 y 18). `snapshotDataSource` viene
+  // del `setUp` de nivel de archivo (mismo container/repository/streams
+  // que el resto de este archivo) — acá se pre-siembra directamente con
+  // `snapshotDataSource.stored = ...` para simular "la app murió y volvió
+  // a arrancar con esto ya guardado", sin pasar por el flujo completo de
+  // `_persistSnapshot()` (ya probado en el grupo anterior).
+  // -------------------------------------------------------------------
+  group('KORIXA-MVP-VERTICAL-SLICE-02 — recuperación de sesión route-aware', () {
+    final DateTime baseTime = DateTime(2026, 2, 1, 8);
+
+    RideSessionSnapshotData routeSnapshot({
+      double distanceMeters = 2400,
+      String routeId = 'route-1',
+      String routeName = 'Ruta de prueba',
+      double routeTotalDistanceMeters = 3000,
+    }) {
+      return RideSessionSnapshotData(
+        startTimeIso: baseTime.toIso8601String(),
+        elapsedSeconds: 480,
+        distanceMeters: distanceMeters,
+        caloriesKcal: 60,
+        connectedDeviceCount: 1,
+        savedAtIso: DateTime.now().toIso8601String(),
+        routeId: routeId,
+        routeName: routeName,
+        routeTotalDistanceMeters: routeTotalDistanceMeters,
+      );
+    }
+
+    Future<void> feed(DateTime timestamp, {required double speedKmh}) async {
+      telemetryController.add(
+        TelemetrySnapshot(deviceId: trainerId, timestamp: timestamp, speedKmh: speedKmh, powerWatts: 150),
+      );
+      await Future<void>.delayed(Duration.zero);
+    }
+
+    Future<void> connectTrainer() async {
+      devicesController.add(<BleDevice>[connectedTrainer]);
+      await Future<void>.delayed(Duration.zero);
+    }
+
+    test('6/7/8. resumeFromSnapshot() restaura el routeId/routeName/routeTotalDistanceMeters exactos', () {
+      container.read(rideSessionControllerProvider.notifier).resumeFromSnapshot(routeSnapshot());
+
+      final RideSessionState state = container.read(rideSessionControllerProvider);
+      expect(state.isRouteBacked, isTrue);
+      expect(state.target!.routeId, 'route-1');
+      expect(state.target!.routeName, 'Ruta de prueba');
+      expect(state.target!.routeTotalDistanceMeters, 3000);
+    });
+
+    test('9. el progreso recuperado usa la distancia restaurada del snapshot (2400/3000 = 80%)', () {
+      container.read(rideSessionControllerProvider.notifier).resumeFromSnapshot(routeSnapshot(distanceMeters: 2400));
+
+      final RideSessionState state = container.read(rideSessionControllerProvider);
+      expect(state.telemetry.distanceMeters, 2400);
+      expect(state.routeProgress, closeTo(0.8, 0.0001));
+    });
+
+    test('10. el progreso recuperado queda clamped — un snapshot corrupto con distancia > total no pasa de 100%', () {
+      container.read(rideSessionControllerProvider.notifier).resumeFromSnapshot(
+            routeSnapshot(distanceMeters: 3500, routeTotalDistanceMeters: 3000),
+          );
+
+      final RideSessionState state = container.read(rideSessionControllerProvider);
+      expect(state.routeProgress, 1.0);
+      expect(state.routeProgress, lessThanOrEqualTo(1.0));
+    });
+
+    test('11. una ruta recuperada sigue acumulando distancia con telemetría nueva (no se reinicia a 0)', () async {
+      container.read(rideSessionControllerProvider.notifier).resumeFromSnapshot(routeSnapshot(distanceMeters: 2400));
+      await connectTrainer();
+
+      // 36 km/h = 10 m/s. Snapshot base (fija el punto de partida del
+      // aggregator) + un intervalo de 10s → +100 m sobre lo recuperado.
+      await feed(baseTime, speedKmh: 36);
+      await feed(baseTime.add(const Duration(seconds: 10)), speedKmh: 36);
+
+      final RideSessionState state = container.read(rideSessionControllerProvider);
+      expect(state.telemetry.distanceMeters, 2500); // 2400 recuperados + 100 nuevos
+      expect(state.phase, RideSessionPhase.active); // todavía no llegó al 100%
+    });
+
+    test('12/13/14. una ruta recuperada llega al 100% y se autocompleta una única vez con routeCompleted=true', () async {
+      container.read(rideSessionControllerProvider.notifier).resumeFromSnapshot(routeSnapshot(distanceMeters: 2400));
+      await connectTrainer();
+
+      DateTime t = baseTime;
+      await feed(t, speedKmh: 36); // fija el punto de partida del aggregator, sin sumar
+      for (int i = 0; i < 6; i++) {
+        t = t.add(const Duration(seconds: 10));
+        await feed(t, speedKmh: 36); // 6 * 100 m = 600 m → 2400 + 600 = 3000 m = 100%
+      }
+
+      final RideSessionState state = container.read(rideSessionControllerProvider);
+      expect(state.phase, RideSessionPhase.finished);
+      expect(state.summary, isNotNull);
+      expect(state.summary!.routeCompleted, isTrue);
+
+      // Única vez: más telemetría después no debe cambiar el resumen ya
+      // construido (mismo mecanismo idempotente que Vertical Slice 01,
+      // reverificado acá específicamente en el camino de recuperación).
+      final RideSessionSummary firstSummary = state.summary!;
+      await feed(t.add(const Duration(seconds: 10)), speedKmh: 36);
+      expect(container.read(rideSessionControllerProvider).summary, firstSummary);
+    });
+
+    test('15. finalización manual tras recuperar, antes del 100%, produce routeCompleted = false', () async {
+      container.read(rideSessionControllerProvider.notifier).resumeFromSnapshot(routeSnapshot(distanceMeters: 900));
+      await connectTrainer();
+      await feed(baseTime, speedKmh: 36);
+      await feed(baseTime.add(const Duration(seconds: 10)), speedKmh: 36); // 900 + 100 = 1000 de 3000 = 33%
+
+      final RideSessionSummary summary = container.read(rideSessionControllerProvider.notifier).finish();
+
+      expect(summary.routeCompleted, isFalse);
+      expect(summary.routeId, 'route-1');
+    });
+
+    test('Sección 7 — caso límite: un snapshot recuperado YA en/sobre el 100% se autocompleta de inmediato, una sola vez', () {
+      // El snapshot mismo trae la distancia >= el total de la ruta —
+      // reusa el MISMO mecanismo de finalización única (no un segundo
+      // camino), disparado al final de `resumeFromSnapshot()` en vez de
+      // esperar a que llegue más telemetría (que podría no llegar nunca
+      // si, p. ej., el usuario no reconecta ningún sensor).
+      container.read(rideSessionControllerProvider.notifier).resumeFromSnapshot(
+            routeSnapshot(distanceMeters: 3000, routeTotalDistanceMeters: 3000),
+          );
+
+      final RideSessionState state = container.read(rideSessionControllerProvider);
+      expect(state.phase, RideSessionPhase.finished);
+      expect(state.summary!.routeCompleted, isTrue);
+    });
+
+    test('18. la recuperación de una sesión LIBRE (snapshot legacy, sin ruta) sigue funcionando exactamente igual', () {
+      const RideSessionSnapshotData legacyFreeRideSnapshot = RideSessionSnapshotData(
+        startTimeIso: '2026-01-01T08:00:00.000',
+        elapsedSeconds: 300,
+        distanceMeters: 2500,
+        caloriesKcal: 60,
+        connectedDeviceCount: 1,
+        savedAtIso: '2026-01-01T08:05:00.000',
+        // routeId/routeName/routeTotalDistanceMeters ausentes — snapshot
+        // guardado antes de KORIXA-MVP-VERTICAL-SLICE-02.
+      );
+
+      container.read(rideSessionControllerProvider.notifier).resumeFromSnapshot(legacyFreeRideSnapshot);
+
+      final RideSessionState state = container.read(rideSessionControllerProvider);
+      expect(state.phase, RideSessionPhase.active);
+      expect(state.isRouteBacked, isFalse);
+      expect(state.routeProgress, 0);
+      expect(state.telemetry.distanceMeters, 2500); // la telemetría recuperada sigue intacta
+      expect(state.elapsed, const Duration(seconds: 300));
+    });
+
+    test('metadata de ruta malformada en el snapshot recupera como sesión LIBRE, nunca crashea ni fabrica una ruta', () {
+      final RideSessionSnapshotData malformed = RideSessionSnapshotData(
+        startTimeIso: baseTime.toIso8601String(),
+        elapsedSeconds: 480,
+        distanceMeters: 2400,
+        caloriesKcal: 60,
+        connectedDeviceCount: 1,
+        savedAtIso: DateTime.now().toIso8601String(),
+        routeId: 'route-1',
+        routeName: '', // corrupto — nombre vacío
+        routeTotalDistanceMeters: 3000,
+      );
+
+      expect(
+        () => container.read(rideSessionControllerProvider.notifier).resumeFromSnapshot(malformed),
+        returnsNormally,
+      );
+
+      final RideSessionState state = container.read(rideSessionControllerProvider);
+      expect(state.isRouteBacked, isFalse);
+      expect(state.telemetry.distanceMeters, 2400); // la telemetría se recupera igual
+      expect(state.phase, RideSessionPhase.active); // no autocompleta una ruta inexistente
+    });
+  });
 }
