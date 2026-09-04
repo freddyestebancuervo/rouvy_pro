@@ -26,9 +26,21 @@
 | 50 users | Measure actual infrastructure consumption against the model in this document |
 | 100 users | Measure + project forward to the next milestone |
 | 500 users | Full FinOps review — re-evaluate every architectural decision in this document, not just the numbers |
-| 1000 users | Apply a K-COST cost-per-active-user policy (to be defined at that milestone, using real data this document cannot yet have) |
+| 1000 users | Apply / revalidate the already-approved K-COST policy (below) with real data from actual usage at this milestone |
 
 No milestone is skipped. Reaching one triggers its own review before scaling further.
+
+### K-COST — cost per active user per month (owner-approved, defined now)
+
+This is not deferred to the 1,000-user milestone — it is owner-approved policy today. What happens *at* the milestone is applying it against real measured data, never redefining it.
+
+| Band | Threshold |
+|---|---|
+| `TARGET` | ≤ COP 1,000 per active user per month |
+| `REVIEW_BAND` | COP 1,000-1,500 per active user per month — triggers an explicit architecture/cost review, not an automatic action |
+| `REDESIGN` | > COP 1,500 per active user per month — triggers a mandatory redesign before further user growth is accepted |
+
+`K-COST` is evaluated starting at the 1,000-user milestone (§B), using real, measured infrastructure spend divided by real active users for that period — never projected or estimated figures once real data exists.
 
 ## C. Fail-closed cost policy
 
@@ -43,7 +55,13 @@ CAPACITY_INCREASE_REQUIRES_HUMAN_GATE = TRUE
 
 Each of these is a standing constraint, not a one-time decision:
 
-- **NO_AUTO_PAID_UPGRADE**: no provider is used in a configuration that can silently convert a free tier into a billed one (e.g., a Postgres provider whose free tier auto-upgrades on a usage threshold without an explicit action). Where a provider cannot guarantee this (some usage-based models have no hard ceiling), that provider must be selected with awareness of the gap, and it becomes an item for D8-style monitoring, not a reason to avoid documenting the risk.
+- **NO_AUTO_PAID_UPGRADE**: for Development, Staging, and early MVP, a provider/configuration that can automatically generate paid usage after a free quota is exhausted is **not allowed by default**. Monitoring or billing alerts alone do **not** satisfy this requirement — an alert firing after spend has already started does not prevent the surprise bill this policy exists to avoid. An acceptable default configuration must have at least one of:
+  - a hard spend cap enforced by the provider itself;
+  - a free-only account/project tier that stops serving requests rather than billing once its quota is exhausted;
+  - a provider-enforced usage ceiling (not merely a documented soft limit);
+  - no payment method / no paid fallback on file, where the provider supports operating that way.
+
+  If none of these is technically possible for a given provider, adopting it anyway requires its own separate, explicit Owner Human Gate — not a decision made inside this policy document or inside any implementation task — documenting: the exact residual billing risk, the maximum technically possible exposure if it can be determined, the safeguards actually in place, and the reason every hard-capped alternative was rejected. **No such exception is approved by this document.** This policy does not certify that any specific provider (Neon, Supabase, or otherwise) currently satisfies `NO_AUTO_PAID_UPGRADE` — that must be proven against the provider's actual account/tier behavior during the disposable proof-of-concept step (Phase Z3) before it is relied upon, not assumed from general reputation or marketing claims. Provider selection itself remains deferred (§Goal 5 of the prior FinOps audit, and this document does not change that).
 - **NO_UNBOUNDED_AUTOSCALING**: every Cloud Run service in Development/Staging/early-MVP scope must have an explicit `max_instances` ceiling. Unbounded (`max_instances` unset to a high default) is never acceptable for these environments.
 - **NO_MANAGED_REDIS_MVP**: see Z2 — the in-memory throttler is sufficient while `max_instances=1`.
 - **NO_NEW_CLOUD_SQL_STAGING**: Staging must not provision a new Cloud SQL instance; a scale-to-zero-capable, provider-neutral Postgres is used instead (see §D).

@@ -4,22 +4,51 @@
 
 - `STAGING_DB_PROVIDER_DECISION = DEFERRED`
 - `FINAL_PRODUCTION_DB_PROVIDER_DECISION = DEFERRED`
-- `D8_STAGING_POSTPONEMENT_UNRECONCILED = YES`
+- `D8_CONDITION_SATISFIED = YES`
+- `D8_OWNER_OVERRIDE_REQUIRED = NO`
+- `D8_STILL_BLOCKS_REAL_STAGING = NO`
+- `REAL_STAGING_RESOURCE_CREATION_AUTHORIZED_BY_THIS_DOCUMENT = NO` (D8 no longer blocking is not the same thing as this document, or any prior one, authorizing creation — see below)
 - `STAGING_MUTATIONS_ALLOWED = NO`
 
 This document formalizes the provider-neutral portion of T-F1.3 ("Entorno de
 staging real") only. It creates no cloud resource of any kind.
 
-A prior owner decision (Documento 15 §D8, reconfirmed 2026-08-03 in
-`docs/audits/AUDITORIA_FINAL/23_MATRIZ_FORMAL_ENTORNOS.md`, matrix row 16 and
-MR5) deliberately postponed all Staging resource creation until Development
-is fully complete. As of that same document's own 10-gate audit, Development
-is not yet complete (Puertas B, E and H unmet). This postponement is **not**
-resolved by this document — it is a separate, unrecociled owner decision.
-Nothing in this file authorizes creating the Staging environment; it only
-prepares the code/config/workflow layer so that, once D8 is reconciled and a
-DB placement is chosen, the remaining work is mechanical rather than a
-redesign.
+**Current state (superseding the paragraph below, which is preserved as
+history)**: a prior owner decision (Documento 15 §D8, reconfirmed 2026-08-03
+in `docs/audits/AUDITORIA_FINAL/23_MATRIZ_FORMAL_ENTORNOS.md`, matrix row 16
+and MR5) deliberately postponed all Staging resource creation until
+Development was fully complete. A dedicated reconciliation audit
+(`TASK21-D8-STAGING-RECONCILIATION-PREFLIGHT-20260903`) subsequently proved,
+independently and live — not merely by re-reading the same historical
+document — that Development's 10 gates (Documento 15 §12) are now all met:
+Puerta B closed by `.firebaserc`'s named aliases (T-F0.2 Bloque 6), Puerta E
+closed by the Android Development flavor + verified Google Sign-In runtime
+evidence (T-F0.2 Bloque 5A + 2026-08-13 session), and Puerta H closed by a
+real, successful, WIF-authenticated automated deploy to Cloud Run Development
+(`workflow_dispatch` run `31924059938`, independently re-verified live —
+`conclusion: success`, bound to the exact merge commit of the closing PR).
+`T-F0.2`/`C1` is formally `CERRADA` per `PROJECT_STATUS.md`'s own current
+"ESTADO VIGENTE" table, protected by that document's own
+no-reopen-without-`REOPEN_REASON` rule. **D8's condition is therefore
+satisfied — it no longer blocks Staging.**
+
+This does **not** mean Staging resource creation is authorized. D8 was one
+specific precondition (Development must finish first); its satisfaction only
+removes that one gate. Creating any real Staging resource (Phase 21C
+Firebase, Phase 21D Postgres placement, Phase 21E infrastructure) still
+requires its own explicit, separate Human Gate — the same discipline this
+whole engagement has applied to every prior resource-creating step, D8 or
+not. Nothing in this file, or in the D8 reconciliation audit, authorizes
+creating the Staging environment; both only prepare the ground (code/config/
+workflow layer here; the removal of D8 as a blocker there) so that a future,
+separately-authorized Human Gate is mechanical rather than a redesign.
+
+**History (preserved for traceability, no longer current)**: as of
+Documento 23's own 10-gate audit (2026-08-03), Development was not yet
+complete (Puertas B, E and H unmet at that date), and this postponement was,
+at that time, unreconciled. That snapshot was accurate for its own date and
+is kept here as a record of the investigation's timeline — it is superseded
+by the current state above, not deleted or rewritten.
 
 ## Backend staging contract (already implemented, verified here)
 
@@ -154,8 +183,13 @@ inert skeleton**:
 - No `google-github-actions/auth` step, no `gcloud`/`docker`/`firebase`
   command anywhere in the file.
 - Its only job always fails explicitly (`exit 1`) with a message naming the
-  exact missing Human Gates (D8 reconciliation, Phase 21C/D/E resource
-  provisioning).
+  missing Human Gates for resource provisioning (Phase 21C/D/E). That
+  message's literal text still mentions "D8... sin reconciliar" — written
+  before the D8 reconciliation audit above — which is now stale prose, not
+  a functional problem: the workflow remains correctly inert regardless of
+  its message wording, since it fails unconditionally either way. Updating
+  that text is optional documentation debt, not a blocker to anything in
+  this contract.
 - Contains zero identifiers — project ID, project number, WIF provider,
   service account, Cloud Run service name, Cloud SQL instance name — from
   either Production or Development. Verified by
@@ -168,10 +202,10 @@ message — it cannot reach any cloud resource.
 
 ## Gates not executed by this document or this task
 
-The following remain separate, future Human Gates:
+D8 is resolved (see Decision boundary above — its condition is satisfied,
+not overridden) and is no longer one of these gates. The following remain
+separate, future Human Gates:
 
-- Reconciling D8 (does T-F1.3's own no-owner-authorization backlog entry
-  supersede D8's Staging-postponement decision, or does D8 still control?).
 - Creating any real resource: GCP/Firebase project, Cloud Run service,
   PostgreSQL instance/database, Redis instance, Secret Manager secrets, WIF
   provider, IAM bindings, VPC/network resources.
