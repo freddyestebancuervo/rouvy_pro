@@ -269,37 +269,45 @@ class _DesktopWelcomeContent extends StatelessWidget {
                     Text(
                       l10n.welcomeTitle,
                       textAlign: TextAlign.left,
-                      // KORIXA-UI-SCREEN01-DESKTOP-BRAND-POLISH-20260905:
-                      // subido de `headlineLarge` (32) a `displayMedium`
-                      // (45, +41%) — más protagonismo visual, acorde al
-                      // encargo de que el título "coincida con la
-                      // proporción" de una referencia mucho más grande.
-                      style: textTheme.displayMedium?.copyWith(fontWeight: FontWeight.w800),
+                      // `displayMedium` (base 45) con `fontSize` subido a
+                      // 51 (KORIXA-UI-SCREEN01-FINAL-VISUAL-POLISH-20260905,
+                      // dentro del rango 50-52 pedido) — `copyWith` solo
+                      // pisa el tamaño; el `height` (multiplicador, no
+                      // píxeles) se reescala solo, sin romper el interlineado.
+                      style: textTheme.displayMedium?.copyWith(fontSize: 51, fontWeight: FontWeight.w800),
                     ),
                     const SizedBox(height: AppSpacing.md),
                     Text(
                       l10n.welcomeSubtitle,
                       textAlign: TextAlign.left,
-                      // Subido de `bodyLarge` (16) a `titleLarge` (22,
-                      // +37.5%) — peso `w500` (más liviano que el `w600`
-                      // por defecto de `titleLarge`) para que siga
-                      // leyéndose como subtítulo, no como un segundo
-                      // título compitiendo con el de arriba.
+                      // `titleLarge` (base 22) con `fontSize` subido a 24
+                      // (KORIXA-UI-SCREEN01-FINAL-VISUAL-POLISH-20260905).
+                      // Peso `w500` (más liviano que el `w600` por defecto
+                      // de `titleLarge`) para que siga leyéndose como
+                      // subtítulo, no como un segundo título.
                       style: textTheme.titleLarge?.copyWith(
+                        fontSize: 24,
                         color: DarkTech.textSecondary,
                         fontWeight: FontWeight.w500,
                       ),
                     ),
                     const SizedBox(height: AppSpacing.xl),
-                    const _OnboardingIndicator(),
+                    // KORIXA-UI-SCREEN01-FINAL-VISUAL-POLISH-20260905:
+                    // indicador de escritorio dedicado — 3 barras en vez
+                    // de la píldora única de mobile (`_OnboardingIndicator`).
+                    // Puramente visual (ver [_DesktopOnboardingIndicator]):
+                    // no hay swipe/navegación real entre "páginas", solo
+                    // la primera barra activa.
+                    const _DesktopOnboardingIndicator(),
                     const SizedBox(height: AppSpacing.xl),
-                    // CTA "desktop-appropriate": ni el ancho mobile (52px
-                    // de alto pero angosto), ni ancho completo del
-                    // viewport — un ancho fijo intermedio dentro del
-                    // bloque de contenido.
+                    // CTA "desktop-appropriate": ancho subido de 320 a 510
+                    // (KORIXA-UI-SCREEN01-FINAL-VISUAL-POLISH-20260905,
+                    // dentro del rango 500-525 pedido) — sigue sin ser
+                    // ancho completo del viewport ni del bloque de
+                    // contenido (640).
                     SizedBox(
                       key: const Key('welcome-desktop-cta'),
-                      width: 320,
+                      width: 510,
                       child: PrimaryGradientButton(
                         label: l10n.welcomeGetStarted,
                         onPressed: () => context.go(AppRoute.register),
@@ -415,6 +423,9 @@ class _KorixaLogo extends StatelessWidget {
 /// con uno "activo") evita implicar falsamente que existen más páginas
 /// funcionales, sin dejar de asomar el lenguaje visual aprobado (una
 /// píldora con el gradiente de marca).
+///
+/// Exclusivo de mobile — ver [_DesktopOnboardingIndicator] para el
+/// equivalente de escritorio (KORIXA-UI-SCREEN01-FINAL-VISUAL-POLISH-20260905).
 class _OnboardingIndicator extends StatelessWidget {
   const _OnboardingIndicator();
 
@@ -425,6 +436,56 @@ class _OnboardingIndicator extends StatelessWidget {
       height: 4,
       decoration: const BoxDecoration(
         gradient: AppGradients.primaryCta,
+        borderRadius: AppRadius.pillRadius,
+      ),
+    );
+  }
+}
+
+/// Indicador de onboarding de escritorio — KORIXA-UI-SCREEN01-FINAL-
+/// VISUAL-POLISH-20260905. Pedido explícitamente como 3 barras (vs. la
+/// píldora única de mobile) — puramente visual, igual que
+/// [_OnboardingIndicator]: no existen 3 páginas de onboarding reales, no
+/// hay swipe ni navegación asociada a las barras 2 y 3, solo la primera
+/// (activa) importa semánticamente.
+class _DesktopOnboardingIndicator extends StatelessWidget {
+  const _DesktopOnboardingIndicator();
+
+  static const double _barWidth = 24;
+  static const double _barHeight = 4;
+  static const double _gap = 6;
+
+  @override
+  Widget build(BuildContext context) {
+    return const Row(
+      mainAxisSize: MainAxisSize.min,
+      children: <Widget>[
+        _Bar(active: true),
+        SizedBox(width: _gap),
+        _Bar(active: false),
+        SizedBox(width: _gap),
+        _Bar(active: false),
+      ],
+    );
+  }
+}
+
+class _Bar extends StatelessWidget {
+  const _Bar({required this.active});
+
+  final bool active;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      width: _DesktopOnboardingIndicator._barWidth,
+      height: _DesktopOnboardingIndicator._barHeight,
+      decoration: BoxDecoration(
+        // Activa: mismo gradiente de marca que el CTA/indicador mobile.
+        // Inactivas: `DarkTech.border` — el tono "gris oscuro" ya
+        // existente en el sistema de diseño (no un color nuevo).
+        gradient: active ? AppGradients.primaryCta : null,
+        color: active ? null : DarkTech.border,
         borderRadius: AppRadius.pillRadius,
       ),
     );
