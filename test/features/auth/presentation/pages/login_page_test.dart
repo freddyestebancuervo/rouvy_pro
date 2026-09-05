@@ -1,11 +1,14 @@
 import 'dart:async';
 
 import 'package:dartz/dartz.dart';
+import 'package:flutter/foundation.dart' show debugDefaultTargetPlatformOverride;
 import 'package:flutter/material.dart';
+import 'package:flutter/semantics.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:mocktail/mocktail.dart';
 
+import 'package:rouvy_pro/core/design_system/dark_tech_buttons.dart';
 import 'package:rouvy_pro/core/error/failures.dart';
 import 'package:rouvy_pro/features/auth/domain/entities/user_entity.dart';
 import 'package:rouvy_pro/features/auth/domain/usecases/login_usecase.dart';
@@ -70,7 +73,12 @@ void main() {
 
     expect(find.byType(CircularProgressIndicator), findsOneWidget);
 
-    final ElevatedButton button = tester.widget(find.byType(ElevatedButton).first);
+    // KORIXA-UI-SCREEN-BATCH-01: el CTA de login migró de `AppPrimaryButton`
+    // (envolvía `ElevatedButton`) a `PrimaryGradientButton` (Dark Tech) —
+    // mismo contrato de deshabilitado mientras carga, verificado ahora
+    // contra el `onPressed` del nuevo widget en vez del `ElevatedButton`
+    // interno que ya no existe en el árbol.
+    final PrimaryGradientButton button = tester.widget(find.byType(PrimaryGradientButton));
     expect(button.onPressed, isNull);
 
     pending.complete(const Left<Failure, UserEntity>(AuthFailure('no importa, se limpia abajo')));
@@ -125,6 +133,63 @@ void main() {
     await tester.pumpAndSettle();
 
     expect(find.text('HOME'), findsOneWidget);
+  });
+
+  testWidgets('el toggle de visibilidad de contraseña muestra/oculta el texto y mantiene su semántica',
+      (WidgetTester tester) async {
+    final SemanticsHandle handle = tester.ensureSemantics();
+
+    await pumpLoginPage(tester, repository);
+
+    final Finder passwordField = find.byType(TextFormField).at(1);
+    Finder passwordEditable() => find.descendant(of: passwordField, matching: find.byType(EditableText));
+    expect(tester.widget<EditableText>(passwordEditable()).obscureText, isTrue);
+
+    // El propio botón expone su estado vía `Semantics.toggled` — no solo
+    // color/ícono (Sección 17: no depender solo del color para estados).
+    // Se ubica el nodo por una `Key` estable puesta en el propio
+    // `Semantics(toggled:)` en vez de por su `label` (texto): el label
+    // final que ve un lector de pantalla puede fusionarse con la
+    // semántica interna de `IconButton` de forma distinta según la
+    // versión de Flutter (confirmado: pasaba localmente pero
+    // `find.bySemanticsLabel` no encontraba nada en CI, que fija Flutter
+    // 3.32.0) — la `Key` no depende de esa fusión.
+    //
+    // `hasFlag` (no `flagsCollection`) porque CI fija Flutter 3.32.0 (ver
+    // .github/workflows/ci.yml), donde `flagsCollection` no existe todavía
+    // — mismo criterio ya aplicado en dark_tech_buttons_test.dart.
+    const Key toggleKey = Key('login-password-visibility-semantics');
+    // ignore: deprecated_member_use
+    expect(tester.getSemantics(find.byKey(toggleKey)).hasFlag(SemanticsFlag.isToggled), isFalse);
+
+    await tester.tap(find.byType(IconButton));
+    await tester.pumpAndSettle();
+
+    expect(tester.widget<EditableText>(passwordEditable()).obscureText, isFalse);
+    // ignore: deprecated_member_use
+    expect(tester.getSemantics(find.byKey(toggleKey)).hasFlag(SemanticsFlag.isToggled), isTrue);
+
+    handle.dispose();
+  });
+
+  testWidgets('Olvidé mi contraseña sigue navegando a ForgotPassword', (WidgetTester tester) async {
+    await pumpLoginPage(tester, repository);
+
+    await tester.tap(find.text('¿Olvidaste tu contraseña?'));
+    await tester.pumpAndSettle();
+
+    expect(find.text('FORGOT_PASSWORD'), findsOneWidget);
+  });
+
+  testWidgets('el botón de Apple solo aparece en la plataforma Apple soportada', (WidgetTester tester) async {
+    await pumpLoginPage(tester, repository);
+    expect(find.byType(AppleSignInButton), findsNothing);
+
+    debugDefaultTargetPlatformOverride = TargetPlatform.iOS;
+    await pumpLoginPage(tester, repository);
+    expect(find.byType(AppleSignInButton), findsOneWidget);
+
+    debugDefaultTargetPlatformOverride = null;
   });
 
   testWidgets('muestra un SnackBar cuando Google Sign-In falla', (WidgetTester tester) async {

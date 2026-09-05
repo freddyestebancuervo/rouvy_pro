@@ -25,14 +25,23 @@ Widget _placeholder(String label) => Scaffold(body: Center(child: Text(label)));
 /// están cubiertas por `test/navigation/demo_navigation_test.dart`.
 Widget authPageHarness({
   required String initialLocation,
+  Widget? welcomePage,
   Widget? loginPage,
   Widget? registerPage,
   Widget? forgotPasswordPage,
   List<Override> overrides = const <Override>[],
+  // KORIXA-UI-SCREEN-BATCH-01A: permite forzar el tema AMBIENTE del
+  // `MaterialApp` (el que rodea a la página, no el `AppTheme.darkTech`
+  // que `DarkTechAuthShell` inserta localmente) — necesario para probar
+  // que la tipografía explícita de Welcome/Login/Register sigue
+  // resolviendo Dark Tech incluso cuando el modo global de la app es
+  // claro. `null` deja el valor por defecto de `MaterialApp`.
+  ThemeData? theme,
 }) {
   final GoRouter router = GoRouter(
     initialLocation: initialLocation,
     routes: <RouteBase>[
+      GoRoute(path: AppRoute.welcome, builder: (_, __) => welcomePage ?? _placeholder('WELCOME')),
       GoRoute(path: AppRoute.login, builder: (_, __) => loginPage ?? _placeholder('LOGIN')),
       GoRoute(
         path: AppRoute.register,
@@ -54,6 +63,7 @@ Widget authPageHarness({
     overrides: overrides,
     child: MaterialApp.router(
       routerConfig: router,
+      theme: theme,
       locale: const Locale('es'),
       localizationsDelegates: AppLocalizations.localizationsDelegates,
       supportedLocales: AppLocalizations.supportedLocales,

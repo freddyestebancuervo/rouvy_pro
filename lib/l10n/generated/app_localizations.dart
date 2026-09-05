@@ -113,7 +113,7 @@ abstract class AppLocalizations {
   /// No description provided for @welcomeSubtitle.
   ///
   /// In es, this message translates to:
-  /// **'Rutas reales, multijugador en vivo y planes con IA — todo en una app más rápida.'**
+  /// **'Rutas del mundo real y entrenamiento indoor enfocado, en una sola app rápida.'**
   String get welcomeSubtitle;
 
   /// No description provided for @welcomeCreateAccount.
