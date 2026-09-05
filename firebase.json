@@ -1,1 +1,69 @@
-{"firestore":{"rules":"firestore.rules","indexes":"firestore.indexes.json"},"storage":{"rules":"storage.rules"},"emulators":{"auth":{"port":9099},"firestore":{"port":8080},"ui":{"enabled":true}},"flutter":{"platforms":{"android":{"default":{"projectId":"ridepro-dbafe","appId":"1:731660820861:android:42d34edf5d3e0abbc16c14","fileOutput":"android/app/google-services.json"},"development":{"projectId":"ridepro-development","appId":"1:1020003121433:android:cb71425e96b4fe430f6d88","fileOutput":"android/app/src/development/google-services.json"}},"dart":{"lib/firebase_options.dart":{"projectId":"ridepro-dbafe","configurations":{"android":"1:731660820861:android:42d34edf5d3e0abbc16c14","web":"1:731660820861:web:09812a8dd64a0e06c16c14","windows":"1:731660820861:web:10f330e27c347846c16c14","ios":"1:731660820861:ios:8d99c2d330181c16c16c14"}},"lib/firebase_options_development.dart":{"projectId":"ridepro-development","configurations":{"android":"1:1020003121433:android:cb71425e96b4fe430f6d88","web":"1:1020003121433:web:5920d585dd6dbdb50f6d88","ios":"1:1020003121433:ios:fdfe193b6d9e99130f6d88"}}}}}}
+{
+  "firestore": {
+    "rules": "firestore.rules",
+    "indexes": "firestore.indexes.json"
+  },
+  "storage": {
+    "rules": "storage.rules"
+  },
+  "hosting": {
+    "public": "build/web",
+    "ignore": [
+      "firebase.json",
+      "**/.*",
+      "**/node_modules/**"
+    ],
+    "rewrites": [
+      {
+        "source": "**",
+        "destination": "/index.html"
+      }
+    ]
+  },
+  "emulators": {
+    "auth": {
+      "port": 9099
+    },
+    "firestore": {
+      "port": 8080
+    },
+    "ui": {
+      "enabled": true
+    }
+  },
+  "flutter": {
+    "platforms": {
+      "android": {
+        "default": {
+          "projectId": "ridepro-dbafe",
+          "appId": "1:731660820861:android:42d34edf5d3e0abbc16c14",
+          "fileOutput": "android/app/google-services.json"
+        },
+        "development": {
+          "projectId": "ridepro-development",
+          "appId": "1:1020003121433:android:cb71425e96b4fe430f6d88",
+          "fileOutput": "android/app/src/development/google-services.json"
+        }
+      },
+      "dart": {
+        "lib/firebase_options.dart": {
+          "projectId": "ridepro-dbafe",
+          "configurations": {
+            "android": "1:731660820861:android:42d34edf5d3e0abbc16c14",
+            "web": "1:731660820861:web:09812a8dd64a0e06c16c14",
+            "windows": "1:731660820861:web:10f330e27c347846c16c14",
+            "ios": "1:731660820861:ios:8d99c2d330181c16c16c14"
+          }
+        },
+        "lib/firebase_options_development.dart": {
+          "projectId": "ridepro-development",
+          "configurations": {
+            "android": "1:1020003121433:android:cb71425e96b4fe430f6d88",
+            "web": "1:1020003121433:web:5920d585dd6dbdb50f6d88",
+            "ios": "1:1020003121433:ios:fdfe193b6d9e99130f6d88"
+          }
+        }
+      }
+    }
+  }
+}
