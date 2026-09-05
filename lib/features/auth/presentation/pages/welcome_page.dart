@@ -251,13 +251,17 @@ class _DesktopWelcomeContent extends StatelessWidget {
                   crossAxisAlignment: CrossAxisAlignment.start,
                   mainAxisSize: MainAxisSize.min,
                   children: <Widget>[
-                    // Logo materially larger que en mobile (72 -> 140):
-                    // mismo archivo, sin modificar, solo escalado. Subido
-                    // de 120 a 140 (KORIXA-UI-SCREEN01-DESKTOP-MICRO-
-                    // POLISH-20260905, +16.7%, dentro del +15-20% pedido).
+                    // KORIXA-UI-SCREEN01-DESKTOP-LOGO-SWAP-20260905: logo
+                    // de escritorio reemplazado por el archivo aprobado
+                    // por el dueño (`korixa_logo_desktop.png`, 1697×927,
+                    // RGBA con transparencia real — verificado por bytes,
+                    // no una captura). Asset exclusivo de desktop; el
+                    // logo de mobile (`korixa_logo.png`) no se toca. Solo
+                    // `height` + `BoxFit.contain`: el ancho se deriva del
+                    // aspect ratio intrínseco del PNG, sin estirar.
                     Image.asset(
-                      'assets/icons/korixa_logo.png',
-                      height: 140,
+                      'assets/icons/korixa_logo_desktop.png',
+                      height: 180,
                       fit: BoxFit.contain,
                       semanticLabel: 'Korixa',
                     ),
