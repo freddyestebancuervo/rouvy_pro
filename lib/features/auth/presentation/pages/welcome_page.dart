@@ -194,10 +194,17 @@ class _DesktopWelcomeContent extends StatelessWidget {
   /// Ancho máximo del bloque de texto/CTA — deliberadamente NO
   /// `double.infinity`: en un viewport de 1440px+ un bloque de texto sin
   /// tope de ancho sería difícil de leer (líneas demasiado largas) y
-  /// empujaría el CTA hacia el centro del ciclista. 560 (vs. 480 en
+  /// empujaría el CTA hacia el centro del ciclista. 640 (vs. 480 en
   /// mobile) es "materially larger" sin acercarse al tercio derecho del
   /// encuadre donde vive el ciclista.
-  static const double _contentMaxWidth = 560;
+  ///
+  /// KORIXA-UI-SCREEN01-DESKTOP-MICRO-POLISH-20260905: subido de 560 a
+  /// 640 — el CTA sigue con su propio ancho fijo (320, sin cambios) y el
+  /// título ya entra en una sola línea con cualquiera de los dos anchos,
+  /// así que el único elemento realmente afectado es el subtítulo: más
+  /// ancho disponible para que su wrap quede más balanceado (antes
+  /// dejaba una segunda línea de una sola palabra).
+  static const double _contentMaxWidth = 640;
 
   @override
   Widget build(BuildContext context) {
@@ -235,16 +242,22 @@ class _DesktopWelcomeContent extends StatelessWidget {
               key: const Key('welcome-content-max-width'),
               constraints: const BoxConstraints(maxWidth: _contentMaxWidth),
               child: Padding(
-                padding: const EdgeInsets.symmetric(horizontal: AppSpacing.xxxl, vertical: AppSpacing.xl),
+                // KORIXA-UI-SCREEN01-DESKTOP-MICRO-POLISH-20260905: el
+                // inset izquierdo sube de 40 (`AppSpacing.xxxl`) a 72 —
+                // el contenido quedaba pegado al borde del viewport; el
+                // resto de los insets no cambia.
+                padding: const EdgeInsets.fromLTRB(72, AppSpacing.xl, AppSpacing.xxxl, AppSpacing.xl),
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   mainAxisSize: MainAxisSize.min,
                   children: <Widget>[
-                    // Logo materially larger que en mobile (72 -> 120):
-                    // mismo archivo, sin modificar, solo escalado.
+                    // Logo materially larger que en mobile (72 -> 140):
+                    // mismo archivo, sin modificar, solo escalado. Subido
+                    // de 120 a 140 (KORIXA-UI-SCREEN01-DESKTOP-MICRO-
+                    // POLISH-20260905, +16.7%, dentro del +15-20% pedido).
                     Image.asset(
                       'assets/icons/korixa_logo.png',
-                      height: 120,
+                      height: 140,
                       fit: BoxFit.contain,
                       semanticLabel: 'Korixa',
                     ),
