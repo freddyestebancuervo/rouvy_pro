@@ -57,6 +57,26 @@ void main() {
     expect(hasHero, isTrue, reason: 'debe renderizar el hero aprobado como Image.asset real, no un placeholder');
   });
 
+  AssetImage? heroAssetImage(WidgetTester tester) {
+    final Iterable<Image> images = tester.widgetList<Image>(
+      find.descendant(of: find.byKey(const Key('welcome-hero-image')), matching: find.byType(Image)),
+    );
+    final ImageProvider provider = images.single.image;
+    return provider is AssetImage ? provider : null;
+  }
+
+  testWidgets('MOBILE_USES_VERTICAL_HERO = PASS', (WidgetTester tester) async {
+    await pumpWelcomePage(tester, surfaceSize: const Size(390, 844));
+
+    expect(heroAssetImage(tester)?.assetName, 'assets/images/korixa_welcome_hero.webp');
+  });
+
+  testWidgets('DESKTOP_USES_PANORAMIC_HERO = PASS', (WidgetTester tester) async {
+    await pumpWelcomePage(tester, surfaceSize: const Size(1440, 900));
+
+    expect(heroAssetImage(tester)?.assetName, 'assets/images/korixa_welcome_hero_desktop.webp');
+  });
+
   testWidgets('LOGO_ASSET_PRESENT = PASS', (WidgetTester tester) async {
     await pumpWelcomePage(tester);
 
@@ -105,32 +125,70 @@ void main() {
     expect(tester.takeException(), isNull);
   });
 
+  testWidgets('1440x900_NO_OVERFLOW = PASS', (WidgetTester tester) async {
+    await pumpWelcomePage(tester, surfaceSize: const Size(1440, 900));
+    expect(tester.takeException(), isNull);
+  });
+
   testWidgets(
-      '1440x900_RESPONSIVE = PASS (DESKTOP_STAGE acotado, sin recorte panorámico ni columna diminuta)',
+      'DESKTOP_HERO_FULL_VIEWPORT = PASS (hero panorámico a pantalla completa, sin acotar a un panel)',
       (WidgetTester tester) async {
     const Size desktopSize = Size(1440, 900);
     await pumpWelcomePage(tester, surfaceSize: desktopSize);
-    expect(tester.takeException(), isNull);
 
-    // KORIXA-UI-SCREEN01-VISUAL-REFINEMENT-20260905: en vez de estirar el
-    // hero al viewport panorámico completo (lo que forzaba un recorte
-    // vertical severo sin alineamiento posible que se viera bien), un
-    // viewport ancho activa el "stage" central tipo mobile — el hero
-    // queda acotado a ese ancho de panel, no a los 1440px completos.
+    // KORIXA-UI-SCREEN01-DESKTOP-HERO-CORRECTION-20260905: el hero cubre
+    // el viewport de escritorio COMPLETO — no un panel de 480px centrado
+    // ("phone stage") como en la iteración rechazada por el dueño.
     final Size heroSize = tester.getSize(find.byKey(const Key('welcome-hero-image')));
-    expect(heroSize.width, lessThan(desktopSize.width));
+    expect(heroSize.width, desktopSize.width);
     expect(heroSize.height, desktopSize.height);
+  });
 
-    // El bloque de texto/CTA sigue acotado dentro del stage — "contenido
-    // acotado pero visualmente sustancial", no una columna diminuta en un
-    // vacío negro, pero tampoco un formulario de ancho completo.
+  testWidgets(
+      'DESKTOP_PHONE_STAGE_REMOVED = PASS (ningún elemento visual queda acotado a 480px de ancho en desktop)',
+      (WidgetTester tester) async {
+    const Size desktopSize = Size(1440, 900);
+    await pumpWelcomePage(tester, surfaceSize: desktopSize);
+
+    // El workaround rechazado dejaba el hero Y el contenido acotados a
+    // exactamente 480px de ancho, centrados, con fondo Dark Tech sobrante
+    // a los costados ("un teléfono flotando en un fondo de escritorio").
+    // Acá el hero es panorámico completo y el bloque de contenido es
+    // "materially larger" (560) que el propio ancho de mobile (480).
+    final Size heroSize = tester.getSize(find.byKey(const Key('welcome-hero-image')));
+    expect(heroSize.width, isNot(480));
+    expect(heroSize.width, greaterThan(480));
+
     final Size contentSize = tester.getSize(find.byKey(const Key('welcome-content-max-width')));
-    expect(contentSize.width, lessThanOrEqualTo(480));
-    expect(contentSize.width, greaterThan(300));
+    expect(contentSize.width, greaterThan(480));
+  });
 
-    // El hero llena el ancho del stage (480, mismo tope que el contenido
-    // de texto) — nunca el ancho panorámico completo del viewport.
-    expect(heroSize.width, 480);
+  testWidgets('DESKTOP_CTA_VISIBLE = PASS', (WidgetTester tester) async {
+    await pumpWelcomePage(tester, surfaceSize: const Size(1440, 900));
+
+    expect(find.text('Comenzar'), findsOneWidget);
+    expect(find.byType(PrimaryGradientButton), findsOneWidget);
+
+    // CTA "desktop-appropriate": ni el ancho completo del viewport, ni el
+    // tamaño mobile — un ancho fijo intermedio (ver `welcome_page.dart`).
+    final Size ctaSize = tester.getSize(find.byKey(const Key('welcome-desktop-cta')));
+    expect(ctaSize.width, lessThan(1440));
+    expect(ctaSize.width, greaterThan(200));
+  });
+
+  testWidgets('DESKTOP_SKIP_TOP_RIGHT = PASS', (WidgetTester tester) async {
+    const Size desktopSize = Size(1440, 900);
+    await pumpWelcomePage(tester, surfaceSize: desktopSize);
+
+    expect(find.text('Saltar'), findsOneWidget);
+
+    final Offset skipTopLeft = tester.getTopLeft(find.text('Saltar'));
+    // Arriba: bien por encima de la mitad vertical del viewport.
+    expect(skipTopLeft.dy, lessThan(desktopSize.height / 2));
+    // A la derecha: bien a la derecha de la mitad horizontal del
+    // viewport (y, por construcción del layout, del bloque de contenido
+    // anclado a la izquierda).
+    expect(skipTopLeft.dx, greaterThan(desktopSize.width / 2));
   });
 
   testWidgets('OUTER_LIGHT_THEME_DARK_TECH = PASS', (WidgetTester tester) async {

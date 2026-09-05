@@ -25,25 +25,30 @@ import '../../../../l10n/generated/app_localizations.dart';
 /// ahí sin forzarla. Login/Register no se tocan en absoluto en esta
 /// tarea.
 ///
-/// KORIXA-UI-SCREEN01-VISUAL-REFINEMENT-20260905: la foto aprobada
-/// (`assets/images/korixa_welcome_hero.webp`, 1440×2560, retrato) tiene
-/// una relación de aspecto MUY distinta a un viewport de escritorio
-/// ancho (p. ej. 1440×900). Intentar cubrir un viewport panorámico con
-/// `BoxFit.cover` fuerza un recorte vertical severo sin importar el
-/// `alignment` elegido — con cualquier ajuste, o se pierde el casco/
-/// jersey de arriba, o se pierden piernas/rueda de abajo; no hay
-/// alineamiento que "arregle" una relación de aspecto fundamentalmente
-/// incompatible. Por eso, en viewports anchos (`> _desktopBreakpoint`),
-/// esta pantalla NO estira el hero a pantalla completa — mantiene un
-/// "stage" central de proporción cercana al celular (ver [_DesktopStage]),
-/// exactamente la composición que Login/Register ya usan para web ancho,
-/// para que el recorte del hero vuelva a ser tan suave como en mobile.
+/// KORIXA-UI-SCREEN01-DESKTOP-HERO-CORRECTION-20260905: la iteración
+/// anterior (ver historial de este archivo) reaccionaba a la relación de
+/// aspecto retrato del hero mobile (`korixa_welcome_hero.webp`,
+/// 1440×2560) acotando TODA la composición — hero incluido — a un
+/// panel central de 480px en viewports anchos ("stage"). El dueño
+/// rechazó ese resultado: en desktop se veía como "un teléfono flotando
+/// en un fondo de escritorio", no como una pantalla de bienvenida de
+/// escritorio real.
+///
+/// La corrección no es un ajuste de alineamiento — es un asset distinto.
+/// En viewports anchos (`> _desktopBreakpoint`) esta pantalla usa un
+/// segundo hero panorámico dedicado (`korixa_welcome_hero_desktop.webp`,
+/// aprobado por el dueño, ~16:9) a pantalla completa (ver
+/// [_DesktopWelcomeContent]), con el contenido anclado a la izquierda en
+/// vez de abajo — igual que el hero vertical nunca estuvo pensado para
+/// cubrir un viewport panorámico, el hero panorámico tampoco está
+/// pensado para un layout de contenido anclado abajo estilo mobile.
 class WelcomePage extends StatelessWidget {
   const WelcomePage({super.key});
 
-  /// Por debajo de este ancho lógico, el hero llena el viewport completo
-  /// ("fullscreen hero vertical, estilo app real"). Por encima, se activa
-  /// el "stage" central — ver docblock de la clase.
+  /// Por debajo de este ancho lógico: hero vertical + contenido anclado
+  /// abajo ("fullscreen hero vertical, estilo app real"). Por encima:
+  /// hero panorámico + contenido anclado a la izquierda — ver docblock
+  /// de la clase.
   static const double _desktopBreakpoint = 700;
 
   @override
@@ -56,13 +61,9 @@ class WelcomePage extends StatelessWidget {
         backgroundColor: DarkTech.background,
         body: LayoutBuilder(
           builder: (BuildContext context, BoxConstraints constraints) {
-            final Widget content = _WelcomeContent(l10n: l10n);
-
-            if (constraints.maxWidth <= _desktopBreakpoint) {
-              return content;
-            }
-
-            return _DesktopStage(height: constraints.maxHeight, child: content);
+            return constraints.maxWidth > _desktopBreakpoint
+                ? _DesktopWelcomeContent(l10n: l10n)
+                : _MobileWelcomeContent(l10n: l10n);
           },
         ),
       ),
@@ -70,15 +71,12 @@ class WelcomePage extends StatelessWidget {
   }
 }
 
-/// Composición completa de la pantalla (hero + degradado + Saltar +
-/// marca/título/subtítulo/indicador/CTA). Aislada en su propio widget
-/// para poder colocarla tal cual dentro del "stage" de desktop
-/// ([_DesktopStage]) sin duplicar la estructura — el `Stack` interno
-/// siempre se dimensiona relativo a SU padre inmediato (pantalla
-/// completa en mobile, el panel angosto en desktop), así que el recorte
-/// del hero automáticamente vuelve a ser "modo mobile" dentro del stage.
-class _WelcomeContent extends StatelessWidget {
-  const _WelcomeContent({required this.l10n});
+/// Composición mobile (hero vertical + degradado + Saltar +
+/// marca/título/subtítulo/indicador/CTA anclados abajo). Sin cambios
+/// respecto a la versión aprobada — la corrección de esta tarea es
+/// exclusivamente de escritorio (ver [_DesktopWelcomeContent]).
+class _MobileWelcomeContent extends StatelessWidget {
+  const _MobileWelcomeContent({required this.l10n});
 
   final AppLocalizations l10n;
 
@@ -181,32 +179,109 @@ class _WelcomeContent extends StatelessWidget {
   }
 }
 
-/// "Stage" central para viewports de escritorio/web anchos — ver
-/// docblock de [WelcomePage]. Contiene la MISMA composición de
-/// [_WelcomeContent] dentro de un panel angosto (ancho fijo, alto igual
-/// al del viewport), en vez de estirar el hero a un ancho panorámico
-/// donde ningún recorte se ve bien. El área sobrante se llena con el
-/// fondo Dark Tech y un resplandor ambiental sutil — mismo patrón ya
-/// usado en `DarkTechAuthShell._AmbientGlow`, no un efecto nuevo.
-class _DesktopStage extends StatelessWidget {
-  const _DesktopStage({required this.height, required this.child});
+/// Composición de escritorio — KORIXA-UI-SCREEN01-DESKTOP-HERO-CORRECTION-20260905.
+/// Reemplaza el "stage" de 480px (ver docblock de [WelcomePage]) por el
+/// hero panorámico real a pantalla completa (`StackFit.expand`, sin
+/// ningún `SizedBox`/`ClipRect` que lo acote), con el contenido anclado
+/// a la izquierda/centro-izquierda para no tapar al ciclista (visible a
+/// la derecha del encuadre) y "Saltar" arriba a la derecha — misma
+/// esquina que en mobile, mismo destino.
+class _DesktopWelcomeContent extends StatelessWidget {
+  const _DesktopWelcomeContent({required this.l10n});
 
-  final double height;
-  final Widget child;
+  final AppLocalizations l10n;
 
-  static const double _stageWidth = 480;
+  /// Ancho máximo del bloque de texto/CTA — deliberadamente NO
+  /// `double.infinity`: en un viewport de 1440px+ un bloque de texto sin
+  /// tope de ancho sería difícil de leer (líneas demasiado largas) y
+  /// empujaría el CTA hacia el centro del ciclista. 560 (vs. 480 en
+  /// mobile) es "materially larger" sin acercarse al tercio derecho del
+  /// encuadre donde vive el ciclista.
+  static const double _contentMaxWidth = 560;
 
   @override
   Widget build(BuildContext context) {
+    final TextTheme textTheme = Theme.of(context).textTheme;
+
     return Stack(
       fit: StackFit.expand,
       children: <Widget>[
-        const _DesktopAmbientBackdrop(),
-        Center(
-          child: SizedBox(
-            width: _stageWidth,
-            height: height,
-            child: ClipRect(child: child),
+        const ExcludeSemantics(
+          key: Key('welcome-hero-image'),
+          child: _DesktopHeroImage(),
+        ),
+        // Scrim horizontal — más denso del lado del contenido (izquierda),
+        // transparente antes de llegar al ciclista/paisaje (derecha).
+        // Deliberadamente NO `imageScrimBottom` (ese oscurece TODO el
+        // borde inferior, incluido el ciclista): acá el objetivo es
+        // contraste de texto sin oscurecer globalmente la foto aprobada.
+        const Positioned.fill(child: _DesktopContentScrim()),
+        SafeArea(
+          child: Align(
+            alignment: Alignment.topRight,
+            child: Padding(
+              padding: const EdgeInsets.all(AppSpacing.lg),
+              child: _SkipButton(
+                label: l10n.welcomeSkipAction,
+                onTap: () => context.go(AppRoute.login),
+              ),
+            ),
+          ),
+        ),
+        SafeArea(
+          child: Align(
+            alignment: Alignment.centerLeft,
+            child: ConstrainedBox(
+              key: const Key('welcome-content-max-width'),
+              constraints: const BoxConstraints(maxWidth: _contentMaxWidth),
+              child: Padding(
+                padding: const EdgeInsets.symmetric(horizontal: AppSpacing.xxxl, vertical: AppSpacing.xl),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  mainAxisSize: MainAxisSize.min,
+                  children: <Widget>[
+                    // Logo materially larger que en mobile (72 -> 120):
+                    // mismo archivo, sin modificar, solo escalado.
+                    Image.asset(
+                      'assets/icons/korixa_logo.png',
+                      height: 120,
+                      fit: BoxFit.contain,
+                      semanticLabel: 'Korixa',
+                    ),
+                    const SizedBox(height: AppSpacing.xl),
+                    Text(
+                      l10n.welcomeTitle,
+                      textAlign: TextAlign.left,
+                      // `headlineLarge` (32) en vez del `headlineMedium`
+                      // (28) de mobile — jerarquía más fuerte, acorde a
+                      // "materially larger" del encargo.
+                      style: textTheme.headlineLarge?.copyWith(fontWeight: FontWeight.w800),
+                    ),
+                    const SizedBox(height: AppSpacing.md),
+                    Text(
+                      l10n.welcomeSubtitle,
+                      textAlign: TextAlign.left,
+                      style: textTheme.bodyLarge?.copyWith(color: DarkTech.textSecondary),
+                    ),
+                    const SizedBox(height: AppSpacing.xl),
+                    const _OnboardingIndicator(),
+                    const SizedBox(height: AppSpacing.xl),
+                    // CTA "desktop-appropriate": ni el ancho mobile (52px
+                    // de alto pero angosto), ni ancho completo del
+                    // viewport — un ancho fijo intermedio dentro del
+                    // bloque de contenido.
+                    SizedBox(
+                      key: const Key('welcome-desktop-cta'),
+                      width: 320,
+                      child: PrimaryGradientButton(
+                        label: l10n.welcomeGetStarted,
+                        onPressed: () => context.go(AppRoute.register),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ),
           ),
         ),
       ],
@@ -214,26 +289,24 @@ class _DesktopStage extends StatelessWidget {
   }
 }
 
-/// Fondo del área sobrante alrededor del "stage" de desktop — sólido
-/// Dark Tech más un resplandor radial de marca muy sutil, para que no se
-/// sienta como un vacío negro plano (Sección G: "look premium").
-class _DesktopAmbientBackdrop extends StatelessWidget {
-  const _DesktopAmbientBackdrop();
+/// Scrim horizontal exclusivo de la composición de escritorio — ver
+/// docblock de [_DesktopWelcomeContent]. Un solo tono neutro (no de
+/// marca, igual que `AppGradients.imageScrimBottom`) de opaco a
+/// transparente; el corte al 60% del ancho deja el ciclista y la mayor
+/// parte del paisaje sin oscurecer.
+class _DesktopContentScrim extends StatelessWidget {
+  const _DesktopContentScrim();
 
   @override
   Widget build(BuildContext context) {
-    return ColoredBox(
-      color: DarkTech.background,
-      child: IgnorePointer(
-        child: DecoratedBox(
-          decoration: BoxDecoration(
-            gradient: RadialGradient(
-              radius: 1.1,
-              colors: <Color>[
-                DarkTech.brandPurple.withValues(alpha: 0.14),
-                Colors.transparent,
-              ],
-            ),
+    return const IgnorePointer(
+      child: DecoratedBox(
+        decoration: BoxDecoration(
+          gradient: LinearGradient(
+            begin: Alignment.centerLeft,
+            end: Alignment.centerRight,
+            colors: <Color>[Color(0xE6000000), Colors.transparent],
+            stops: <double>[0.0, 0.6],
           ),
         ),
       ),
@@ -241,13 +314,36 @@ class _DesktopAmbientBackdrop extends StatelessWidget {
   }
 }
 
-/// Foto hero aprobada por el dueño. `BoxFit.cover`; el punto focal
-/// (`alignment`) se ajusta según la forma del contenedor inmediato —
-/// dentro del "stage" de desktop ([_DesktopStage]) ese contenedor ya
-/// tiene una proporción parecida a la de un celular, así que en la
-/// práctica casi siempre usa el mismo alineamiento que mobile (ver
-/// docblock de [WelcomePage]: ya no se le pide cubrir un viewport
-/// panorámico completo).
+/// Hero panorámico de escritorio aprobado por el dueño
+/// (`korixa_welcome_hero_desktop.webp`, ~16:9) — distinto archivo del
+/// hero vertical de mobile, no el mismo asset reescalado. `BoxFit.cover`
+/// con un alineamiento levemente sesgado a la derecha: el margen de
+/// recorte real es chico (el aspect ratio del asset ya es cercano al de
+/// un viewport de escritorio ancho), pero ese sesgo garantiza que el
+/// ciclista/casco/jersey — el sujeto del encuadre, ubicado a la derecha
+/// del frame original — se mantengan visibles incluso en anchos de
+/// escritorio angostos cerca del breakpoint (transición segura a
+/// tablet), sin necesidad de recortar agresivamente el amanecer/lago a
+/// la izquierda en los viewports panorámicos donde sobra espacio.
+class _DesktopHeroImage extends StatelessWidget {
+  const _DesktopHeroImage();
+
+  @override
+  Widget build(BuildContext context) {
+    return Image.asset(
+      'assets/images/korixa_welcome_hero_desktop.webp',
+      fit: BoxFit.cover,
+      alignment: const Alignment(0.2, 0),
+    );
+  }
+}
+
+/// Foto hero vertical aprobada por el dueño — sin cambios respecto a la
+/// versión aprobada. Exclusiva de mobile ahora (ver [_DesktopHeroImage]
+/// para el equivalente de escritorio); ya no necesita el ajuste de
+/// `alignment` para "contenedor efectivamente panorámico", porque ese
+/// caso ahora lo cubre el hero de escritorio dedicado, no este asset
+/// estirado.
 class _HeroImage extends StatelessWidget {
   const _HeroImage();
 
