@@ -61,7 +61,7 @@ void main() {
       );
       await tester.pumpAndSettle();
 
-      final Text title = tester.widget<Text>(find.text('Entrena como nunca antes'));
+      final Text title = tester.widget<Text>(find.text('Conecta tu energía.'));
       expect(title.style?.color, DarkTech.textPrimary);
     });
 

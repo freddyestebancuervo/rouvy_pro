@@ -107,26 +107,26 @@ abstract class AppLocalizations {
   /// No description provided for @welcomeTitle.
   ///
   /// In es, this message translates to:
-  /// **'Entrena como nunca antes'**
+  /// **'Conecta tu energía.'**
   String get welcomeTitle;
 
   /// No description provided for @welcomeSubtitle.
   ///
   /// In es, this message translates to:
-  /// **'Rutas del mundo real y entrenamiento indoor enfocado, en una sola app rápida.'**
+  /// **'Entrena, compite y vive rutas increíbles en indoor y outdoor.'**
   String get welcomeSubtitle;
 
-  /// No description provided for @welcomeCreateAccount.
+  /// No description provided for @welcomeGetStarted.
   ///
   /// In es, this message translates to:
-  /// **'Crear cuenta'**
-  String get welcomeCreateAccount;
+  /// **'Comenzar'**
+  String get welcomeGetStarted;
 
-  /// No description provided for @welcomeLogin.
+  /// No description provided for @welcomeSkipAction.
   ///
   /// In es, this message translates to:
-  /// **'Ya tengo cuenta'**
-  String get welcomeLogin;
+  /// **'Saltar'**
+  String get welcomeSkipAction;
 
   /// No description provided for @loginTitle.
   ///
