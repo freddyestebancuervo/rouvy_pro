@@ -105,25 +105,32 @@ void main() {
     expect(tester.takeException(), isNull);
   });
 
-  testWidgets('1440x900_RESPONSIVE = PASS (HERO_FULL_VIEWPORT + sin columna diminuta)', (WidgetTester tester) async {
+  testWidgets(
+      '1440x900_RESPONSIVE = PASS (DESKTOP_STAGE acotado, sin recorte panorámico ni columna diminuta)',
+      (WidgetTester tester) async {
     const Size desktopSize = Size(1440, 900);
     await pumpWelcomePage(tester, surfaceSize: desktopSize);
     expect(tester.takeException(), isNull);
 
-    // El hero (`ExcludeSemantics` envolviendo `_HeroImage`) debe llenar el
-    // viewport COMPLETO en desktop — `Stack(fit: StackFit.expand)` lo
-    // garantiza estructuralmente; este test lo prueba contra el tamaño
-    // realmente renderizado, no solo contra el código fuente.
+    // KORIXA-UI-SCREEN01-VISUAL-REFINEMENT-20260905: en vez de estirar el
+    // hero al viewport panorámico completo (lo que forzaba un recorte
+    // vertical severo sin alineamiento posible que se viera bien), un
+    // viewport ancho activa el "stage" central tipo mobile — el hero
+    // queda acotado a ese ancho de panel, no a los 1440px completos.
     final Size heroSize = tester.getSize(find.byKey(const Key('welcome-hero-image')));
-    expect(heroSize, desktopSize);
+    expect(heroSize.width, lessThan(desktopSize.width));
+    expect(heroSize.height, desktopSize.height);
 
-    // El bloque de texto/CTA sí debe quedar acotado (no estirado a los
-    // 1440px completos) — "contenido acotado pero visualmente
-    // sustancial", no una columna diminuta en un vacío negro, pero
-    // tampoco un formulario de ancho completo.
+    // El bloque de texto/CTA sigue acotado dentro del stage — "contenido
+    // acotado pero visualmente sustancial", no una columna diminuta en un
+    // vacío negro, pero tampoco un formulario de ancho completo.
     final Size contentSize = tester.getSize(find.byKey(const Key('welcome-content-max-width')));
     expect(contentSize.width, lessThanOrEqualTo(480));
     expect(contentSize.width, greaterThan(300));
+
+    // El hero llena el ancho del stage (480, mismo tope que el contenido
+    // de texto) — nunca el ancho panorámico completo del viewport.
+    expect(heroSize.width, 480);
   });
 
   testWidgets('OUTER_LIGHT_THEME_DARK_TECH = PASS', (WidgetTester tester) async {
