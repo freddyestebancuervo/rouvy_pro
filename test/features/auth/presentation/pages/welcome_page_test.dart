@@ -7,7 +7,8 @@ import 'package:rouvy_pro/features/auth/presentation/pages/welcome_page.dart';
 
 import 'auth_page_test_utils.dart';
 
-/// KORIXA-UI-SCREEN-01-APPROVED-WELCOME-IMPLEMENTATION-20260904 — Sección 10.
+/// KORIXA-UI-SCREEN-01-APPROVED-WELCOME-IMPLEMENTATION-20260904 /
+/// KORIXA-UI-SCREEN01-ASSET-INTEGRATION-20260904.
 void main() {
   Future<void> pumpWelcomePage(
     WidgetTester tester, {
@@ -45,6 +46,32 @@ void main() {
     expect(find.text('Saltar'), findsOneWidget);
   });
 
+  testWidgets('HERO_ASSET_PRESENT = PASS', (WidgetTester tester) async {
+    await pumpWelcomePage(tester);
+
+    final Iterable<Image> images = tester.widgetList<Image>(find.byType(Image));
+    final bool hasHero = images.any((Image image) {
+      final ImageProvider provider = image.image;
+      return provider is AssetImage && provider.assetName == 'assets/images/korixa_welcome_hero.webp';
+    });
+    expect(hasHero, isTrue, reason: 'debe renderizar el hero aprobado como Image.asset real, no un placeholder');
+  });
+
+  testWidgets('LOGO_ASSET_PRESENT = PASS', (WidgetTester tester) async {
+    await pumpWelcomePage(tester);
+
+    final Iterable<Image> images = tester.widgetList<Image>(find.byType(Image));
+    final bool hasLogo = images.any((Image image) {
+      final ImageProvider provider = image.image;
+      return provider is AssetImage && provider.assetName == 'assets/icons/korixa_logo.png';
+    });
+    expect(hasLogo, isTrue, reason: 'debe renderizar el logo aprobado como Image.asset real, no el wordmark de texto');
+
+    // Sección 4 del encargo: NO debe quedar un "Korixa" de texto duplicado
+    // bajo el logo — el propio archivo ya incluye el wordmark.
+    expect(find.text('Korixa'), findsNothing);
+  });
+
   testWidgets('CTA_NAVIGATION = PASS (Comenzar -> Register, mismo destino que el CTA anterior)',
       (WidgetTester tester) async {
     await pumpWelcomePage(tester);
@@ -65,12 +92,12 @@ void main() {
     expect(find.text('LOGIN'), findsOneWidget);
   });
 
-  testWidgets('MOBILE_NO_OVERFLOW_390x844 = PASS', (WidgetTester tester) async {
+  testWidgets('390x844_NO_OVERFLOW = PASS', (WidgetTester tester) async {
     await pumpWelcomePage(tester, surfaceSize: const Size(390, 844));
     expect(tester.takeException(), isNull);
   });
 
-  testWidgets('SMALL_MOBILE_NO_OVERFLOW = PASS', (WidgetTester tester) async {
+  testWidgets('320x568_NO_OVERFLOW = PASS', (WidgetTester tester) async {
     // iPhone SE-ish: uno de los viewports más chicos que la app soporta
     // hoy — si el layout se desborda, `flutter_test` lo reporta como una
     // excepción de renderizado (no como un simple fallo de `expect`).
@@ -78,16 +105,16 @@ void main() {
     expect(tester.takeException(), isNull);
   });
 
-  testWidgets('DESKTOP_LAYOUT_NO_TINY_CENTERED_COLUMN = PASS', (WidgetTester tester) async {
+  testWidgets('1440x900_RESPONSIVE = PASS (HERO_FULL_VIEWPORT + sin columna diminuta)', (WidgetTester tester) async {
     const Size desktopSize = Size(1440, 900);
     await pumpWelcomePage(tester, surfaceSize: desktopSize);
     expect(tester.takeException(), isNull);
 
-    // El hero (`ExcludeSemantics` envolviendo `_HeroPlaceholder`) debe
-    // llenar el viewport COMPLETO en desktop — `Stack(fit: StackFit.expand)`
-    // lo garantiza estructuralmente; este test lo prueba contra el tamaño
+    // El hero (`ExcludeSemantics` envolviendo `_HeroImage`) debe llenar el
+    // viewport COMPLETO en desktop — `Stack(fit: StackFit.expand)` lo
+    // garantiza estructuralmente; este test lo prueba contra el tamaño
     // realmente renderizado, no solo contra el código fuente.
-    final Size heroSize = tester.getSize(find.byKey(const Key('welcome-hero-placeholder')));
+    final Size heroSize = tester.getSize(find.byKey(const Key('welcome-hero-image')));
     expect(heroSize, desktopSize);
 
     // El bloque de texto/CTA sí debe quedar acotado (no estirado a los
@@ -99,7 +126,7 @@ void main() {
     expect(contentSize.width, greaterThan(300));
   });
 
-  testWidgets('OUTER_LIGHT_THEME_DOES_NOT_BREAK_DARK_TECH = PASS', (WidgetTester tester) async {
+  testWidgets('OUTER_LIGHT_THEME_DARK_TECH = PASS', (WidgetTester tester) async {
     await pumpWelcomePage(tester, theme: ThemeData.light());
 
     final Text title = tester.widget<Text>(find.text('Conecta tu energía.'));

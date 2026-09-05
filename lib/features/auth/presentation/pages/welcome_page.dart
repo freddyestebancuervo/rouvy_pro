@@ -26,18 +26,15 @@ import '../../../../l10n/generated/app_localizations.dart';
 /// tarea; envuelve el mismo `Theme(data: AppTheme.darkTech)` de forma
 /// independiente para no depender de un componente compartido con ellos.
 ///
-/// ⚠️ KORIXA-UI-SCREEN-01-APPROVED-WELCOME-IMPLEMENTATION-20260904: la
-/// foto real de ciclista (Sección 2 "HERO") y el logo oficial de Korixa
-/// (Sección 2 "BRAND") NO existen todavía en el repo — `assets/images/`
-/// y `assets/icons/` están vacíos, y no se recibió ningún archivo
-/// aprobado fuera del repo para copiar. Sustituir con una foto/logo
-/// fabricado o descargado violaría la Sección 3 del encargo
-/// explícitamente ("no antecedente falso de asset"). Esta pantalla
-/// implementa la ESTRUCTURA completa (todos los widgets reales:
-/// Saltar/marca-texto/título/subtítulo/indicador/CTA) con un fondo
-/// decorativo Dark Tech como placeholder honesto — no una foto
-/// fabricada — a la espera de los assets aprobados reales. Ver
-/// `_HeroPlaceholder`. FINAL_STATUS de esta entrega = HOLD_APPROVED_VISUAL_ASSET.
+/// KORIXA-UI-SCREEN01-ASSET-INTEGRATION-20260904: hero y logo son los
+/// archivos exactos aprobados por el dueño (OWNER_PROVIDED, entregados
+/// como `korixa_screen01_hero_app_1440x2560.webp` y
+/// `korixa_logo_transparent_2048.png`), copiados sin modificar a
+/// `assets/images/korixa_welcome_hero.webp` y
+/// `assets/icons/korixa_logo.png`. El master 8K (`..._master_8k_...jpg`)
+/// es solo fuente de archivo/diseño — deliberadamente NO se empaqueta en
+/// los assets del runtime de Flutter, solo la versión 1440×2560 ya
+/// pensada para pantalla.
 class WelcomePage extends StatelessWidget {
   const WelcomePage({super.key});
 
@@ -63,13 +60,13 @@ class WelcomePage extends StatelessWidget {
             body: Stack(
               fit: StackFit.expand,
               children: <Widget>[
-                // Decorativo únicamente — el título/subtítulo ya
-                // describen la propuesta de valor, así que se excluye de
-                // la semántica en vez de duplicarla (Sección 9: "image
+                // Decorativo — el título/subtítulo ya describen la
+                // propuesta de valor en texto, así que la foto se excluye
+                // de la semántica en vez de duplicarla (Sección 9: "image
                 // marked decorative").
                 const ExcludeSemantics(
-                  key: Key('welcome-hero-placeholder'),
-                  child: _HeroPlaceholder(),
+                  key: Key('welcome-hero-image'),
+                  child: _HeroImage(),
                 ),
                 // Degradado de lectura — mismo token que usan las cards
                 // de ruta (`DarkTechRouteImage`), nunca un gradiente ad
@@ -106,7 +103,7 @@ class WelcomePage extends StatelessWidget {
                         // `reverse: true`: en una pantalla muy chica o
                         // con texto muy escalado, lo primero que debe
                         // seguir visible es el CTA (el final del
-                        // contenido), no el wordmark — el scroll parte
+                        // contenido), no el logo — el scroll parte
                         // mostrando el final.
                         reverse: true,
                         padding: const EdgeInsets.fromLTRB(
@@ -119,7 +116,7 @@ class WelcomePage extends StatelessWidget {
                           crossAxisAlignment: CrossAxisAlignment.stretch,
                           mainAxisSize: MainAxisSize.min,
                           children: <Widget>[
-                            const _KorixaWordmark(),
+                            const _KorixaLogo(),
                             const SizedBox(height: AppSpacing.lg),
                             Text(
                               l10n.welcomeTitle,
@@ -160,36 +157,52 @@ class WelcomePage extends StatelessWidget {
   }
 }
 
-/// Placeholder honesto del hero — ver docblock de [WelcomePage]. Usa el
-/// mismo gradiente vertical de marca que ya sirve de placeholder para
-/// imágenes de ruta ausentes (`DarkTechRouteImage`/`AppGradients.heroVertical`),
-/// no un color/gradiente nuevo, y sin ícono ni forma que pretenda ser una
-/// fotografía real.
-class _HeroPlaceholder extends StatelessWidget {
-  const _HeroPlaceholder();
+/// Foto hero aprobada por el dueño — ver docblock de [WelcomePage] para
+/// procedencia. `BoxFit.cover` a pantalla completa; el punto focal
+/// (`alignment`) se ajusta según la forma del viewport para que el
+/// ciclista (ubicado en la mitad inferior de la foto original) siga
+/// siendo el sujeto dominante incluso cuando un recorte panorámico
+/// (desktop, ancho >> alto) recortaría más agresivamente el cielo/
+/// montañas que un viewport vertical de celular.
+class _HeroImage extends StatelessWidget {
+  const _HeroImage();
 
   @override
   Widget build(BuildContext context) {
-    return const DecoratedBox(decoration: BoxDecoration(gradient: AppGradients.heroVertical));
+    return LayoutBuilder(
+      builder: (BuildContext context, BoxConstraints constraints) {
+        final bool isWide = constraints.maxWidth > constraints.maxHeight;
+        return Image.asset(
+          'assets/images/korixa_welcome_hero.webp',
+          fit: BoxFit.cover,
+          // Sesgado levemente hacia arriba en viewports panorámicos: a
+          // 1440×900 el recorte vertical es tan agresivo (~35% del alto
+          // original visible) que un alineamiento centrado o hacia abajo
+          // deja el casco y el jersey con el logo Korixa FUERA de cuadro,
+          // mostrando solo piernas/pedales — se ajustó tras revisar la
+          // captura real, no a ciegas. -0.15 mantiene casco+jersey+muslos
+          // visibles, el mismo tramo donde vive la marca en la foto.
+          alignment: isWide ? const Alignment(0, -0.15) : Alignment.center,
+        );
+      },
+    );
   }
 }
 
-/// Marca Korixa — texto real, NO una imagen de logo (Sección 3: no existe
-/// todavía un logo aprobado en el repo, ver docblock de [WelcomePage]).
-/// Ortografía oficial exacta: "Korixa".
-class _KorixaWordmark extends StatelessWidget {
-  const _KorixaWordmark();
+/// Logo Korixa aprobado por el dueño (mismo archivo, sin modificar) — ya
+/// incluye el ícono de montaña/ruta y el wordmark "KORIXA" dentro de la
+/// propia imagen, así que NO se duplica un `Text` "Korixa" debajo (ver
+/// docblock de [WelcomePage] para procedencia del archivo).
+class _KorixaLogo extends StatelessWidget {
+  const _KorixaLogo();
 
   @override
   Widget build(BuildContext context) {
-    return Text(
-      'Korixa',
-      textAlign: TextAlign.center,
-      style: Theme.of(context).textTheme.titleLarge?.copyWith(
-            fontWeight: FontWeight.w800,
-            letterSpacing: 1.5,
-            color: DarkTech.textPrimary,
-          ),
+    return Image.asset(
+      'assets/icons/korixa_logo.png',
+      height: 72,
+      fit: BoxFit.contain,
+      semanticLabel: 'Korixa',
     );
   }
 }
@@ -215,12 +228,12 @@ class _OnboardingIndicator extends StatelessWidget {
   }
 }
 
-/// Botón "Saltar" — vive SOBRE la foto/placeholder de hero, no sobre una
-/// superficie Dark Tech plana, así que lleva su propia píldora
-/// translúcida (`DarkTech.overlayScrim`, el mismo scrim ya usado para
-/// diálogos/overlays de foto) para garantizar contraste sin importar
-/// cuán clara sea la imagen de fondo real que se agregue después
-/// (Sección 9: "Skip accessible contrast").
+/// Botón "Saltar" — vive SOBRE la foto de hero, no sobre una superficie
+/// Dark Tech plana, así que lleva su propia píldora translúcida
+/// (`DarkTech.overlayScrim`, el mismo scrim ya usado para diálogos/
+/// overlays de foto) para garantizar contraste sin importar qué tan
+/// clara sea la región de la foto detrás (Sección 9: "Skip accessible
+/// contrast").
 class _SkipButton extends StatelessWidget {
   const _SkipButton({required this.label, required this.onTap});
 
