@@ -101,128 +101,133 @@ class _RegisterPageState extends ConsumerState<RegisterPage> {
     return DarkTechAuthShell(
       maxWidth: 420,
       appBar: AppBar(),
-      child: Form(
-        key: _formKey,
-        autovalidateMode: AutovalidateMode.onUserInteraction,
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.stretch,
-          children: <Widget>[
-            Text(l10n.registerTitle, style: Theme.of(context).textTheme.headlineMedium),
-            const SizedBox(height: AppSpacing.sm),
-            Text(
-              l10n.registerSubtitle,
-              style: Theme.of(context).textTheme.bodyMedium?.copyWith(color: DarkTech.textSecondary),
-            ),
-            const SizedBox(height: AppSpacing.xl),
-            TextFormField(
-              controller: _nameController,
-              textInputAction: TextInputAction.next,
-              autofillHints: const <String>[AutofillHints.name],
-              decoration: InputDecoration(labelText: l10n.nameLabel),
-              validator: (String? value) => Validators.name(value).message(l10n),
-            ),
-            const SizedBox(height: AppSpacing.base),
-            TextFormField(
-              controller: _emailController,
-              keyboardType: TextInputType.emailAddress,
-              textInputAction: TextInputAction.next,
-              autofillHints: const <String>[AutofillHints.email],
-              decoration: InputDecoration(labelText: l10n.emailLabel),
-              validator: (String? value) => Validators.email(value).message(l10n),
-            ),
-            const SizedBox(height: AppSpacing.base),
-            TextFormField(
-              controller: _passwordController,
-              obscureText: _obscurePassword,
-              textInputAction: TextInputAction.next,
-              autofillHints: const <String>[AutofillHints.newPassword],
-              decoration: InputDecoration(
-                labelText: l10n.passwordLabel,
-                suffixIcon: Semantics(
-                  key: const Key('register-password-visibility-semantics'),
-                  label: _obscurePassword ? l10n.showPasswordAction : l10n.hidePasswordAction,
-                  toggled: !_obscurePassword,
-                  child: IconButton(
-                    tooltip: _obscurePassword ? l10n.showPasswordAction : l10n.hidePasswordAction,
-                    icon: Icon(_obscurePassword ? Icons.visibility_outlined : Icons.visibility_off_outlined),
-                    onPressed: () => setState(() => _obscurePassword = !_obscurePassword),
+      // KORIXA-UI-SCREEN-BATCH-01A: `themeContext`, no el `context` de
+      // `build` — ver el docblock de `DarkTechAuthShell`.
+      builder: (BuildContext themeContext) {
+        final TextTheme textTheme = Theme.of(themeContext).textTheme;
+        return Form(
+          key: _formKey,
+          autovalidateMode: AutovalidateMode.onUserInteraction,
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: <Widget>[
+              Text(l10n.registerTitle, style: textTheme.headlineMedium),
+              const SizedBox(height: AppSpacing.sm),
+              Text(
+                l10n.registerSubtitle,
+                style: textTheme.bodyMedium?.copyWith(color: DarkTech.textSecondary),
+              ),
+              const SizedBox(height: AppSpacing.xl),
+              TextFormField(
+                controller: _nameController,
+                textInputAction: TextInputAction.next,
+                autofillHints: const <String>[AutofillHints.name],
+                decoration: InputDecoration(labelText: l10n.nameLabel),
+                validator: (String? value) => Validators.name(value).message(l10n),
+              ),
+              const SizedBox(height: AppSpacing.base),
+              TextFormField(
+                controller: _emailController,
+                keyboardType: TextInputType.emailAddress,
+                textInputAction: TextInputAction.next,
+                autofillHints: const <String>[AutofillHints.email],
+                decoration: InputDecoration(labelText: l10n.emailLabel),
+                validator: (String? value) => Validators.email(value).message(l10n),
+              ),
+              const SizedBox(height: AppSpacing.base),
+              TextFormField(
+                controller: _passwordController,
+                obscureText: _obscurePassword,
+                textInputAction: TextInputAction.next,
+                autofillHints: const <String>[AutofillHints.newPassword],
+                decoration: InputDecoration(
+                  labelText: l10n.passwordLabel,
+                  suffixIcon: Semantics(
+                    key: const Key('register-password-visibility-semantics'),
+                    label: _obscurePassword ? l10n.showPasswordAction : l10n.hidePasswordAction,
+                    toggled: !_obscurePassword,
+                    child: IconButton(
+                      tooltip: _obscurePassword ? l10n.showPasswordAction : l10n.hidePasswordAction,
+                      icon: Icon(_obscurePassword ? Icons.visibility_outlined : Icons.visibility_off_outlined),
+                      onPressed: () => setState(() => _obscurePassword = !_obscurePassword),
+                    ),
                   ),
                 ),
+                validator: (String? value) => Validators.password(value).message(l10n),
               ),
-              validator: (String? value) => Validators.password(value).message(l10n),
-            ),
-            const SizedBox(height: AppSpacing.base),
-            TextFormField(
-              controller: _confirmPasswordController,
-              obscureText: _obscurePassword,
-              textInputAction: TextInputAction.done,
-              decoration: InputDecoration(labelText: l10n.confirmPasswordLabel),
-              onFieldSubmitted: (_) => _handleSubmit(),
-              validator: (String? value) => Validators.confirmPassword(
-                _passwordController.text,
-                value,
-              ).message(l10n),
-            ),
-            const SizedBox(height: AppSpacing.lg),
-            PrimaryGradientButton(
-              label: l10n.registerButton,
-              isLoading: registerState.isLoading,
-              onPressed: anyLoading ? null : _handleSubmit,
-            ),
-            const SizedBox(height: AppSpacing.md),
-            Text(
-              l10n.termsAcceptText,
-              textAlign: TextAlign.center,
-              style: Theme.of(context).textTheme.bodySmall?.copyWith(color: DarkTech.textSecondary),
-            ),
-            const SizedBox(height: AppSpacing.lg),
-            Row(
-              children: <Widget>[
-                const Expanded(child: Divider()),
-                Padding(
-                  padding: const EdgeInsets.symmetric(horizontal: AppSpacing.md),
-                  child: Text(l10n.orDividerText, style: Theme.of(context).textTheme.bodySmall),
-                ),
-                const Expanded(child: Divider()),
-              ],
-            ),
-            const SizedBox(height: AppSpacing.lg),
-            GoogleSignInButton(
-              label: l10n.continueWithGoogle,
-              isLoading: socialState.isLoading,
-              onPressed: anyLoading
-                  ? null
-                  : () => _handleSocialSignIn(
-                        ref.read(socialAuthControllerProvider.notifier).signInWithGoogle,
-                      ),
-            ),
-            if (_isApplePlatform) ...<Widget>[
+              const SizedBox(height: AppSpacing.base),
+              TextFormField(
+                controller: _confirmPasswordController,
+                obscureText: _obscurePassword,
+                textInputAction: TextInputAction.done,
+                decoration: InputDecoration(labelText: l10n.confirmPasswordLabel),
+                onFieldSubmitted: (_) => _handleSubmit(),
+                validator: (String? value) => Validators.confirmPassword(
+                  _passwordController.text,
+                  value,
+                ).message(l10n),
+              ),
+              const SizedBox(height: AppSpacing.lg),
+              PrimaryGradientButton(
+                label: l10n.registerButton,
+                isLoading: registerState.isLoading,
+                onPressed: anyLoading ? null : _handleSubmit,
+              ),
               const SizedBox(height: AppSpacing.md),
-              AppleSignInButton(
-                label: l10n.continueWithApple,
+              Text(
+                l10n.termsAcceptText,
+                textAlign: TextAlign.center,
+                style: textTheme.bodySmall?.copyWith(color: DarkTech.textSecondary),
+              ),
+              const SizedBox(height: AppSpacing.lg),
+              Row(
+                children: <Widget>[
+                  const Expanded(child: Divider()),
+                  Padding(
+                    padding: const EdgeInsets.symmetric(horizontal: AppSpacing.md),
+                    child: Text(l10n.orDividerText, style: textTheme.bodySmall),
+                  ),
+                  const Expanded(child: Divider()),
+                ],
+              ),
+              const SizedBox(height: AppSpacing.lg),
+              GoogleSignInButton(
+                label: l10n.continueWithGoogle,
                 isLoading: socialState.isLoading,
                 onPressed: anyLoading
                     ? null
                     : () => _handleSocialSignIn(
-                          ref.read(socialAuthControllerProvider.notifier).signInWithApple,
+                          ref.read(socialAuthControllerProvider.notifier).signInWithGoogle,
                         ),
               ),
-            ],
-            const SizedBox(height: AppSpacing.lg),
-            Wrap(
-              alignment: WrapAlignment.center,
-              crossAxisAlignment: WrapCrossAlignment.center,
-              children: <Widget>[
-                Text(l10n.hasAccountText),
-                TextButton(
-                  onPressed: () => context.go(AppRoute.login),
-                  child: Text(l10n.loginLink),
+              if (_isApplePlatform) ...<Widget>[
+                const SizedBox(height: AppSpacing.md),
+                AppleSignInButton(
+                  label: l10n.continueWithApple,
+                  isLoading: socialState.isLoading,
+                  onPressed: anyLoading
+                      ? null
+                      : () => _handleSocialSignIn(
+                            ref.read(socialAuthControllerProvider.notifier).signInWithApple,
+                          ),
                 ),
               ],
-            ),
-          ],
-        ),
-      ),
+              const SizedBox(height: AppSpacing.lg),
+              Wrap(
+                alignment: WrapAlignment.center,
+                crossAxisAlignment: WrapCrossAlignment.center,
+                children: <Widget>[
+                  Text(l10n.hasAccountText),
+                  TextButton(
+                    onPressed: () => context.go(AppRoute.login),
+                    child: Text(l10n.loginLink),
+                  ),
+                ],
+              ),
+            ],
+          ),
+        );
+      },
     );
   }
 }

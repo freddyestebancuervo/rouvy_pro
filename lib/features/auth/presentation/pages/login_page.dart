@@ -91,123 +91,128 @@ class _LoginPageState extends ConsumerState<LoginPage> {
 
     return DarkTechAuthShell(
       maxWidth: 420,
-      child: Form(
-        key: _formKey,
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.stretch,
-          children: <Widget>[
-            Text(l10n.loginTitle, style: Theme.of(context).textTheme.headlineMedium),
-            const SizedBox(height: AppSpacing.sm),
-            Text(
-              l10n.loginSubtitle,
-              style: Theme.of(context).textTheme.bodyMedium?.copyWith(color: DarkTech.textSecondary),
-            ),
-            const SizedBox(height: AppSpacing.xl),
-            TextFormField(
-              controller: _emailController,
-              keyboardType: TextInputType.emailAddress,
-              textInputAction: TextInputAction.next,
-              autofillHints: const <String>[AutofillHints.email],
-              decoration: InputDecoration(labelText: l10n.emailLabel),
-              validator: (String? value) => Validators.email(value).message(l10n),
-            ),
-            const SizedBox(height: AppSpacing.base),
-            TextFormField(
-              controller: _passwordController,
-              obscureText: _obscurePassword,
-              textInputAction: TextInputAction.done,
-              autofillHints: const <String>[AutofillHints.password],
-              decoration: InputDecoration(
-                labelText: l10n.passwordLabel,
-                suffixIcon: Semantics(
-                  // `toggled` anuncia al lector de pantalla el
-                  // estado actual (mostrando/ocultando), no solo
-                  // "botón" — sin esto, VoiceOver/TalkBack solo
-                  // dirían "botón, doble toque para activar", sin
-                  // que la persona sepa qué hace ni en qué estado
-                  // está.
-                  key: const Key('login-password-visibility-semantics'),
-                  label: _obscurePassword ? l10n.showPasswordAction : l10n.hidePasswordAction,
-                  toggled: !_obscurePassword,
-                  child: IconButton(
-                    tooltip: _obscurePassword ? l10n.showPasswordAction : l10n.hidePasswordAction,
-                    icon: Icon(_obscurePassword ? Icons.visibility_outlined : Icons.visibility_off_outlined),
-                    onPressed: () => setState(() => _obscurePassword = !_obscurePassword),
+      // KORIXA-UI-SCREEN-BATCH-01A: `themeContext`, no el `context` de
+      // `build` — ver el docblock de `DarkTechAuthShell`.
+      builder: (BuildContext themeContext) {
+        final TextTheme textTheme = Theme.of(themeContext).textTheme;
+        return Form(
+          key: _formKey,
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: <Widget>[
+              Text(l10n.loginTitle, style: textTheme.headlineMedium),
+              const SizedBox(height: AppSpacing.sm),
+              Text(
+                l10n.loginSubtitle,
+                style: textTheme.bodyMedium?.copyWith(color: DarkTech.textSecondary),
+              ),
+              const SizedBox(height: AppSpacing.xl),
+              TextFormField(
+                controller: _emailController,
+                keyboardType: TextInputType.emailAddress,
+                textInputAction: TextInputAction.next,
+                autofillHints: const <String>[AutofillHints.email],
+                decoration: InputDecoration(labelText: l10n.emailLabel),
+                validator: (String? value) => Validators.email(value).message(l10n),
+              ),
+              const SizedBox(height: AppSpacing.base),
+              TextFormField(
+                controller: _passwordController,
+                obscureText: _obscurePassword,
+                textInputAction: TextInputAction.done,
+                autofillHints: const <String>[AutofillHints.password],
+                decoration: InputDecoration(
+                  labelText: l10n.passwordLabel,
+                  suffixIcon: Semantics(
+                    // `toggled` anuncia al lector de pantalla el
+                    // estado actual (mostrando/ocultando), no solo
+                    // "botón" — sin esto, VoiceOver/TalkBack solo
+                    // dirían "botón, doble toque para activar", sin
+                    // que la persona sepa qué hace ni en qué estado
+                    // está.
+                    key: const Key('login-password-visibility-semantics'),
+                    label: _obscurePassword ? l10n.showPasswordAction : l10n.hidePasswordAction,
+                    toggled: !_obscurePassword,
+                    child: IconButton(
+                      tooltip: _obscurePassword ? l10n.showPasswordAction : l10n.hidePasswordAction,
+                      icon: Icon(_obscurePassword ? Icons.visibility_outlined : Icons.visibility_off_outlined),
+                      onPressed: () => setState(() => _obscurePassword = !_obscurePassword),
+                    ),
                   ),
                 ),
+                onFieldSubmitted: (_) => _handleSubmit(),
+                // En login (a diferencia de registro) solo se exige que
+                // no esté vacío — no se re-valida la política de
+                // complejidad de una contraseña ya creada.
+                validator: (String? value) {
+                  if (value == null || value.isEmpty) {
+                    return ValidationError.passwordRequired.message(l10n);
+                  }
+                  return null;
+                },
               ),
-              onFieldSubmitted: (_) => _handleSubmit(),
-              // En login (a diferencia de registro) solo se exige que
-              // no esté vacío — no se re-valida la política de
-              // complejidad de una contraseña ya creada.
-              validator: (String? value) {
-                if (value == null || value.isEmpty) {
-                  return ValidationError.passwordRequired.message(l10n);
-                }
-                return null;
-              },
-            ),
-            Align(
-              alignment: Alignment.centerRight,
-              child: TextButton(
-                onPressed: () => context.push(AppRoute.forgotPassword),
-                child: Text(l10n.forgotPasswordLink),
-              ),
-            ),
-            const SizedBox(height: AppSpacing.xs),
-            PrimaryGradientButton(
-              label: l10n.loginButton,
-              isLoading: loginState.isLoading,
-              onPressed: anyLoading ? null : _handleSubmit,
-            ),
-            const SizedBox(height: AppSpacing.xl),
-            Row(
-              children: <Widget>[
-                const Expanded(child: Divider()),
-                Padding(
-                  padding: const EdgeInsets.symmetric(horizontal: AppSpacing.md),
-                  child: Text(l10n.orDividerText, style: Theme.of(context).textTheme.bodySmall),
+              Align(
+                alignment: Alignment.centerRight,
+                child: TextButton(
+                  onPressed: () => context.push(AppRoute.forgotPassword),
+                  child: Text(l10n.forgotPasswordLink),
                 ),
-                const Expanded(child: Divider()),
-              ],
-            ),
-            const SizedBox(height: AppSpacing.lg),
-            GoogleSignInButton(
-              label: l10n.continueWithGoogle,
-              isLoading: socialState.isLoading,
-              onPressed: anyLoading
-                  ? null
-                  : () => _handleSocialSignIn(
-                        ref.read(socialAuthControllerProvider.notifier).signInWithGoogle,
-                      ),
-            ),
-            if (_isApplePlatform) ...<Widget>[
-              const SizedBox(height: AppSpacing.md),
-              AppleSignInButton(
-                label: l10n.continueWithApple,
+              ),
+              const SizedBox(height: AppSpacing.xs),
+              PrimaryGradientButton(
+                label: l10n.loginButton,
+                isLoading: loginState.isLoading,
+                onPressed: anyLoading ? null : _handleSubmit,
+              ),
+              const SizedBox(height: AppSpacing.xl),
+              Row(
+                children: <Widget>[
+                  const Expanded(child: Divider()),
+                  Padding(
+                    padding: const EdgeInsets.symmetric(horizontal: AppSpacing.md),
+                    child: Text(l10n.orDividerText, style: textTheme.bodySmall),
+                  ),
+                  const Expanded(child: Divider()),
+                ],
+              ),
+              const SizedBox(height: AppSpacing.lg),
+              GoogleSignInButton(
+                label: l10n.continueWithGoogle,
                 isLoading: socialState.isLoading,
                 onPressed: anyLoading
                     ? null
                     : () => _handleSocialSignIn(
-                          ref.read(socialAuthControllerProvider.notifier).signInWithApple,
+                          ref.read(socialAuthControllerProvider.notifier).signInWithGoogle,
                         ),
               ),
-            ],
-            const SizedBox(height: AppSpacing.xl),
-            Wrap(
-              alignment: WrapAlignment.center,
-              crossAxisAlignment: WrapCrossAlignment.center,
-              children: <Widget>[
-                Text(l10n.noAccountText),
-                TextButton(
-                  onPressed: () => context.go(AppRoute.register),
-                  child: Text(l10n.createAccountLink),
+              if (_isApplePlatform) ...<Widget>[
+                const SizedBox(height: AppSpacing.md),
+                AppleSignInButton(
+                  label: l10n.continueWithApple,
+                  isLoading: socialState.isLoading,
+                  onPressed: anyLoading
+                      ? null
+                      : () => _handleSocialSignIn(
+                            ref.read(socialAuthControllerProvider.notifier).signInWithApple,
+                          ),
                 ),
               ],
-            ),
-          ],
-        ),
-      ),
+              const SizedBox(height: AppSpacing.xl),
+              Wrap(
+                alignment: WrapAlignment.center,
+                crossAxisAlignment: WrapCrossAlignment.center,
+                children: <Widget>[
+                  Text(l10n.noAccountText),
+                  TextButton(
+                    onPressed: () => context.go(AppRoute.register),
+                    child: Text(l10n.createAccountLink),
+                  ),
+                ],
+              ),
+            ],
+          ),
+        );
+      },
     );
   }
 }

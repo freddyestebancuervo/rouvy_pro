@@ -25,36 +25,43 @@ class WelcomePage extends StatelessWidget {
     return DarkTechAuthShell(
       maxWidth: 480,
       showAmbientGlow: true,
-      child: Column(
-        mainAxisAlignment: MainAxisAlignment.center,
-        children: <Widget>[
-          const Spacer(),
-          const _BrandMedallion(),
-          const SizedBox(height: AppSpacing.xxl),
-          Text(
-            l10n.welcomeTitle,
-            textAlign: TextAlign.center,
-            style: Theme.of(context).textTheme.headlineMedium?.copyWith(fontWeight: FontWeight.w800),
-          ),
-          const SizedBox(height: AppSpacing.md),
-          Text(
-            l10n.welcomeSubtitle,
-            textAlign: TextAlign.center,
-            style: Theme.of(context).textTheme.bodyLarge?.copyWith(color: DarkTech.textSecondary),
-          ),
-          const Spacer(flex: 2),
-          PrimaryGradientButton(
-            label: l10n.welcomeCreateAccount,
-            onPressed: () => context.go(AppRoute.register),
-          ),
-          const SizedBox(height: AppSpacing.md),
-          SecondaryOutlinedButton(
-            label: l10n.welcomeLogin,
-            onPressed: () => context.go(AppRoute.login),
-          ),
-          const SizedBox(height: AppSpacing.xl),
-        ],
-      ),
+      // KORIXA-UI-SCREEN-BATCH-01A: `themeContext` (no el `context` de
+      // `build`) para que `Theme.of` resuelva `AppTheme.darkTech` —
+      // ver el docblock de `DarkTechAuthShell`. Las navegaciones siguen
+      // usando el `context` de `build`, que es igual de válido para eso.
+      builder: (BuildContext themeContext) {
+        final TextTheme textTheme = Theme.of(themeContext).textTheme;
+        return Column(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: <Widget>[
+            const Spacer(),
+            const _BrandMedallion(),
+            const SizedBox(height: AppSpacing.xxl),
+            Text(
+              l10n.welcomeTitle,
+              textAlign: TextAlign.center,
+              style: textTheme.headlineMedium?.copyWith(fontWeight: FontWeight.w800),
+            ),
+            const SizedBox(height: AppSpacing.md),
+            Text(
+              l10n.welcomeSubtitle,
+              textAlign: TextAlign.center,
+              style: textTheme.bodyLarge?.copyWith(color: DarkTech.textSecondary),
+            ),
+            const Spacer(flex: 2),
+            PrimaryGradientButton(
+              label: l10n.welcomeCreateAccount,
+              onPressed: () => context.go(AppRoute.register),
+            ),
+            const SizedBox(height: AppSpacing.md),
+            SecondaryOutlinedButton(
+              label: l10n.welcomeLogin,
+              onPressed: () => context.go(AppRoute.login),
+            ),
+            const SizedBox(height: AppSpacing.xl),
+          ],
+        );
+      },
     );
   }
 }
