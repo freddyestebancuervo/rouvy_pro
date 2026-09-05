@@ -265,16 +265,26 @@ class _DesktopWelcomeContent extends StatelessWidget {
                     Text(
                       l10n.welcomeTitle,
                       textAlign: TextAlign.left,
-                      // `headlineLarge` (32) en vez del `headlineMedium`
-                      // (28) de mobile — jerarquía más fuerte, acorde a
-                      // "materially larger" del encargo.
-                      style: textTheme.headlineLarge?.copyWith(fontWeight: FontWeight.w800),
+                      // KORIXA-UI-SCREEN01-DESKTOP-BRAND-POLISH-20260905:
+                      // subido de `headlineLarge` (32) a `displayMedium`
+                      // (45, +41%) — más protagonismo visual, acorde al
+                      // encargo de que el título "coincida con la
+                      // proporción" de una referencia mucho más grande.
+                      style: textTheme.displayMedium?.copyWith(fontWeight: FontWeight.w800),
                     ),
                     const SizedBox(height: AppSpacing.md),
                     Text(
                       l10n.welcomeSubtitle,
                       textAlign: TextAlign.left,
-                      style: textTheme.bodyLarge?.copyWith(color: DarkTech.textSecondary),
+                      // Subido de `bodyLarge` (16) a `titleLarge` (22,
+                      // +37.5%) — peso `w500` (más liviano que el `w600`
+                      // por defecto de `titleLarge`) para que siga
+                      // leyéndose como subtítulo, no como un segundo
+                      // título compitiendo con el de arriba.
+                      style: textTheme.titleLarge?.copyWith(
+                        color: DarkTech.textSecondary,
+                        fontWeight: FontWeight.w500,
+                      ),
                     ),
                     const SizedBox(height: AppSpacing.xl),
                     const _OnboardingIndicator(),
