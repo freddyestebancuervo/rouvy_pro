@@ -130,21 +130,41 @@ class _MobileWelcomeContent extends StatelessWidget {
               child: SingleChildScrollView(
                 // `reverse: true`: en una pantalla muy chica o con texto
                 // muy escalado, lo primero que debe seguir visible es el
-                // CTA (el final del contenido), no el logo — el scroll
-                // parte mostrando el final.
+                // CTA (el final del contenido) — el scroll parte
+                // mostrando el final.
                 reverse: true,
+                // KORIXA-SCREEN01-MOBILE-REMOVE-LOGO-AND-RAISE-CONTENT-
+                // 20260906: el inset inferior sube de `AppSpacing.lg` (20)
+                // a 32 — el dueño reportó el bloque de texto/CTA como
+                // "pesado"/pegado al borde inferior. Como este bloque
+                // está anclado abajo (`Align(bottomCenter)` más arriba),
+                // el único control real sobre su posición vertical es
+                // este padding inferior: subirlo desplaza TODO el bloque
+                // (título→CTA) hacia arriba en bloque. Un primer intento
+                // con 56 empujaba el título directo sobre los rayos de la
+                // rueda trasera (colisión real, no solo visual ajustada);
+                // 32 deja el bloque más alto que el original sin invadir
+                // la rueda — verificado con una captura real a 390×844.
                 padding: const EdgeInsets.fromLTRB(
                   AppSpacing.xl,
                   AppSpacing.xl,
                   AppSpacing.xl,
-                  AppSpacing.lg,
+                  32,
                 ),
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.stretch,
                   mainAxisSize: MainAxisSize.min,
                   children: <Widget>[
-                    const _KorixaLogo(),
-                    const SizedBox(height: AppSpacing.lg),
+                    // KORIXA-SCREEN01-MOBILE-REMOVE-LOGO-AND-RAISE-
+                    // CONTENT-20260906: el logo Korixa flotante (`
+                    // _KorixaLogo`) se elimina de mobile — el dueño lo
+                    // reportó como un elemento extra "flotando" delante
+                    // de la rueda trasera, sin relación con la foto. El
+                    // único branding Korixa visible en mobile ahora es el
+                    // que ya está integrado en la foto (jersey/short/
+                    // medias del ciclista) — nada de branding "de UI"
+                    // superpuesto. El logo de escritorio (`_DesktopWelcomeContent`)
+                    // no se toca: sigue siendo una composición distinta.
                     Text(
                       l10n.welcomeTitle,
                       textAlign: TextAlign.center,
@@ -455,23 +475,6 @@ class _HeroImage extends StatelessWidget {
           alignment: isWide ? const Alignment(0, -0.15) : Alignment.center,
         );
       },
-    );
-  }
-}
-
-/// Logo Korixa aprobado por el dueño (mismo archivo, sin modificar) — ya
-/// incluye el ícono de montaña/ruta y el wordmark "KORIXA" dentro de la
-/// propia imagen, así que NO se duplica un `Text` "Korixa" debajo.
-class _KorixaLogo extends StatelessWidget {
-  const _KorixaLogo();
-
-  @override
-  Widget build(BuildContext context) {
-    return Image.asset(
-      'assets/icons/korixa_logo.png',
-      height: 72,
-      fit: BoxFit.contain,
-      semanticLabel: 'Korixa',
     );
   }
 }

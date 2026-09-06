@@ -65,6 +65,20 @@ void main() {
     return provider is AssetImage ? provider : null;
   }
 
+  /// `Image.asset(cacheWidth:/cacheHeight:)` (usado por el logo de
+  /// escritorio para decodificar con calidad — ver welcome_page.dart)
+  /// envuelve el `AssetImage` resuelto en un `ResizeImage`, así que
+  /// `provider is AssetImage` da `false` aunque el asset SÍ sea el
+  /// esperado. Este helper desenvuelve ambos casos.
+  String? resolvedAssetName(ImageProvider provider) {
+    if (provider is AssetImage) return provider.assetName;
+    if (provider is ResizeImage) {
+      final ImageProvider inner = provider.imageProvider;
+      if (inner is AssetImage) return inner.assetName;
+    }
+    return null;
+  }
+
   testWidgets('MOBILE_USES_VERTICAL_HERO = PASS', (WidgetTester tester) async {
     await pumpWelcomePage(tester, surfaceSize: const Size(390, 844));
 
@@ -77,19 +91,35 @@ void main() {
     expect(heroAssetImage(tester)?.assetName, 'assets/images/korixa_welcome_hero_desktop.webp');
   });
 
-  testWidgets('LOGO_ASSET_PRESENT = PASS', (WidgetTester tester) async {
-    await pumpWelcomePage(tester);
+  testWidgets('MOBILE_NO_FLOATING_LOGO = PASS', (WidgetTester tester) async {
+    // KORIXA-SCREEN01-MOBILE-REMOVE-LOGO-AND-RAISE-CONTENT-20260906: el
+    // dueño reportó el logo Korixa flotante sobre el hero de mobile como
+    // un elemento extra ajeno a la foto (flotaba delante de la rueda
+    // trasera). Se elimina — el único branding Korixa visible en mobile
+    // debe ser el que ya está impreso en la foto del ciclista (jersey/
+    // short/medias), nunca un logo de UI superpuesto ni un wordmark de
+    // texto duplicado.
+    await pumpWelcomePage(tester, surfaceSize: const Size(390, 844));
 
     final Iterable<Image> images = tester.widgetList<Image>(find.byType(Image));
-    final bool hasLogo = images.any((Image image) {
-      final ImageProvider provider = image.image;
-      return provider is AssetImage && provider.assetName == 'assets/icons/korixa_logo.png';
+    final bool hasAnyLogoAsset = images.any((Image image) {
+      final String? assetName = resolvedAssetName(image.image);
+      return assetName == 'assets/icons/korixa_logo.png' || assetName == 'assets/icons/korixa_logo_desktop.png';
     });
-    expect(hasLogo, isTrue, reason: 'debe renderizar el logo aprobado como Image.asset real, no el wordmark de texto');
-
-    // Sección 4 del encargo: NO debe quedar un "Korixa" de texto duplicado
-    // bajo el logo — el propio archivo ya incluye el wordmark.
+    expect(hasAnyLogoAsset, isFalse, reason: 'mobile no debe renderizar ningún logo Korixa flotante');
     expect(find.text('Korixa'), findsNothing);
+  });
+
+  testWidgets('DESKTOP_LOGO_ASSET_PRESENT = PASS', (WidgetTester tester) async {
+    // El logo SÍ sigue siendo parte de la composición de escritorio —
+    // esta tarea es exclusivamente mobile (ver docblock de arriba).
+    await pumpWelcomePage(tester, surfaceSize: const Size(1440, 900));
+
+    final Iterable<Image> images = tester.widgetList<Image>(find.byType(Image));
+    final bool hasDesktopLogo = images.any(
+      (Image image) => resolvedAssetName(image.image) == 'assets/icons/korixa_logo_desktop.png',
+    );
+    expect(hasDesktopLogo, isTrue, reason: 'el logo de escritorio no debe verse afectado por el cambio de mobile');
   });
 
   testWidgets('CTA_NAVIGATION = PASS (Comenzar -> Register, mismo destino que el CTA anterior)',
