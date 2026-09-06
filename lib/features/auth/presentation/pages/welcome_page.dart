@@ -130,21 +130,41 @@ class _MobileWelcomeContent extends StatelessWidget {
               child: SingleChildScrollView(
                 // `reverse: true`: en una pantalla muy chica o con texto
                 // muy escalado, lo primero que debe seguir visible es el
-                // CTA (el final del contenido), no el logo — el scroll
-                // parte mostrando el final.
+                // CTA (el final del contenido) — el scroll parte
+                // mostrando el final.
                 reverse: true,
+                // KORIXA-SCREEN01-MOBILE-REMOVE-LOGO-AND-RAISE-CONTENT-
+                // 20260906: el inset inferior sube de `AppSpacing.lg` (20)
+                // a 32 — el dueño reportó el bloque de texto/CTA como
+                // "pesado"/pegado al borde inferior. Como este bloque
+                // está anclado abajo (`Align(bottomCenter)` más arriba),
+                // el único control real sobre su posición vertical es
+                // este padding inferior: subirlo desplaza TODO el bloque
+                // (título→CTA) hacia arriba en bloque. Un primer intento
+                // con 56 empujaba el título directo sobre los rayos de la
+                // rueda trasera (colisión real, no solo visual ajustada);
+                // 32 deja el bloque más alto que el original sin invadir
+                // la rueda — verificado con una captura real a 390×844.
                 padding: const EdgeInsets.fromLTRB(
                   AppSpacing.xl,
                   AppSpacing.xl,
                   AppSpacing.xl,
-                  AppSpacing.lg,
+                  32,
                 ),
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.stretch,
                   mainAxisSize: MainAxisSize.min,
                   children: <Widget>[
-                    const _KorixaLogo(),
-                    const SizedBox(height: AppSpacing.lg),
+                    // KORIXA-SCREEN01-MOBILE-REMOVE-LOGO-AND-RAISE-
+                    // CONTENT-20260906: el logo Korixa flotante (`
+                    // _KorixaLogo`) se elimina de mobile — el dueño lo
+                    // reportó como un elemento extra "flotando" delante
+                    // de la rueda trasera, sin relación con la foto. El
+                    // único branding Korixa visible en mobile ahora es el
+                    // que ya está integrado en la foto (jersey/short/
+                    // medias del ciclista) — nada de branding "de UI"
+                    // superpuesto. El logo de escritorio (`_DesktopWelcomeContent`)
+                    // no se toca: sigue siendo una composición distinta.
                     Text(
                       l10n.welcomeTitle,
                       textAlign: TextAlign.center,
@@ -459,89 +479,81 @@ class _HeroImage extends StatelessWidget {
   }
 }
 
-/// Logo Korixa aprobado por el dueño (mismo archivo, sin modificar) — ya
-/// incluye el ícono de montaña/ruta y el wordmark "KORIXA" dentro de la
-/// propia imagen, así que NO se duplica un `Text` "Korixa" debajo.
-class _KorixaLogo extends StatelessWidget {
-  const _KorixaLogo();
-
-  @override
-  Widget build(BuildContext context) {
-    return Image.asset(
-      'assets/icons/korixa_logo.png',
-      height: 72,
-      fit: BoxFit.contain,
-      semanticLabel: 'Korixa',
-    );
-  }
-}
-
 /// Indicador de onboarding — hoy solo existe SCREEN_01, no hay páginas de
-/// onboarding swipeables reales. Un único indicador estático (no 3 puntos
-/// con uno "activo") evita implicar falsamente que existen más páginas
-/// funcionales, sin dejar de asomar el lenguaje visual aprobado (una
-/// píldora con el gradiente de marca).
+/// onboarding swipeables reales — nunca hay swipe ni navegación real
+/// asociada a las barras 2 y 3, solo la primera (activa) importa
+/// semánticamente. Compartido por mobile y desktop, cada uno con su
+/// propio tamaño (ver [_OnboardingIndicator] / [_DesktopOnboardingIndicator]
+/// más abajo): 3 barras, no puntos, para que la "página activa" se lea
+/// como una barra de progreso minimal, no como un carrusel real.
 ///
-/// Exclusivo de mobile — ver [_DesktopOnboardingIndicator] para el
-/// equivalente de escritorio (KORIXA-UI-SCREEN01-FINAL-VISUAL-POLISH-20260905).
-class _OnboardingIndicator extends StatelessWidget {
-  const _OnboardingIndicator();
+/// KORIXA-SCREEN01-MOBILE-ADD-THREE-INDICATOR-LINES-20260906: mobile
+/// pasa de una píldora única a estas mismas 3 barras — mismo lenguaje
+/// visual que ya se aprobó para desktop, solo que a un tamaño más chico
+/// y compacto (Sección "elegante, minimal, no pesado" del encargo).
+class _ThreeBarIndicator extends StatelessWidget {
+  const _ThreeBarIndicator({required this.barWidth, required this.barHeight, required this.gap});
+
+  final double barWidth;
+  final double barHeight;
+  final double gap;
 
   @override
   Widget build(BuildContext context) {
-    return Container(
-      width: 32,
-      height: 4,
-      decoration: const BoxDecoration(
-        gradient: AppGradients.primaryCta,
-        borderRadius: AppRadius.pillRadius,
-      ),
-    );
-  }
-}
-
-/// Indicador de onboarding de escritorio — KORIXA-UI-SCREEN01-FINAL-
-/// VISUAL-POLISH-20260905. Pedido explícitamente como 3 barras (vs. la
-/// píldora única de mobile) — puramente visual, igual que
-/// [_OnboardingIndicator]: no existen 3 páginas de onboarding reales, no
-/// hay swipe ni navegación asociada a las barras 2 y 3, solo la primera
-/// (activa) importa semánticamente.
-class _DesktopOnboardingIndicator extends StatelessWidget {
-  const _DesktopOnboardingIndicator();
-
-  static const double _barWidth = 24;
-  static const double _barHeight = 4;
-  static const double _gap = 6;
-
-  @override
-  Widget build(BuildContext context) {
-    return const Row(
+    return Row(
+      key: const Key('welcome-indicator-row'),
       mainAxisSize: MainAxisSize.min,
       children: <Widget>[
-        _Bar(active: true),
-        SizedBox(width: _gap),
-        _Bar(active: false),
-        SizedBox(width: _gap),
-        _Bar(active: false),
+        _Bar(active: true, width: barWidth, height: barHeight),
+        SizedBox(width: gap),
+        _Bar(active: false, width: barWidth, height: barHeight),
+        SizedBox(width: gap),
+        _Bar(active: false, width: barWidth, height: barHeight),
       ],
     );
   }
 }
 
+/// Indicador de mobile — 3 barras compactas (18×4, separación 5): total
+/// ~64px de ancho, apenas más que los 32px de la píldora única anterior,
+/// para que siga leyéndose "minimal" en un viewport angosto.
+class _OnboardingIndicator extends StatelessWidget {
+  const _OnboardingIndicator();
+
+  @override
+  Widget build(BuildContext context) {
+    return const _ThreeBarIndicator(barWidth: 18, barHeight: 4, gap: 5);
+  }
+}
+
+/// Indicador de escritorio — KORIXA-UI-SCREEN01-FINAL-VISUAL-POLISH-
+/// 20260905. Mismas 3 barras, tamaño propio de escritorio (24×4,
+/// separación 6) — sin cambios respecto al aprobado.
+class _DesktopOnboardingIndicator extends StatelessWidget {
+  const _DesktopOnboardingIndicator();
+
+  @override
+  Widget build(BuildContext context) {
+    return const _ThreeBarIndicator(barWidth: 24, barHeight: 4, gap: 6);
+  }
+}
+
 class _Bar extends StatelessWidget {
-  const _Bar({required this.active});
+  const _Bar({required this.active, required this.width, required this.height});
 
   final bool active;
+  final double width;
+  final double height;
 
   @override
   Widget build(BuildContext context) {
     return Container(
-      width: _DesktopOnboardingIndicator._barWidth,
-      height: _DesktopOnboardingIndicator._barHeight,
+      width: width,
+      height: height,
       decoration: BoxDecoration(
-        // Activa: mismo gradiente de marca que el CTA/indicador mobile.
-        // Inactivas: `DarkTech.border` — el tono "gris oscuro" ya
-        // existente en el sistema de diseño (no un color nuevo).
+        // Activa: mismo gradiente de marca que el CTA. Inactivas:
+        // `DarkTech.border` — el tono "gris oscuro" ya existente en el
+        // sistema de diseño (no un color nuevo).
         gradient: active ? AppGradients.primaryCta : null,
         color: active ? null : DarkTech.border,
         borderRadius: AppRadius.pillRadius,
