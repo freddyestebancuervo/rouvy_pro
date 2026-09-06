@@ -204,7 +204,16 @@ class _DesktopWelcomeContent extends StatelessWidget {
   /// así que el único elemento realmente afectado es el subtítulo: más
   /// ancho disponible para que su wrap quede más balanceado (antes
   /// dejaba una segunda línea de una sola palabra).
-  static const double _contentMaxWidth = 640;
+  ///
+  /// KORIXA-UI-SCREEN01-CRISP-LOGO-TEXT-CTA-20260905: subido otra vez, a
+  /// 680 — el CTA ahora pide 550px de ancho propio; con el inset
+  /// izquierdo (72) + derecho (40), el ancho ÚTIL de la columna era solo
+  /// 640-112=528, MENOS que los 550 pedidos. Sin este ajuste, el `Column`
+  /// (que da a sus hijos un `maxWidth` igual al de su propio ancho)
+  /// habría recortado el CTA de vuelta a 528px en silencio (sin overflow
+  /// visible, solo un ancho final distinto al pedido). 680-112=568,
+  /// suficiente para los 550 del CTA con margen.
+  static const double _contentMaxWidth = 680;
 
   @override
   Widget build(BuildContext context) {
@@ -256,12 +265,38 @@ class _DesktopWelcomeContent extends StatelessWidget {
                     // por el dueño (`korixa_logo_desktop.png`, 1697×927,
                     // RGBA con transparencia real — verificado por bytes,
                     // no una captura). Asset exclusivo de desktop; el
-                    // logo de mobile (`korixa_logo.png`) no se toca. Solo
-                    // `height` + `BoxFit.contain`: el ancho se deriva del
-                    // aspect ratio intrínseco del PNG, sin estirar.
+                    // logo de mobile (`korixa_logo.png`) no se toca.
+                    //
+                    // KORIXA-UI-SCREEN01-CRISP-LOGO-TEXT-CTA-20260905: sin
+                    // `cacheHeight`, `Image.asset` deja que el compositor
+                    // reduzca el PNG de 1697×927 a ~330×180 con un simple
+                    // muestreo bilineal en tiempo de dibujo — con una
+                    // reducción de ~5x eso genera aliasing visible en los
+                    // trazos finos del contorno de montaña y del wordmark
+                    // (se percibe como "pixelado"), aunque el archivo
+                    // fuente es nítido (verificado). `cacheHeight` fuerza
+                    // a Skia a decodificar/reescalar con un filtro de
+                    // calidad en el momento de la decodificación en vez
+                    // de un muestreo barato en cada frame — multiplicado
+                    // por `devicePixelRatio` para que la textura resultante
+                    // cubra pantallas de alta densidad sin volver a
+                    // reescalarse. `cacheWidth` se omite a propósito: el
+                    // framework deriva el ancho del aspect ratio real del
+                    // PNG, así nunca se puede estirar. `FilterQuality.high`
+                    // + tamaño renderizado subido a 200 (antes 180): logo
+                    // más nítido y con más presencia.
                     Image.asset(
                       'assets/icons/korixa_logo_desktop.png',
-                      height: 180,
+                      // 188 (no 200): a 800×600 — el viewport compartido
+                      // más chico donde también se valida esta pantalla
+                      // (`dark_tech_visual_foundation_test.dart`,
+                      // `demo_navigation_test.dart`) — 200 desbordaba la
+                      // columna por 7px. 188 sigue siendo mayor que el
+                      // valor previo (180) y dentro de "aumentar el
+                      // tamaño levemente" del encargo, con margen real.
+                      height: 188,
+                      cacheHeight: (188 * MediaQuery.of(context).devicePixelRatio).round(),
+                      filterQuality: FilterQuality.high,
                       fit: BoxFit.contain,
                       semanticLabel: 'Korixa',
                     ),
@@ -274,7 +309,23 @@ class _DesktopWelcomeContent extends StatelessWidget {
                       // dentro del rango 50-52 pedido) — `copyWith` solo
                       // pisa el tamaño; el `height` (multiplicador, no
                       // píxeles) se reescala solo, sin romper el interlineado.
-                      style: textTheme.displayMedium?.copyWith(fontSize: 51, fontWeight: FontWeight.w800),
+                      //
+                      // `letterSpacing: -0.5` (KORIXA-UI-SCREEN01-CRISP-
+                      // LOGO-TEXT-CTA-20260905): a 51px/w800 el tracking
+                      // por defecto deja los glifos con un pelo de
+                      // separación extra que a este tamaño se percibe
+                      // como bordes "sueltos"/menos sólidos; un leve
+                      // negativo los compacta sin llegar a solaparlos,
+                      // más nítido y con más peso visual. Sigue siendo
+                      // texto real (`Text`), no una imagen — el color
+                      // blanco lo hereda de `DarkTech.textPrimary` vía
+                      // `AppTypography.textTheme`, sin tocar acá.
+                      style: textTheme.displayMedium?.copyWith(
+                        fontSize: 51,
+                        fontWeight: FontWeight.w800,
+                        letterSpacing: -0.5,
+                        height: 1.08,
+                      ),
                     ),
                     const SizedBox(height: AppSpacing.md),
                     Text(
@@ -300,17 +351,24 @@ class _DesktopWelcomeContent extends StatelessWidget {
                     // la primera barra activa.
                     const _DesktopOnboardingIndicator(),
                     const SizedBox(height: AppSpacing.xl),
-                    // CTA "desktop-appropriate": ancho subido de 320 a 510
-                    // (KORIXA-UI-SCREEN01-FINAL-VISUAL-POLISH-20260905,
-                    // dentro del rango 500-525 pedido) — sigue sin ser
-                    // ancho completo del viewport ni del bloque de
-                    // contenido (640).
+                    // CTA "desktop-appropriate": ancho subido a 550 y alto
+                    // a 64 (KORIXA-UI-SCREEN01-CRISP-LOGO-TEXT-CTA-20260905,
+                    // dentro de los rangos 520-580 / 64-72 pedidos — 64 en
+                    // vez de 68 por el mismo motivo que el logo: margen
+                    // real a 800×600), label subido de 14 a 20
+                    // (`PrimaryGradientButton.fontSize`, ver
+                    // `dark_tech_buttons.dart` — parámetro opcional nuevo,
+                    // sin efecto en Login/Register/mobile que no lo
+                    // pasan). Sigue sin ser ancho completo del viewport ni
+                    // del bloque de contenido (680).
                     SizedBox(
                       key: const Key('welcome-desktop-cta'),
-                      width: 510,
+                      width: 550,
                       child: PrimaryGradientButton(
                         label: l10n.welcomeGetStarted,
                         onPressed: () => context.go(AppRoute.register),
+                        height: 64,
+                        fontSize: 20,
                       ),
                     ),
                   ],
