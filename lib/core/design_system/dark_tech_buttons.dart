@@ -27,13 +27,20 @@ import '../../app/theme/app_typography.dart';
 ///   deshabilitado a la interacción
 ///
 /// Objetivo táctil mínimo: 52px de alto (>= 48dp recomendado por Material
-/// y WCAG 2.5.5), ancho completo por defecto.
+/// y WCAG 2.5.5), ancho completo por defecto. [height] y [fontSize] son
+/// opcionales (KORIXA-UI-SCREEN01-CRISP-LOGO-TEXT-CTA-20260905) — con
+/// sus valores por defecto el botón se comporta exactamente igual que
+/// antes en todos los call sites existentes (Login/Register/Welcome
+/// mobile); solo Welcome desktop pasa valores más grandes para un CTA
+/// hero de más presencia, sin bifurcar el widget compartido.
 class PrimaryGradientButton extends StatelessWidget {
   const PrimaryGradientButton({
     required this.label,
     required this.onPressed,
     this.isLoading = false,
     this.icon,
+    this.height = _defaultHeight,
+    this.fontSize,
     super.key,
   });
 
@@ -41,8 +48,10 @@ class PrimaryGradientButton extends StatelessWidget {
   final VoidCallback? onPressed;
   final bool isLoading;
   final IconData? icon;
+  final double height;
+  final double? fontSize;
 
-  static const double _height = 52;
+  static const double _defaultHeight = 52;
 
   bool get _isDisabled => onPressed == null || isLoading;
 
@@ -60,7 +69,7 @@ class PrimaryGradientButton extends StatelessWidget {
           onTap: disabled ? null : onPressed,
           borderRadius: AppRadius.mdRadius,
           child: Ink(
-            height: _height,
+            height: height,
             decoration: BoxDecoration(
               gradient: disabled ? null : AppGradients.primaryCta,
               color: disabled ? DarkTech.disabledSurface : null,
@@ -85,7 +94,10 @@ class PrimaryGradientButton extends StatelessWidget {
                           style: AppTypography.textTheme(
                             onSurface: disabled ? DarkTech.disabledForeground : Colors.white,
                             onSurfaceMuted: DarkTech.textSecondary,
-                          ).labelLarge,
+                          ).labelLarge?.copyWith(
+                                fontSize: fontSize,
+                                fontWeight: fontSize != null ? FontWeight.w700 : null,
+                              ),
                         ),
                       ],
                     ),

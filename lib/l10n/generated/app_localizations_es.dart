@@ -12,17 +12,17 @@ class AppLocalizationsEs extends AppLocalizations {
   String get appName => 'RidePro';
 
   @override
-  String get welcomeTitle => 'Entrena como nunca antes';
+  String get welcomeTitle => 'Conecta tu energía.';
 
   @override
   String get welcomeSubtitle =>
-      'Rutas del mundo real y entrenamiento indoor enfocado, en una sola app rápida.';
+      'Entrena, compite y vive rutas increíbles en indoor y outdoor.';
 
   @override
-  String get welcomeCreateAccount => 'Crear cuenta';
+  String get welcomeGetStarted => 'Comenzar';
 
   @override
-  String get welcomeLogin => 'Ya tengo cuenta';
+  String get welcomeSkipAction => 'Saltar';
 
   @override
   String get loginTitle => 'Bienvenido de nuevo';
