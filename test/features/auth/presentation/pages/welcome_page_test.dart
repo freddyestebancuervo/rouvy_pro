@@ -122,6 +122,29 @@ void main() {
     expect(hasDesktopLogo, isTrue, reason: 'el logo de escritorio no debe verse afectado por el cambio de mobile');
   });
 
+  testWidgets('MOBILE_THREE_INDICATOR_LINES = PASS', (WidgetTester tester) async {
+    // KORIXA-SCREEN01-MOBILE-ADD-THREE-INDICATOR-LINES-20260906: mobile
+    // pasa de una píldora única a 3 barras (misma composición ya
+    // aprobada para desktop) — 1 activa (gradiente de marca), 2
+    // inactivas (`DarkTech.border`, gris oscuro).
+    await pumpWelcomePage(tester, surfaceSize: const Size(390, 844));
+
+    final Iterable<Container> bars = tester.widgetList<Container>(
+      find.descendant(of: find.byKey(const Key('welcome-indicator-row')), matching: find.byType(Container)),
+    );
+    expect(bars.length, 3, reason: 'el indicador de mobile debe mostrar exactamente 3 líneas');
+
+    final int activeCount = bars.where((Container bar) => bar.decoration is BoxDecoration && (bar.decoration! as BoxDecoration).gradient != null).length;
+    final int inactiveCount = bars
+        .where(
+          (Container bar) =>
+              bar.decoration is BoxDecoration && (bar.decoration! as BoxDecoration).color == DarkTech.border,
+        )
+        .length;
+    expect(activeCount, 1, reason: 'exactamente 1 línea debe quedar activa/resaltada');
+    expect(inactiveCount, 2, reason: 'las otras 2 líneas deben quedar en gris inactivo');
+  });
+
   testWidgets('CTA_NAVIGATION = PASS (Comenzar -> Register, mismo destino que el CTA anterior)',
       (WidgetTester tester) async {
     await pumpWelcomePage(tester);
