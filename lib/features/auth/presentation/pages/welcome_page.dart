@@ -1,3 +1,5 @@
+import 'dart:math' as math;
+
 import 'package:flutter/material.dart';
 import 'package:go_router/go_router.dart';
 
@@ -45,11 +47,30 @@ import '../../../../l10n/generated/app_localizations.dart';
 class WelcomePage extends StatelessWidget {
   const WelcomePage({super.key});
 
-  /// Por debajo de este ancho lógico: hero vertical + contenido anclado
-  /// abajo ("fullscreen hero vertical, estilo app real"). Por encima:
-  /// hero panorámico + contenido anclado a la izquierda — ver docblock
-  /// de la clase.
+  /// Ancho mínimo para desktop — sin cambios respecto al valor aprobado.
+  /// Ver [_isDesktop]: por sí solo ya NO alcanza para decidir el layout
+  /// (KORIXA-SCREEN01-MOBILE-LANDSCAPE-FIX-20260906).
   static const double _desktopBreakpoint = 700;
+
+  /// KORIXA-SCREEN01-MOBILE-LANDSCAPE-FIX-20260906: un teléfono rotado a
+  /// horizontal (p. ej. 932×430) tiene `maxWidth` > [_desktopBreakpoint]
+  /// tan fácilmente como un monitor de escritorio — clasificar SOLO por
+  /// ancho hacía que Welcome mostrara la composición de escritorio
+  /// completa (logo grande, título de escritorio, hero panorámico) en un
+  /// teléfono. Un teléfono en horizontal sigue siendo chico en su OTRA
+  /// dimensión (alto); un desktop/tablet real es grande en ambas. Por
+  /// eso se exige ADEMÁS que el lado más corto del viewport (el "alto"
+  /// en horizontal, el "ancho" en vertical) supere un mínimo — 600, el
+  /// mismo umbral que Flutter usa convencionalmente para distinguir
+  /// tablet de teléfono por `shortestSide`. Ningún teléfono conocido
+  /// (portrait u horizontal) tiene su lado más corto por encima de 600;
+  /// cualquier tablet/desktop real sí.
+  static const double _desktopMinShortestSide = 600;
+
+  static bool _isDesktop(BoxConstraints constraints) {
+    final double shortestSide = math.min(constraints.maxWidth, constraints.maxHeight);
+    return constraints.maxWidth > _desktopBreakpoint && shortestSide > _desktopMinShortestSide;
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -61,7 +82,7 @@ class WelcomePage extends StatelessWidget {
         backgroundColor: DarkTech.background,
         body: LayoutBuilder(
           builder: (BuildContext context, BoxConstraints constraints) {
-            return constraints.maxWidth > _desktopBreakpoint
+            return _isDesktop(constraints)
                 ? _DesktopWelcomeContent(l10n: l10n)
                 : _MobileWelcomeContent(l10n: l10n);
           },

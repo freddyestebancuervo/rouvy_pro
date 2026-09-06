@@ -145,6 +145,54 @@ void main() {
     expect(inactiveCount, 2, reason: 'las otras 2 líneas deben quedar en gris inactivo');
   });
 
+  // KORIXA-SCREEN01-MOBILE-LANDSCAPE-FIX-20260906: clasificar el layout
+  // solo por `maxWidth` hacía que un teléfono rotado a horizontal (ancho
+  // > 700 tan fácilmente como un monitor) recibiera la composición de
+  // escritorio completa. Estos 4 tamaños son teléfonos reales (portrait
+  // y horizontal); ninguno debe activar desktop, sin importar qué tan
+  // ancho se vea en horizontal — ver `_isDesktop` en welcome_page.dart.
+  const <String, Size>{
+    '390x844 (portrait)': Size(390, 844),
+    '844x390 (landscape)': Size(844, 390),
+    '915x412 (landscape)': Size(915, 412),
+    '932x430 (landscape)': Size(932, 430),
+  }.forEach((String label, Size size) {
+    testWidgets('${label}_USES_MOBILE_LAYOUT = PASS', (WidgetTester tester) async {
+      await pumpWelcomePage(tester, surfaceSize: size);
+      expect(tester.takeException(), isNull, reason: 'no debe haber overflow en $label');
+
+      expect(
+        heroAssetImage(tester)?.assetName,
+        'assets/images/korixa_welcome_hero.webp',
+        reason: '$label es un teléfono (incluso en horizontal): debe usar el hero vertical de mobile, no el panorámico',
+      );
+
+      final Iterable<Image> images = tester.widgetList<Image>(find.byType(Image));
+      final bool hasDesktopLogo = images.any(
+        (Image image) => resolvedAssetName(image.image) == 'assets/icons/korixa_logo_desktop.png',
+      );
+      expect(hasDesktopLogo, isFalse, reason: '$label no debe mostrar el logo de escritorio');
+
+      // Contenido mobile mínimo viable: Saltar, título, subtítulo, CTA —
+      // todos deben seguir existiendo en el árbol (alcanzables vía el
+      // scroll ya existente si el alto es angosto), nunca reemplazados
+      // por el layout de escritorio.
+      expect(find.text('Saltar'), findsOneWidget);
+      expect(find.text('Conecta tu energía.'), findsOneWidget);
+      expect(find.text('Entrena, compite y vive rutas increíbles en indoor y outdoor.'), findsOneWidget);
+      expect(find.text('Comenzar'), findsOneWidget);
+    });
+  });
+
+  testWidgets('1440x900_USES_DESKTOP_LAYOUT = PASS', (WidgetTester tester) async {
+    // Contraparte del grupo de arriba: un desktop real (ancho Y alto
+    // grandes) debe seguir activando la composición de escritorio —
+    // el fix no debe convertir esto, de paso, en un falso mobile.
+    await pumpWelcomePage(tester, surfaceSize: const Size(1440, 900));
+    expect(tester.takeException(), isNull);
+    expect(heroAssetImage(tester)?.assetName, 'assets/images/korixa_welcome_hero_desktop.webp');
+  });
+
   testWidgets('CTA_NAVIGATION = PASS (Comenzar -> Register, mismo destino que el CTA anterior)',
       (WidgetTester tester) async {
     await pumpWelcomePage(tester);
