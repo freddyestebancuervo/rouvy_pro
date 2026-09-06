@@ -72,6 +72,18 @@ class WelcomePage extends StatelessWidget {
     return constraints.maxWidth > _desktopBreakpoint && shortestSide > _desktopMinShortestSide;
   }
 
+  /// KORIXA-SCREEN01-PHONE-LANDSCAPE-COMPOSITION-20260906: un teléfono en
+  /// horizontal ya NO activa [_isDesktop] (ver fix anterior), pero seguía
+  /// reusando la composición de mobile portrait sin cambios — un bloque
+  /// anclado ABAJO con título+subtítulo+indicador+CTA a tamaño completo
+  /// simplemente no entra en ~390-430px de alto sin superponerse al
+  /// ciclista. Un teléfono en horizontal (ancho > alto, pero con el lado
+  /// más corto todavía chico — nunca activa desktop) necesita su PROPIA
+  /// composición compacta — ver [_PhoneLandscapeWelcomeContent].
+  static bool _isPhoneLandscape(BoxConstraints constraints) {
+    return !_isDesktop(constraints) && constraints.maxWidth > constraints.maxHeight;
+  }
+
   @override
   Widget build(BuildContext context) {
     final AppLocalizations l10n = AppLocalizations.of(context);
@@ -82,9 +94,13 @@ class WelcomePage extends StatelessWidget {
         backgroundColor: DarkTech.background,
         body: LayoutBuilder(
           builder: (BuildContext context, BoxConstraints constraints) {
-            return _isDesktop(constraints)
-                ? _DesktopWelcomeContent(l10n: l10n)
-                : _MobileWelcomeContent(l10n: l10n);
+            if (_isDesktop(constraints)) {
+              return _DesktopWelcomeContent(l10n: l10n);
+            }
+            if (_isPhoneLandscape(constraints)) {
+              return _PhoneLandscapeWelcomeContent(l10n: l10n);
+            }
+            return _MobileWelcomeContent(l10n: l10n);
           },
         ),
       ),
@@ -272,7 +288,7 @@ class _DesktopWelcomeContent extends StatelessWidget {
         // Deliberadamente NO `imageScrimBottom` (ese oscurece TODO el
         // borde inferior, incluido el ciclista): acá el objetivo es
         // contraste de texto sin oscurecer globalmente la foto aprobada.
-        const Positioned.fill(child: _DesktopContentScrim()),
+        const Positioned.fill(child: _HorizontalContentScrim()),
         SafeArea(
           child: Align(
             alignment: Alignment.topRight,
@@ -423,13 +439,176 @@ class _DesktopWelcomeContent extends StatelessWidget {
   }
 }
 
-/// Scrim horizontal exclusivo de la composición de escritorio — ver
-/// docblock de [_DesktopWelcomeContent]. Un solo tono neutro (no de
-/// marca, igual que `AppGradients.imageScrimBottom`) de opaco a
-/// transparente; el corte al 60% del ancho deja el ciclista y la mayor
-/// parte del paisaje sin oscurecer.
-class _DesktopContentScrim extends StatelessWidget {
-  const _DesktopContentScrim();
+/// Scrim horizontal — compartido por escritorio (ver
+/// Composición de teléfono en HORIZONTAL — KORIXA-SCREEN01-PHONE-
+/// LANDSCAPE-COMPOSITION-20260906. Sigue siendo MOBILE: hero vertical de
+/// mobile (nunca el panorámico de escritorio), sin logo Korixa flotante
+/// (el único branding es el ya impreso en la foto del ciclista), CTA e
+/// indicador a tamaño de teléfono — nunca los de [_DesktopWelcomeContent].
+///
+/// Anclar el contenido ABAJO (como en portrait, [_MobileWelcomeContent])
+/// no funciona acá: a ~390-430px de alto el bloque completo título+
+/// subtítulo+indicador+CTA de portrait no entra sin superponerse al
+/// ciclista. En vez de eso, esta composición usa el mismo lenguaje que
+/// desktop — contenido a la izquierda, ciclista a la derecha — pero con
+/// tamaños de teléfono, nunca los de escritorio.
+///
+/// [_contentMaxWidth] (250, no los 300-380 sugeridos para el CTA) es
+/// deliberado: verificado con el hero real (ver [_PhoneLandscapeHeroImage]),
+/// el jersey/ribbon del ciclista empieza a mostrarse a partir de
+/// ~x=270 en un viewport de 932px de ancho — un bloque de contenido más
+/// ancho invadiría directamente el branding de la foto, que es la
+/// restricción explícita más dura del encargo (por encima del ancho de
+/// CTA sugerido, que el propio encargo marca como aproximado).
+class _PhoneLandscapeWelcomeContent extends StatelessWidget {
+  const _PhoneLandscapeWelcomeContent({required this.l10n});
+
+  final AppLocalizations l10n;
+
+  static const double _contentMaxWidth = 250;
+
+  @override
+  Widget build(BuildContext context) {
+    final TextTheme textTheme = Theme.of(context).textTheme;
+
+    return Stack(
+      fit: StackFit.expand,
+      children: <Widget>[
+        const ExcludeSemantics(
+          key: Key('welcome-hero-image'),
+          child: _PhoneLandscapeHeroImage(),
+        ),
+        const Positioned.fill(child: _HorizontalContentScrim()),
+        SafeArea(
+          child: Align(
+            alignment: Alignment.topRight,
+            child: Padding(
+              padding: const EdgeInsets.all(AppSpacing.sm),
+              child: _SkipButton(
+                label: l10n.welcomeSkipAction,
+                onTap: () => context.go(AppRoute.login),
+              ),
+            ),
+          ),
+        ),
+        SafeArea(
+          child: Align(
+            alignment: Alignment.centerLeft,
+            child: ConstrainedBox(
+              key: const Key('welcome-content-max-width'),
+              constraints: const BoxConstraints(maxWidth: _contentMaxWidth),
+              child: SingleChildScrollView(
+                // Igual que portrait: si el alto disponible es
+                // excepcionalmente chico (texto localizado más largo,
+                // escala de fuente de accesibilidad alta), el contenido
+                // se desplaza en vez de desbordar — nunca cambia a la
+                // composición de escritorio por falta de espacio.
+                padding: const EdgeInsets.symmetric(horizontal: AppSpacing.md, vertical: AppSpacing.sm),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  mainAxisSize: MainAxisSize.min,
+                  children: <Widget>[
+                    Text(
+                      l10n.welcomeTitle,
+                      textAlign: TextAlign.left,
+                      maxLines: 2,
+                      overflow: TextOverflow.ellipsis,
+                      // `titleLarge` (22) — más chico que el
+                      // `headlineMedium` (28) de portrait, "smaller than
+                      // portrait if necessary" del encargo. Sin `color:`
+                      // explícito a propósito — `titleLarge` ya hereda
+                      // `DarkTech.textPrimary` vía `AppTheme.darkTech`;
+                      // forzar `Colors.white` acá se ve idéntico pero es
+                      // un valor distinto (`0xFFFFFFFF` vs. el
+                      // `0xFFF7F8FC` real de `textPrimary`) y rompe la
+                      // garantía "Dark Tech gana sobre el tema exterior"
+                      // que valida `OUTER_LIGHT_THEME_DARK_TECH`.
+                      style: textTheme.titleLarge?.copyWith(fontWeight: FontWeight.w800),
+                    ),
+                    const SizedBox(height: AppSpacing.xs),
+                    Text(
+                      l10n.welcomeSubtitle,
+                      textAlign: TextAlign.left,
+                      maxLines: 2,
+                      overflow: TextOverflow.ellipsis,
+                      style: textTheme.bodyMedium?.copyWith(color: DarkTech.textSecondary),
+                    ),
+                    const SizedBox(height: AppSpacing.sm),
+                    const _PhoneLandscapeOnboardingIndicator(),
+                    const SizedBox(height: AppSpacing.sm),
+                    // CTA compacto de horizontal: ancho responsivo (se
+                    // estira al ancho del bloque de contenido, ~226px
+                    // efectivos tras el padding — ver docblock de la
+                    // clase sobre por qué no llega a los 300-380
+                    // sugeridos) y alto 54 (dentro del rango 52-58
+                    // pedido), nunca el ancho fijo de 320+ de portrait.
+                    PrimaryGradientButton(
+                      key: const Key('welcome-landscape-cta'),
+                      label: l10n.welcomeGetStarted,
+                      onPressed: () => context.go(AppRoute.register),
+                      height: 54,
+                      fontSize: 15,
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          ),
+        ),
+      ],
+    );
+  }
+}
+
+/// Hero de teléfono en horizontal — KORIXA-SCREEN01-PHONE-LANDSCAPE-
+/// COMPOSITION-20260906. Mismo ARCHIVO que portrait
+/// (`korixa_welcome_hero.webp`) — nunca el panorámico de escritorio —
+/// pero con un `alignment` propio: en un viewport ancho y bajo,
+/// `BoxFit.cover` escala por ANCHO (sin recorte horizontal — el ancho
+/// completo de la foto original siempre es visible) y recorta
+/// verticalmente. `Alignment(0, -0.4)` (en vez del `-0.15` que ya usa
+/// [_HeroImage] para su propio caso de teléfono en horizontal, pensado
+/// para un recorte mucho más leve) muestra la franja que contiene TANTO
+/// el wordmark/ribbon del jersey como el logo del short — verificado
+/// recortando la foto real a 932×430 y 844×390 antes de implementar
+/// esto: con alineamiento centrado (0,0) el short queda pegado al borde
+/// superior y el jersey queda fuera de cuadro.
+class _PhoneLandscapeHeroImage extends StatelessWidget {
+  const _PhoneLandscapeHeroImage();
+
+  @override
+  Widget build(BuildContext context) {
+    return Image.asset(
+      'assets/images/korixa_welcome_hero.webp',
+      fit: BoxFit.cover,
+      alignment: const Alignment(0, -0.4),
+    );
+  }
+}
+
+/// Indicador de teléfono en horizontal — mismas 3 barras, aún más
+/// compactas que las de portrait (16×3, separación 4) para el alto
+/// reducido disponible.
+class _PhoneLandscapeOnboardingIndicator extends StatelessWidget {
+  const _PhoneLandscapeOnboardingIndicator();
+
+  @override
+  Widget build(BuildContext context) {
+    return const _ThreeBarIndicator(barWidth: 16, barHeight: 3, gap: 4);
+  }
+}
+
+/// Scrim horizontal — compartido por escritorio (ver
+/// [_DesktopWelcomeContent]) y teléfono en horizontal (ver
+/// [_PhoneLandscapeWelcomeContent], KORIXA-SCREEN01-PHONE-LANDSCAPE-
+/// COMPOSITION-20260906): ambas composiciones anclan el contenido a la
+/// izquierda con el ciclista a la derecha, así que ambas necesitan el
+/// mismo tipo de scrim. Un solo tono neutro (no de marca, igual que
+/// `AppGradients.imageScrimBottom`) de opaco a transparente; el corte al
+/// 60% del ancho deja el ciclista y la mayor parte del paisaje sin
+/// oscurecer.
+class _HorizontalContentScrim extends StatelessWidget {
+  const _HorizontalContentScrim();
 
   @override
   Widget build(BuildContext context) {

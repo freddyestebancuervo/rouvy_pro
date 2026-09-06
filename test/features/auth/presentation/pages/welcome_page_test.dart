@@ -184,6 +184,49 @@ void main() {
     });
   });
 
+  // KORIXA-SCREEN01-PHONE-LANDSCAPE-COMPOSITION-20260906: el fix anterior
+  // solo corrigió la CLASIFICACIÓN (landscape ya no activaba desktop),
+  // pero seguía reusando la composición de portrait sin cambios — un
+  // bloque anclado abajo a tamaño completo no entra en ~390-430px de
+  // alto sin superponerse al ciclista. Estos 3 tamaños ahora deben usar
+  // [_PhoneLandscapeWelcomeContent]: 3 indicadores, un CTA de ancho
+  // compacto (no los 320+ de portrait/desktop), y un bloque de contenido
+  // que no invade el área donde empieza el branding del jersey.
+  const <String, Size>{
+    '844x390': Size(844, 390),
+    '915x412': Size(915, 412),
+    '932x430': Size(932, 430),
+  }.forEach((String label, Size size) {
+    testWidgets('${label}_PHONE_LANDSCAPE_COMPOSITION = PASS', (WidgetTester tester) async {
+      await pumpWelcomePage(tester, surfaceSize: size);
+      expect(tester.takeException(), isNull, reason: 'no debe haber overflow en $label');
+
+      // 3 indicadores, igual que portrait/desktop — ver `_ThreeBarIndicator`.
+      final Iterable<Container> bars = tester.widgetList<Container>(
+        find.descendant(of: find.byKey(const Key('welcome-indicator-row')), matching: find.byType(Container)),
+      );
+      expect(bars.length, 3, reason: '$label debe mostrar exactamente 3 líneas indicadoras');
+
+      // CTA propio de horizontal (`welcome-landscape-cta`) — nunca el
+      // ancho de 320+ de portrait ni el de 550 de desktop.
+      expect(find.byKey(const Key('welcome-landscape-cta')), findsOneWidget);
+      final Size ctaSize = tester.getSize(find.byKey(const Key('welcome-landscape-cta')));
+      expect(ctaSize.width, lessThan(300), reason: '$label: el CTA de horizontal debe ser compacto, no el ancho de portrait/desktop');
+      expect(ctaSize.height, greaterThanOrEqualTo(48), reason: '$label: el CTA debe seguir siendo táctil (>=48dp)');
+
+      // El bloque de contenido no debe invadir la zona donde empieza el
+      // branding del jersey en la foto real (~x=270 a 932px de ancho,
+      // verificado por inspección directa antes de implementar la
+      // composición — ver docblock de `_PhoneLandscapeWelcomeContent`).
+      final Size contentSize = tester.getSize(find.byKey(const Key('welcome-content-max-width')));
+      expect(
+        contentSize.width,
+        lessThanOrEqualTo(260),
+        reason: '$label: el contenido no debe extenderse hasta el área de branding del ciclista',
+      );
+    });
+  });
+
   testWidgets('1440x900_USES_DESKTOP_LAYOUT = PASS', (WidgetTester tester) async {
     // Contraparte del grupo de arriba: un desktop real (ancho Y alto
     // grandes) debe seguir activando la composición de escritorio —
