@@ -362,4 +362,120 @@ void main() {
     final Text title = tester.widget<Text>(find.text('Conecta tu energía.'));
     expect(title.style?.color, DarkTech.textPrimary);
   });
+
+  // ---------------------------------------------------------------------
+  // KORIXA-RESPONSIVE-FOUNDATION-V1-SCREEN01-20260907 — matriz completa.
+  //
+  // Bug real reproducido: un laptop con `1365x599` (chrome del navegador
+  // reduciendo el alto) caía en la composición de teléfono en horizontal
+  // porque la regla vieja exigía `shortestSide > 600` para CUALQUIER
+  // ancho. La fundación (`KorixaViewportInfo.canFitWideLayout`, ver
+  // `core/responsive/korixa_viewport.dart`) lo corrige reconociendo que
+  // un ancho ya "expanded" (>=1024 — ningún teléfono real llega ahí en
+  // ninguna orientación) basta por sí solo, sin importar el alto.
+  // ---------------------------------------------------------------------
+
+  bool hasDesktopLogo(WidgetTester tester) {
+    final Iterable<Image> images = tester.widgetList<Image>(find.byType(Image));
+    return images.any((Image image) => resolvedAssetName(image.image) == 'assets/icons/korixa_logo_desktop.png');
+  }
+
+  const List<(String, Size, String)> desktopViewports = <(String, Size, String)>[
+    ('800x600', Size(800, 600), 'assets/images/korixa_welcome_hero_desktop.webp'),
+    ('1024x768', Size(1024, 768), 'assets/images/korixa_welcome_hero_desktop.webp'),
+    ('1280x600', Size(1280, 600), 'assets/images/korixa_welcome_hero_desktop.webp'),
+    ('1365x599', Size(1365, 599), 'assets/images/korixa_welcome_hero_desktop.webp'),
+    ('1366x768', Size(1366, 768), 'assets/images/korixa_welcome_hero_desktop.webp'),
+    ('1440x900', Size(1440, 900), 'assets/images/korixa_welcome_hero_desktop.webp'),
+    ('1536x864', Size(1536, 864), 'assets/images/korixa_welcome_hero_desktop.webp'),
+    ('1920x1080', Size(1920, 1080), 'assets/images/korixa_welcome_hero_desktop.webp'),
+    ('2560x1440', Size(2560, 1440), 'assets/images/korixa_welcome_hero_desktop.webp'),
+  ];
+
+  for (final (String label, Size size, String expectedHero) in desktopViewports) {
+    testWidgets('${label}_DESKTOP_COMPOSITION = PASS', (WidgetTester tester) async {
+      await pumpWelcomePage(tester, surfaceSize: size);
+      expect(tester.takeException(), isNull, reason: 'no debe haber overflow en $label');
+
+      expect(heroAssetImage(tester)?.assetName, expectedHero, reason: '$label debe usar el hero panorámico de escritorio');
+      expect(hasDesktopLogo(tester), isTrue, reason: '$label debe mostrar el logo de escritorio');
+      expect(find.byType(PrimaryGradientButton), findsOneWidget, reason: '$label: el CTA de escritorio debe existir');
+      expect(find.byKey(const Key('welcome-desktop-cta')), findsOneWidget, reason: '$label: debe ser el CTA de escritorio, no el de teléfono en horizontal');
+      expect(find.text('Conecta tu energía.'), findsOneWidget, reason: '$label: el título debe seguir visible');
+      expect(find.text('Saltar'), findsOneWidget, reason: '$label: Saltar debe seguir siendo alcanzable');
+    });
+  }
+
+  testWidgets('1365x599_DESKTOP = YES (root cause del bug real, ahora corregido)', (WidgetTester tester) async {
+    await pumpWelcomePage(tester, surfaceSize: const Size(1365, 599));
+    expect(tester.takeException(), isNull, reason: 'no debe haber overflow al alto reducido');
+
+    expect(heroAssetImage(tester)?.assetName, 'assets/images/korixa_welcome_hero_desktop.webp');
+    expect(hasDesktopLogo(tester), isTrue);
+    expect(find.byKey(const Key('welcome-desktop-cta')), findsOneWidget);
+  });
+
+  testWidgets('1365x599_PHONE_LANDSCAPE = NO', (WidgetTester tester) async {
+    await pumpWelcomePage(tester, surfaceSize: const Size(1365, 599));
+
+    expect(find.byKey(const Key('welcome-landscape-cta')), findsNothing, reason: '1365x599 NUNCA debe usar el CTA de teléfono en horizontal');
+    expect(heroAssetImage(tester)?.assetName, isNot('assets/images/korixa_welcome_hero_landscape.webp'));
+  });
+
+  testWidgets('932x430_PHONE_LANDSCAPE = YES', (WidgetTester tester) async {
+    await pumpWelcomePage(tester, surfaceSize: const Size(932, 430));
+
+    expect(heroAssetImage(tester)?.assetName, 'assets/images/korixa_welcome_hero_landscape.webp');
+    expect(find.byKey(const Key('welcome-landscape-cta')), findsOneWidget);
+  });
+
+  testWidgets('932x430_DESKTOP = NO', (WidgetTester tester) async {
+    await pumpWelcomePage(tester, surfaceSize: const Size(932, 430));
+
+    expect(hasDesktopLogo(tester), isFalse, reason: '932x430 es un teléfono rotado, nunca debe mostrar el logo de escritorio');
+    expect(find.byKey(const Key('welcome-desktop-cta')), findsNothing);
+  });
+
+  // Portrait "grande" (tablet) — el encargo pide explícitamente que
+  // pueda reusar la composición portrait ya aprobada en vez de forzar
+  // una composición nueva o la de escritorio (pensada para un hero
+  // landscape, no para un viewport más alto que ancho).
+  testWidgets('768x1024_TABLET_PORTRAIT_VALID_NO_OVERFLOW = PASS', (WidgetTester tester) async {
+    await pumpWelcomePage(tester, surfaceSize: const Size(768, 1024));
+    expect(tester.takeException(), isNull, reason: 'no debe haber overflow en 768x1024');
+
+    expect(heroAssetImage(tester)?.assetName, 'assets/images/korixa_welcome_hero.webp', reason: 'tablet portrait reusa el hero/composición portrait ya aprobada');
+    expect(hasDesktopLogo(tester), isFalse, reason: 'portrait nunca debe mostrar el logo de escritorio');
+    expect(find.text('Comenzar'), findsOneWidget, reason: 'el CTA debe seguir siendo alcanzable');
+    expect(find.text('Saltar'), findsOneWidget);
+  });
+
+  // Barrido de no-overflow adicional a los ya existentes (320x568,
+  // 390x844, 1440x900) — cubre el resto de anchos/altos representativos
+  // pedidos explícitamente por el encargo.
+  const List<Size> noOverflowSweep = <Size>[
+    Size(360, 800),
+    Size(390, 844),
+    Size(430, 932),
+    Size(844, 390),
+    Size(915, 412),
+    Size(932, 430),
+    Size(768, 1024),
+    Size(800, 600),
+    Size(1024, 768),
+    Size(1280, 600),
+    Size(1365, 599),
+    Size(1366, 768),
+    Size(1440, 900),
+    Size(1536, 864),
+    Size(1920, 1080),
+    Size(2560, 1440),
+  ];
+
+  for (final Size size in noOverflowSweep) {
+    testWidgets('${size.width.toInt()}x${size.height.toInt()}_WIDGET_MATRIX_NO_OVERFLOW = PASS', (WidgetTester tester) async {
+      await pumpWelcomePage(tester, surfaceSize: size);
+      expect(tester.takeException(), isNull, reason: 'no debe haber overflow en ${size.width.toInt()}x${size.height.toInt()}');
+    });
+  }
 }
