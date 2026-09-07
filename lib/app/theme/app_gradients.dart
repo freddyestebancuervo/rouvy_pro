@@ -55,4 +55,21 @@ abstract class AppGradients {
     colors: <Color>[Colors.transparent, Color(0xE6000000)],
     stops: <double>[0.4, 1.0],
   );
+
+  /// Panel oscuro "elevado" junto a un hero (Sección 2.A) —
+  /// KORIXA-SCREEN02-LOGIN-DESKTOP-POLISH-LOGO-PANEL-20260907: reemplaza
+  /// un `ColoredBox(color: DarkTech.background)` plano por la propia
+  /// escala de elevación Dark Tech (superficie más clara junto a la foto,
+  /// oscureciendo progresivamente hacia `background`), para que el panel
+  /// no se sienta como un bloque negro sólido pegado al hero. Reusa los 3
+  /// tonos de superficie ya existentes — sin color nuevo — y ambos ya
+  /// pasan AA junto a `textPrimary`/`textSecondary` (ver
+  /// `dark_tech_design_tokens_test.dart`), así que no introduce ningún
+  /// riesgo de contraste nuevo.
+  static const LinearGradient loginDesktopPanel = LinearGradient(
+    begin: Alignment.centerLeft,
+    end: Alignment.centerRight,
+    colors: <Color>[DarkTech.surfaceElevated, DarkTech.surface, DarkTech.background],
+    stops: <double>[0.0, 0.30, 0.70],
+  );
 }

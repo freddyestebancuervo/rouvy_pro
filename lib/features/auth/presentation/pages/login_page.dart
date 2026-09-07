@@ -296,8 +296,16 @@ class _LoginPageState extends ConsumerState<LoginPage> {
         ),
         Expanded(
           flex: 43,
-          child: ColoredBox(
-            color: DarkTech.background,
+          child: DecoratedBox(
+            // KORIXA-SCREEN02-LOGIN-DESKTOP-POLISH-LOGO-PANEL-20260907:
+            // antes era un `ColoredBox(color: DarkTech.background)` plano
+            // — ahora usa la propia escala de elevación Dark Tech como
+            // degradado horizontal (más claro junto al hero, oscureciendo
+            // progresivamente), para que el panel se sienta como una
+            // superficie de vidrio integrada con la foto en vez de un
+            // bloque negro sólido pegado a ella. Composición/flex/hero
+            // sin cambios.
+            decoration: const BoxDecoration(gradient: AppGradients.loginDesktopPanel),
             child: Center(
               child: SingleChildScrollView(
                 padding: const EdgeInsets.symmetric(horizontal: AppSpacing.xxxl, vertical: AppSpacing.xl),
@@ -312,6 +320,7 @@ class _LoginPageState extends ConsumerState<LoginPage> {
                     logoAsset: 'assets/icons/korixa_logo_desktop.png',
                     logoHeight: 56,
                     compact: false,
+                    highQualityLogo: true,
                   ),
                 ),
               ),
@@ -338,6 +347,7 @@ class _LoginPageState extends ConsumerState<LoginPage> {
     required String logoAsset,
     required double logoHeight,
     required bool compact,
+    bool highQualityLogo = false,
   }) {
     final TextTheme textTheme = Theme.of(context).textTheme;
     final double sectionGap = compact ? AppSpacing.sm : AppSpacing.xl;
@@ -355,10 +365,24 @@ class _LoginPageState extends ConsumerState<LoginPage> {
           // Mismos archivos ya aprobados que usa/usaba Welcome
           // (`korixa_logo.png` mobile/landscape, `korixa_logo_desktop.png`
           // desktop) — ningún logo nuevo.
+          // KORIXA-SCREEN02-LOGIN-DESKTOP-POLISH-LOGO-PANEL-20260907: en
+          // desktop el logo se decodificaba al tamaño lógico completo del
+          // asset (927px de alto) y se reducía a solo 56px vía el filtro
+          // de baja calidad por defecto de `Image` — visible como bordes
+          // dentados en el texto al hacer zoom sobre la captura. Decodificar
+          // directo al tamaño físico real (`cacheHeight` según
+          // devicePixelRatio) + `FilterQuality.high` da un resample nítido
+          // en vez de ese downscale en vivo. Solo aplica en desktop
+          // (`highQualityLogo`) — portrait/landscape quedan bit-a-bit
+          // iguales a como estaban (mismo asset, mismo tamaño, sin cambio).
           Image.asset(
             logoAsset,
             height: logoHeight,
             fit: BoxFit.contain,
+            filterQuality: highQualityLogo ? FilterQuality.high : FilterQuality.low,
+            cacheHeight: highQualityLogo
+                ? (logoHeight * MediaQuery.of(context).devicePixelRatio).round()
+                : null,
             semanticLabel: 'Korixa',
           ),
           SizedBox(height: compact ? AppSpacing.sm : AppSpacing.lg),
