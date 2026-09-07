@@ -145,6 +145,118 @@ void main() {
     expect(inactiveCount, 2, reason: 'las otras 2 líneas deben quedar en gris inactivo');
   });
 
+  // KORIXA-SCREEN01-MOBILE-LANDSCAPE-FIX-20260906: clasificar el layout
+  // solo por `maxWidth` hacía que un teléfono rotado a horizontal (ancho
+  // > 700 tan fácilmente como un monitor) recibiera la composición de
+  // escritorio completa. Estos 4 tamaños son teléfonos reales (portrait
+  // y horizontal); ninguno debe activar desktop, sin importar qué tan
+  // ancho se vea en horizontal — ver `_isDesktop` en welcome_page.dart.
+  //
+  // KORIXA-SCREEN01-FINAL-LANDSCAPE-HERO-ASSET-20260906: portrait y
+  // horizontal ahora usan ARCHIVOS DE HERO DISTINTOS (cada uno el suyo,
+  // nunca el panorámico de escritorio) — el mapa lleva el hero esperado
+  // por tamaño en vez de asumir uno solo para los 4.
+  const <String, (Size, String)>{
+    '390x844 (portrait)': (Size(390, 844), 'assets/images/korixa_welcome_hero.webp'),
+    '844x390 (landscape)': (Size(844, 390), 'assets/images/korixa_welcome_hero_landscape.webp'),
+    '915x412 (landscape)': (Size(915, 412), 'assets/images/korixa_welcome_hero_landscape.webp'),
+    '932x430 (landscape)': (Size(932, 430), 'assets/images/korixa_welcome_hero_landscape.webp'),
+  }.forEach((String label, (Size, String) entry) {
+    final (Size size, String expectedHero) = entry;
+    testWidgets('${label}_USES_MOBILE_LAYOUT = PASS', (WidgetTester tester) async {
+      await pumpWelcomePage(tester, surfaceSize: size);
+      expect(tester.takeException(), isNull, reason: 'no debe haber overflow en $label');
+
+      expect(
+        heroAssetImage(tester)?.assetName,
+        expectedHero,
+        reason: '$label debe usar su hero dedicado (portrait o landscape, nunca el panorámico de escritorio)',
+      );
+
+      final Iterable<Image> images = tester.widgetList<Image>(find.byType(Image));
+      final bool hasDesktopLogo = images.any(
+        (Image image) => resolvedAssetName(image.image) == 'assets/icons/korixa_logo_desktop.png',
+      );
+      expect(hasDesktopLogo, isFalse, reason: '$label no debe mostrar el logo de escritorio');
+
+      // Contenido mobile mínimo viable: Saltar, título, subtítulo, CTA —
+      // todos deben seguir existiendo en el árbol (alcanzables vía el
+      // scroll ya existente si el alto es angosto), nunca reemplazados
+      // por el layout de escritorio.
+      expect(find.text('Saltar'), findsOneWidget);
+      expect(find.text('Conecta tu energía.'), findsOneWidget);
+      expect(find.text('Entrena, compite y vive rutas increíbles en indoor y outdoor.'), findsOneWidget);
+      expect(find.text('Comenzar'), findsOneWidget);
+    });
+  });
+
+  // KORIXA-SCREEN01-FINAL-LANDSCAPE-HERO-ASSET-20260906: con el hero
+  // dedicado nuevo (ciclista más chico, corrido a ~70% del ancho), el
+  // bloque de contenido/CTA ya puede ser un porcentaje real del
+  // viewport (34-40%, CTA 300-380px) en vez del ancho fijo de 250px que
+  // exigía la foto anterior — ver [_PhoneLandscapeWelcomeContent].
+  const <String, Size>{
+    '844x390': Size(844, 390),
+    '915x412': Size(915, 412),
+    '932x430': Size(932, 430),
+  }.forEach((String label, Size size) {
+    testWidgets('${label}_PHONE_LANDSCAPE_COMPOSITION = PASS', (WidgetTester tester) async {
+      await pumpWelcomePage(tester, surfaceSize: size);
+      expect(tester.takeException(), isNull, reason: 'no debe haber overflow en $label');
+
+      // 3 indicadores, igual que portrait/desktop — ver `_ThreeBarIndicator`.
+      final Iterable<Container> bars = tester.widgetList<Container>(
+        find.descendant(of: find.byKey(const Key('welcome-indicator-row')), matching: find.byType(Container)),
+      );
+      expect(bars.length, 3, reason: '$label debe mostrar exactamente 3 líneas indicadoras');
+
+      // CTA responsivo — 300-380px pedido, nunca el ancho de 320+ fijo
+      // de portrait ni el de 550 de desktop.
+      expect(find.byKey(const Key('welcome-landscape-cta')), findsOneWidget);
+      final Size ctaSize = tester.getSize(find.byKey(const Key('welcome-landscape-cta')));
+      expect(ctaSize.width, greaterThanOrEqualTo(280), reason: '$label: el CTA debe acercarse al rango 300-380 pedido');
+      expect(ctaSize.width, lessThanOrEqualTo(380), reason: '$label: el CTA no debe exceder el rango 300-380 pedido');
+      expect(ctaSize.height, greaterThanOrEqualTo(48), reason: '$label: el CTA debe seguir siendo táctil (>=48dp)');
+
+      // El bloque de contenido debe quedar en el rango 34-40% del
+      // viewport pedido (acotado 280-380) — con el hero nuevo, el
+      // margen libre real es de ~590-650px, muy por encima de este
+      // rango, así que no hay riesgo de invadir al ciclista.
+      final Size contentSize = tester.getSize(find.byKey(const Key('welcome-content-max-width')));
+      expect(contentSize.width, greaterThanOrEqualTo(280), reason: '$label: el contenido debe acercarse al 34-40% pedido');
+      expect(contentSize.width, lessThanOrEqualTo(380), reason: '$label: el contenido no debe exceder el rango pedido');
+
+      // KORIXA-SCREEN01-LANDSCAPE-CTA-MICRO-REDUCTION-20260906: el CTA
+      // debe quedar MEDIBLEMENTE más angosto que el ancho que le daría
+      // el stretch del `Column` (`contentSize.width` menos el padding
+      // horizontal, `AppSpacing.md` × 2) — si algún cambio futuro
+      // revierte el `Align`/`SizedBox` y el CTA vuelve a estirarse al
+      // ancho completo, esta aserción debe fallar.
+      final double stretchWidth = contentSize.width - 2 * 12;
+      expect(
+        ctaSize.width,
+        lessThan(stretchWidth - 1),
+        reason: '$label: el CTA debe ser más angosto que el ancho completo de la columna (reducción ~10%)',
+      );
+
+      // El hero debe ser el dedicado de horizontal, nunca el vertical
+      // de portrait ni el panorámico de escritorio.
+      expect(
+        heroAssetImage(tester)?.assetName,
+        'assets/images/korixa_welcome_hero_landscape.webp',
+      );
+    });
+  });
+
+  testWidgets('1440x900_USES_DESKTOP_LAYOUT = PASS', (WidgetTester tester) async {
+    // Contraparte del grupo de arriba: un desktop real (ancho Y alto
+    // grandes) debe seguir activando la composición de escritorio —
+    // el fix no debe convertir esto, de paso, en un falso mobile.
+    await pumpWelcomePage(tester, surfaceSize: const Size(1440, 900));
+    expect(tester.takeException(), isNull);
+    expect(heroAssetImage(tester)?.assetName, 'assets/images/korixa_welcome_hero_desktop.webp');
+  });
+
   testWidgets('CTA_NAVIGATION = PASS (Comenzar -> Register, mismo destino que el CTA anterior)',
       (WidgetTester tester) async {
     await pumpWelcomePage(tester);
