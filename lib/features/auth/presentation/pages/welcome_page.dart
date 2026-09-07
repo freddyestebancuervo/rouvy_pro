@@ -1,5 +1,3 @@
-import 'dart:math' as math;
-
 import 'package:flutter/material.dart';
 import 'package:go_router/go_router.dart';
 
@@ -10,6 +8,7 @@ import '../../../../app/theme/app_radius.dart';
 import '../../../../app/theme/app_spacing.dart';
 import '../../../../app/theme/app_theme.dart';
 import '../../../../core/design_system/dark_tech_buttons.dart';
+import '../../../../core/responsive/korixa_viewport.dart';
 import '../../../../l10n/generated/app_localizations.dart';
 
 /// Pantalla de bienvenida (marketing/onboarding previo al login). No tiene
@@ -47,42 +46,32 @@ import '../../../../l10n/generated/app_localizations.dart';
 class WelcomePage extends StatelessWidget {
   const WelcomePage({super.key});
 
-  /// Ancho mínimo para desktop — sin cambios respecto al valor aprobado.
-  /// Ver [_isDesktop]: por sí solo ya NO alcanza para decidir el layout
-  /// (KORIXA-SCREEN01-MOBILE-LANDSCAPE-FIX-20260906).
-  static const double _desktopBreakpoint = 700;
+  /// KORIXA-RESPONSIVE-FOUNDATION-V1-SCREEN01-20260907: la clasificación
+  /// vive ahora en [KorixaViewportInfo.canFitWideLayout] (fundación
+  /// compartida, no un breakpoint local a esta pantalla) — ver su
+  /// docblock para el porqué completo. Resumen: un viewport landscape
+  /// "cabe ancho" si su ancho por sí solo ya es `expanded`
+  /// (`>= 1024` — ningún teléfono real llega ahí en ninguna orientación,
+  /// así que el alto disponible deja de importar) o, para anchos medios,
+  /// si además tiene un alto mínimo razonable (evita que un teléfono
+  /// horizontal grande como 932×430 pase la regla de ancho).
+  ///
+  /// Bug real que esto corrige: un laptop con `1365×599` (chrome del
+  /// navegador reduciendo el alto) antes caía en [_isPhoneLandscape]
+  /// porque la regla vieja exigía `shortestSide > 600` para CUALQUIER
+  /// ancho. Con `canFitWideLayout`, `width=1365 >= 1024` ya alcanza — el
+  /// laptop sigue siendo desktop sin importar el alto; ver
+  /// [_DesktopWelcomeContent] para cómo esa composición adapta SU
+  /// espaciado interno cuando el alto es reducido, en vez de cambiar de
+  /// composición.
+  static bool _isDesktop(KorixaViewportInfo viewport) => viewport.isLandscape && viewport.canFitWideLayout();
 
-  /// KORIXA-SCREEN01-MOBILE-LANDSCAPE-FIX-20260906: un teléfono rotado a
-  /// horizontal (p. ej. 932×430) tiene `maxWidth` > [_desktopBreakpoint]
-  /// tan fácilmente como un monitor de escritorio — clasificar SOLO por
-  /// ancho hacía que Welcome mostrara la composición de escritorio
-  /// completa (logo grande, título de escritorio, hero panorámico) en un
-  /// teléfono. Un teléfono en horizontal sigue siendo chico en su OTRA
-  /// dimensión (alto); un desktop/tablet real es grande en ambas. Por
-  /// eso se exige ADEMÁS que el lado más corto del viewport (el "alto"
-  /// en horizontal, el "ancho" en vertical) supere un mínimo — 600, el
-  /// mismo umbral que Flutter usa convencionalmente para distinguir
-  /// tablet de teléfono por `shortestSide`. Ningún teléfono conocido
-  /// (portrait u horizontal) tiene su lado más corto por encima de 600;
-  /// cualquier tablet/desktop real sí.
-  static const double _desktopMinShortestSide = 600;
-
-  static bool _isDesktop(BoxConstraints constraints) {
-    final double shortestSide = math.min(constraints.maxWidth, constraints.maxHeight);
-    return constraints.maxWidth > _desktopBreakpoint && shortestSide > _desktopMinShortestSide;
-  }
-
-  /// KORIXA-SCREEN01-PHONE-LANDSCAPE-COMPOSITION-20260906: un teléfono en
-  /// horizontal ya NO activa [_isDesktop] (ver fix anterior), pero seguía
-  /// reusando la composición de mobile portrait sin cambios — un bloque
-  /// anclado ABAJO con título+subtítulo+indicador+CTA a tamaño completo
-  /// simplemente no entra en ~390-430px de alto sin superponerse al
-  /// ciclista. Un teléfono en horizontal (ancho > alto, pero con el lado
-  /// más corto todavía chico — nunca activa desktop) necesita su PROPIA
-  /// composición compacta — ver [_PhoneLandscapeWelcomeContent].
-  static bool _isPhoneLandscape(BoxConstraints constraints) {
-    return !_isDesktop(constraints) && constraints.maxWidth > constraints.maxHeight;
-  }
+  /// Un teléfono en horizontal (landscape, pero sin capacidad de layout
+  /// ancho — ver [_isDesktop]) necesita su PROPIA composición compacta,
+  /// nunca la de mobile portrait anclada abajo (no entra en ~390-430px
+  /// de alto sin superponerse al ciclista) — ver
+  /// [_PhoneLandscapeWelcomeContent].
+  static bool _isPhoneLandscape(KorixaViewportInfo viewport) => viewport.isLandscape && !viewport.canFitWideLayout();
 
   @override
   Widget build(BuildContext context) {
@@ -94,12 +83,25 @@ class WelcomePage extends StatelessWidget {
         backgroundColor: DarkTech.background,
         body: LayoutBuilder(
           builder: (BuildContext context, BoxConstraints constraints) {
-            if (_isDesktop(constraints)) {
-              return _DesktopWelcomeContent(l10n: l10n);
+            final KorixaViewportInfo viewport = KorixaViewportInfo(
+              width: constraints.maxWidth,
+              height: constraints.maxHeight,
+            );
+            if (_isDesktop(viewport)) {
+              return _DesktopWelcomeContent(l10n: l10n, viewport: viewport);
             }
-            if (_isPhoneLandscape(constraints)) {
+            if (_isPhoneLandscape(viewport)) {
               return _PhoneLandscapeWelcomeContent(l10n: l10n);
             }
+            // Portrait — cubre tanto mobile portrait (390×844) como
+            // tablet portrait grande (768×1024, KORIXA-RESPONSIVE-
+            // FOUNDATION-V1-SCREEN01-20260907): un viewport
+            // orientado en vertical nunca encaja en la composición de
+            // escritorio (pensada para un hero panorámico landscape),
+            // sin importar cuán ancho/alto sea en términos absolutos —
+            // reusa la misma composición ya aprobada de mobile
+            // (`SingleChildScrollView` + `ConstrainedBox(maxWidth:480)`
+            // ya la vuelve segura a anchos mayores, sin overflow).
             return _MobileWelcomeContent(l10n: l10n);
           },
         ),
@@ -244,9 +246,10 @@ class _MobileWelcomeContent extends StatelessWidget {
 /// la derecha del encuadre) y "Saltar" arriba a la derecha — misma
 /// esquina que en mobile, mismo destino.
 class _DesktopWelcomeContent extends StatelessWidget {
-  const _DesktopWelcomeContent({required this.l10n});
+  const _DesktopWelcomeContent({required this.l10n, required this.viewport});
 
   final AppLocalizations l10n;
+  final KorixaViewportInfo viewport;
 
   /// Ancho máximo del bloque de texto/CTA — deliberadamente NO
   /// `double.infinity`: en un viewport de 1440px+ un bloque de texto sin
@@ -271,6 +274,20 @@ class _DesktopWelcomeContent extends StatelessWidget {
   /// visible, solo un ancho final distinto al pedido). 680-112=568,
   /// suficiente para los 550 del CTA con margen.
   static const double _contentMaxWidth = 680;
+
+  /// KORIXA-SCREEN01-RESPONSIVE-LOGO-QUALITY-FIX-20260907: el alto del
+  /// logo quedó fijo en 188 (ver más abajo) — la calidad de marca nunca
+  /// debe reducirse por falta de alto. El lever real para alto reducido
+  /// es este espaciado vertical entre secciones (logo→título,
+  /// subtítulo→indicador, indicador→CTA), en ese orden de prioridad
+  /// ANTES que tocar el logo, y el `SingleChildScrollView` ya envolvente
+  /// como último recurso. Satura exactamente en `AppSpacing.xl` (24)
+  /// para CUALQUIER alto >= 586 — cero cambio visual en los 6 altos de
+  /// escritorio ya requeridos/aprobados (599, 600, 768, 864, 900, 1080,
+  /// 1440, todos >= 586); solo se reduce gradualmente por debajo de eso.
+  static double _desktopSectionGap(KorixaViewportInfo viewport) {
+    return viewport.fluid(16, (KorixaViewportInfo v) => v.height * 0.041, AppSpacing.xl);
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -313,7 +330,16 @@ class _DesktopWelcomeContent extends StatelessWidget {
                 // el contenido quedaba pegado al borde del viewport; el
                 // resto de los insets no cambia.
                 padding: const EdgeInsets.fromLTRB(72, AppSpacing.xl, AppSpacing.xxxl, AppSpacing.xl),
-                child: Column(
+                // KORIXA-RESPONSIVE-FOUNDATION-V1-SCREEN01-20260907: red
+                // de seguridad para el caso de alto reducido (laptop con
+                // chrome de navegador, p. ej. 1365×599) — mismo patrón ya
+                // usado en `_MobileWelcomeContent`/`_PhoneLandscapeWelcomeContent`.
+                // A los altos ya aprobados (>=900) el contenido nunca se
+                // acerca a necesitar scroll; esto es puramente el
+                // fallback "adaptar adentro de la composición de
+                // escritorio, nunca cambiar de composición" pedido.
+                child: SingleChildScrollView(
+                  child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   mainAxisSize: MainAxisSize.min,
                   children: <Widget>[
@@ -342,22 +368,31 @@ class _DesktopWelcomeContent extends StatelessWidget {
                     // PNG, así nunca se puede estirar. `FilterQuality.high`
                     // + tamaño renderizado subido a 200 (antes 180): logo
                     // más nítido y con más presencia.
+                    // KORIXA-SCREEN01-RESPONSIVE-LOGO-QUALITY-FIX-20260907:
+                    // la fundación (KORIXA-RESPONSIVE-FOUNDATION-V1-
+                    // SCREEN01-20260907) había hecho este alto fluido
+                    // (120-188 según el alto disponible) para ganar margen
+                    // vertical en 1365×599 — el dueño lo rechazó: el logo
+                    // de escritorio aprobado SIEMPRE debe verse a 188,
+                    // sin importar cuán reducido esté el alto. La marca no
+                    // es una variable de layout. El alto real necesario
+                    // para el resto del bloque (título+subtítulo+
+                    // indicador+CTA) a 599px de alto YA entra con margen
+                    // con el logo fijo en 188 (verificado: ~520px de
+                    // contenido total contra 599 disponibles) — el ajuste
+                    // real para espacio vertical reducido vive en
+                    // [_desktopSectionGap] (los `SizedBox` de abajo) y en
+                    // el `SingleChildScrollView` ya envolvente, nunca acá.
                     Image.asset(
+                      key: const Key('welcome-desktop-logo'),
                       'assets/icons/korixa_logo_desktop.png',
-                      // 188 (no 200): a 800×600 — el viewport compartido
-                      // más chico donde también se valida esta pantalla
-                      // (`dark_tech_visual_foundation_test.dart`,
-                      // `demo_navigation_test.dart`) — 200 desbordaba la
-                      // columna por 7px. 188 sigue siendo mayor que el
-                      // valor previo (180) y dentro de "aumentar el
-                      // tamaño levemente" del encargo, con margen real.
                       height: 188,
                       cacheHeight: (188 * MediaQuery.of(context).devicePixelRatio).round(),
                       filterQuality: FilterQuality.high,
                       fit: BoxFit.contain,
                       semanticLabel: 'Korixa',
                     ),
-                    const SizedBox(height: AppSpacing.xl),
+                    SizedBox(height: _desktopSectionGap(viewport)),
                     Text(
                       l10n.welcomeTitle,
                       textAlign: TextAlign.left,
@@ -399,7 +434,7 @@ class _DesktopWelcomeContent extends StatelessWidget {
                         fontWeight: FontWeight.w500,
                       ),
                     ),
-                    const SizedBox(height: AppSpacing.xl),
+                    SizedBox(height: _desktopSectionGap(viewport)),
                     // KORIXA-UI-SCREEN01-FINAL-VISUAL-POLISH-20260905:
                     // indicador de escritorio dedicado — 3 barras en vez
                     // de la píldora única de mobile (`_OnboardingIndicator`).
@@ -407,7 +442,7 @@ class _DesktopWelcomeContent extends StatelessWidget {
                     // no hay swipe/navegación real entre "páginas", solo
                     // la primera barra activa.
                     const _DesktopOnboardingIndicator(),
-                    const SizedBox(height: AppSpacing.xl),
+                    SizedBox(height: _desktopSectionGap(viewport)),
                     // CTA "desktop-appropriate": ancho subido a 550 y alto
                     // a 64 (KORIXA-UI-SCREEN01-CRISP-LOGO-TEXT-CTA-20260905,
                     // dentro de los rangos 520-580 / 64-72 pedidos — 64 en
@@ -429,6 +464,7 @@ class _DesktopWelcomeContent extends StatelessWidget {
                       ),
                     ),
                   ],
+                ),
                 ),
               ),
             ),
