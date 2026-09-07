@@ -1,5 +1,3 @@
-import 'dart:math' as math;
-
 import 'package:flutter/foundation.dart' show defaultTargetPlatform, kIsWeb, TargetPlatform;
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -12,6 +10,7 @@ import '../../../../app/theme/app_spacing.dart';
 import '../../../../app/theme/app_theme.dart';
 import '../../../../core/design_system/dark_tech_buttons.dart';
 import '../../../../core/error/failures.dart';
+import '../../../../core/responsive/korixa_viewport.dart';
 import '../../../../core/utils/validation_l10n.dart';
 import '../../../../core/utils/validators.dart';
 import '../../../../l10n/generated/app_localizations.dart';
@@ -91,25 +90,21 @@ class _LoginPageState extends ConsumerState<LoginPage> {
   }
 
   // -------------------------------------------------------------------
-  // Clasificación responsiva — mismo criterio que `WelcomePage`
-  // (KORIXA-SCREEN01-MOBILE-LANDSCAPE-FIX-20260906 /
-  // KORIXA-SCREEN01-PHONE-LANDSCAPE-COMPOSITION-20260906), reimplementado
-  // acá en vez de compartido: cada pantalla ya tenía su propio breakpoint
-  // local antes de esta tarea (ver `home_page.dart`/`workouts_list_page.dart`),
-  // y `WelcomePage` no se toca en esta tarea (SCREEN_01 congelado).
+  // Clasificación responsiva — KORIXA-SCREEN02-ADOPT-RESPONSIVE-
+  // FOUNDATION-PR127-20260907: ya NO reimplementa su propio breakpoint
+  // local (el `_desktopBreakpoint`/`_desktopMinShortestSide` original de
+  // esta pantalla era exactamente la misma clase de lógica que causó el
+  // bug real de SCREEN_01 — un laptop con `1365×599` cayendo en
+  // phone-landscape porque `shortestSide > 600` fallaba sin importar el
+  // ancho — ver `KorixaViewportInfo.canFitWideLayout` en
+  // `core/responsive/korixa_viewport.dart`, KORIXA-RESPONSIVE-
+  // FOUNDATION-V1-SCREEN01-20260907). La clasificación compartida vive
+  // en la fundación; acá solo se consume.
   // -------------------------------------------------------------------
 
-  static const double _desktopBreakpoint = 700;
-  static const double _desktopMinShortestSide = 600;
+  static bool _isDesktop(KorixaViewportInfo viewport) => viewport.isLandscape && viewport.canFitWideLayout();
 
-  static bool _isDesktop(BoxConstraints constraints) {
-    final double shortestSide = math.min(constraints.maxWidth, constraints.maxHeight);
-    return constraints.maxWidth > _desktopBreakpoint && shortestSide > _desktopMinShortestSide;
-  }
-
-  static bool _isPhoneLandscape(BoxConstraints constraints) {
-    return !_isDesktop(constraints) && constraints.maxWidth > constraints.maxHeight;
-  }
+  static bool _isPhoneLandscape(KorixaViewportInfo viewport) => viewport.isLandscape && !viewport.canFitWideLayout();
 
   @override
   Widget build(BuildContext context) {
@@ -137,12 +132,21 @@ class _LoginPageState extends ConsumerState<LoginPage> {
         backgroundColor: DarkTech.background,
         body: LayoutBuilder(
           builder: (BuildContext context, BoxConstraints constraints) {
-            if (_isDesktop(constraints)) {
+            final KorixaViewportInfo viewport = KorixaViewportInfo(
+              width: constraints.maxWidth,
+              height: constraints.maxHeight,
+            );
+            if (_isDesktop(viewport)) {
               return _buildDesktop(context, l10n, loginState, socialState, anyLoading);
             }
-            if (_isPhoneLandscape(constraints)) {
+            if (_isPhoneLandscape(viewport)) {
               return _buildPhoneLandscape(context, l10n, loginState, socialState, anyLoading);
             }
+            // Portrait — cubre tanto mobile portrait como tablet
+            // portrait (768×1024): un viewport orientado en vertical
+            // nunca encaja en el split de escritorio (pensado para un
+            // hero landscape), sin importar cuán ancho/alto sea en
+            // términos absolutos — mismo criterio que `WelcomePage`.
             return _buildPortrait(context, l10n, loginState, socialState, anyLoading);
           },
         ),
