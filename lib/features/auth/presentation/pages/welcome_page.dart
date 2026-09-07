@@ -564,20 +564,30 @@ class _PhoneLandscapeWelcomeContent extends StatelessWidget {
                         const SizedBox(height: AppSpacing.md),
                         const _PhoneLandscapeOnboardingIndicator(),
                         const SizedBox(height: AppSpacing.md),
-                        // CTA responsivo: se estira al ancho del bloque
-                        // de contenido (`contentMaxWidth` menos el
-                        // padding horizontal) — con `contentMaxWidth`
-                        // ya en el rango 280-380, el CTA cae en el
-                        // rango 300-380 pedido en los 3 tamaños
-                        // requeridos (verificado con captura real), sin
-                        // necesitar un ancho fijo aparte. Alto 56
-                        // (dentro del rango 52-58 pedido).
-                        PrimaryGradientButton(
-                          key: const Key('welcome-landscape-cta'),
-                          label: l10n.welcomeGetStarted,
-                          onPressed: () => context.go(AppRoute.register),
-                          height: 56,
-                          fontSize: 16,
+                        // KORIXA-SCREEN01-LANDSCAPE-CTA-MICRO-REDUCTION-
+                        // 20260906: el dueño pidió el CTA "un poco menos
+                        // dominante" — 10% más angosto que el ancho que
+                        // stretch le daba antes (el mismo ancho que
+                        // título/subtítulo/indicador, que NO cambian).
+                        // `Align` en vez de dejar que el `Column`
+                        // (`crossAxisAlignment.stretch`) lo estire: solo
+                        // el CTA se saca de ese comportamiento, todo lo
+                        // demás sigue ocupando el ancho completo de la
+                        // columna exactamente igual que antes. Alto sin
+                        // cambios (56, dentro del rango 52-58 pedido) —
+                        // el encargo pide reducir SOLO el ancho.
+                        Align(
+                          alignment: Alignment.centerLeft,
+                          child: SizedBox(
+                            width: (contentMaxWidth - 2 * AppSpacing.md) * 0.90,
+                            child: PrimaryGradientButton(
+                              key: const Key('welcome-landscape-cta'),
+                              label: l10n.welcomeGetStarted,
+                              onPressed: () => context.go(AppRoute.register),
+                              height: 56,
+                              fontSize: 16,
+                            ),
+                          ),
                         ),
                       ],
                     ),

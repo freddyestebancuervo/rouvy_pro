@@ -226,6 +226,19 @@ void main() {
       expect(contentSize.width, greaterThanOrEqualTo(280), reason: '$label: el contenido debe acercarse al 34-40% pedido');
       expect(contentSize.width, lessThanOrEqualTo(380), reason: '$label: el contenido no debe exceder el rango pedido');
 
+      // KORIXA-SCREEN01-LANDSCAPE-CTA-MICRO-REDUCTION-20260906: el CTA
+      // debe quedar MEDIBLEMENTE más angosto que el ancho que le daría
+      // el stretch del `Column` (`contentSize.width` menos el padding
+      // horizontal, `AppSpacing.md` × 2) — si algún cambio futuro
+      // revierte el `Align`/`SizedBox` y el CTA vuelve a estirarse al
+      // ancho completo, esta aserción debe fallar.
+      final double stretchWidth = contentSize.width - 2 * 12;
+      expect(
+        ctaSize.width,
+        lessThan(stretchWidth - 1),
+        reason: '$label: el CTA debe ser más angosto que el ancho completo de la columna (reducción ~10%)',
+      );
+
       // El hero debe ser el dedicado de horizontal, nunca el vertical
       // de portrait ni el panorámico de escritorio.
       expect(
