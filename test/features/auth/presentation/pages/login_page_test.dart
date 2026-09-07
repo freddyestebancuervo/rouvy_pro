@@ -33,7 +33,25 @@ void main() {
         signInWithAppleUseCaseProvider.overrideWithValue(SignInWithAppleUseCase(repo)),
       ];
 
-  Future<void> pumpLoginPage(WidgetTester tester, MockAuthRepository repo) async {
+  Future<void> pumpLoginPage(
+    WidgetTester tester,
+    MockAuthRepository repo, {
+    Size? surfaceSize,
+  }) async {
+    // KORIXA-SCREEN02-LOGIN-VISUAL-IMPLEMENTATION-20260907: `surfaceSize`
+    // es opcional — los 9 tests funcionales ya existentes antes de esta
+    // tarea no lo pasan, así que siguen corriendo exactamente en el
+    // tamaño de superficie por defecto del binding de test (que, de
+    // hecho, activa la composición de teléfono en horizontal — ver
+    // `_isPhoneLandscape` en `login_page.dart` — y los 9 siguen pasando,
+    // confirmando que el formulario compartido es idéntico en las 3
+    // composiciones).
+    if (surfaceSize != null) {
+      tester.view.physicalSize = surfaceSize;
+      tester.view.devicePixelRatio = 1.0;
+      addTearDown(tester.view.reset);
+    }
+
     await tester.pumpWidget(
       authPageHarness(
         initialLocation: '/login',
@@ -210,5 +228,141 @@ void main() {
 
     expect(find.text('No se pudo iniciar sesión con Google.'), findsOneWidget);
     expect(find.text('HOME'), findsNothing);
+  });
+
+  // ---------------------------------------------------------------------
+  // KORIXA-SCREEN02-LOGIN-VISUAL-IMPLEMENTATION-20260907 — responsivo.
+  // ---------------------------------------------------------------------
+
+  String? resolvedAssetName(ImageProvider provider) {
+    if (provider is AssetImage) return provider.assetName;
+    if (provider is ResizeImage) {
+      final ImageProvider inner = provider.imageProvider;
+      if (inner is AssetImage) return inner.assetName;
+    }
+    return null;
+  }
+
+  bool hasHeroImage(WidgetTester tester) {
+    final Iterable<Image> images = tester.widgetList<Image>(
+      find.descendant(of: find.byKey(const Key('login-hero-image')), matching: find.byType(Image)),
+    );
+    return images.any(
+      (Image image) => resolvedAssetName(image.image) == 'assets/images/korixa_login_hero_guatape.webp',
+    );
+  }
+
+  void expectExclusiveLayout(WidgetTester tester, String selectedKey) {
+    const List<String> allLayoutKeys = <String>[
+      'login-portrait-layout',
+      'login-landscape-layout',
+      'login-desktop-layout',
+    ];
+    for (final String key in allLayoutKeys) {
+      final Finder finder = find.byKey(Key(key));
+      if (key == selectedKey) {
+        expect(finder, findsOneWidget, reason: '$selectedKey debía estar seleccionado');
+      } else {
+        expect(finder, findsNothing, reason: '$key NO debía estar seleccionado junto con $selectedKey');
+      }
+    }
+  }
+
+  testWidgets('LOGIN_TITLE_SUBTITLE_APPROVED_COPY = PASS', (WidgetTester tester) async {
+    // KORIXA-SCREEN02-LOGIN-VISUAL-IMPLEMENTATION-20260907: el subtítulo
+    // cambió de copy ("...continuar entrenando" -> "...continuar tu
+    // ruta") — un `flutter analyze`/`flutter test` normal NO regenera
+    // `lib/l10n/generated/` automáticamente (hace falta `flutter
+    // gen-l10n` explícito), y ningún test anterior verificaba este
+    // string exacto, así que un archivo generado desactualizado habría
+    // pasado la suite en silencio. Este test cierra ese hueco.
+    await pumpLoginPage(tester, repository);
+    expect(find.text('Bienvenido de nuevo'), findsOneWidget);
+    expect(find.text('Inicia sesión para continuar tu ruta'), findsOneWidget);
+  });
+
+  testWidgets('390x844_PORTRAIT_COMPOSITION = PASS', (WidgetTester tester) async {
+    await pumpLoginPage(tester, repository, surfaceSize: const Size(390, 844));
+    expect(tester.takeException(), isNull, reason: 'no debe haber overflow en 390x844');
+
+    expectExclusiveLayout(tester, 'login-portrait-layout');
+    expect(hasHeroImage(tester), isTrue, reason: 'el hero de Guatapé debe estar presente en portrait');
+
+    expect(find.byType(TextFormField), findsNWidgets(2), reason: 'email + password');
+    expect(find.byType(PrimaryGradientButton), findsOneWidget);
+    expect(find.byType(GoogleSignInButton), findsOneWidget);
+    expect(find.text('Crear cuenta'), findsOneWidget);
+  });
+
+  const <String, Size>{
+    '844x390': Size(844, 390),
+    '915x412': Size(915, 412),
+    '932x430': Size(932, 430),
+  }.forEach((String label, Size size) {
+    testWidgets('${label}_LANDSCAPE_COMPOSITION = PASS', (WidgetTester tester) async {
+      await pumpLoginPage(tester, repository, surfaceSize: size);
+      expect(tester.takeException(), isNull, reason: 'no debe haber overflow en $label');
+
+      expectExclusiveLayout(tester, 'login-landscape-layout');
+      expect(hasHeroImage(tester), isTrue, reason: '$label: el hero de Guatapé debe estar presente');
+
+      expect(find.byType(TextFormField), findsNWidgets(2), reason: '$label: email + password');
+      expect(
+        find.byType(PrimaryGradientButton),
+        findsOneWidget,
+        reason: '$label: el CTA debe seguir siendo alcanzable (KORIXA-SCREEN02-LOGIN-BASELINE-AUDIT-20260906, P1)',
+      );
+      expect(
+        find.byType(GoogleSignInButton),
+        findsOneWidget,
+        reason: '$label: Google debe seguir siendo alcanzable — este era exactamente el bug P1 de la baseline',
+      );
+      expect(
+        find.text('Crear cuenta'),
+        findsOneWidget,
+        reason: '$label: Crear cuenta debe seguir siendo alcanzable — este era exactamente el bug P1 de la baseline',
+      );
+    });
+  });
+
+  testWidgets('1440x900_DESKTOP_SPLIT_COMPOSITION = PASS', (WidgetTester tester) async {
+    await pumpLoginPage(tester, repository, surfaceSize: const Size(1440, 900));
+    expect(tester.takeException(), isNull, reason: 'no debe haber overflow en 1440x900');
+
+    expectExclusiveLayout(tester, 'login-desktop-layout');
+    expect(hasHeroImage(tester), isTrue, reason: 'el hero de Guatapé debe estar presente en desktop');
+
+    // Branding: logo de escritorio presente (KORIXA-SCREEN02-LOGIN-
+    // BASELINE-AUDIT-20260906, hallazgo P0 — antes NO había ningún logo).
+    final Iterable<Image> images = tester.widgetList<Image>(find.byType(Image));
+    final bool hasDesktopLogo = images.any(
+      (Image image) => resolvedAssetName(image.image) == 'assets/icons/korixa_logo_desktop.png',
+    );
+    expect(hasDesktopLogo, isTrue, reason: 'el branding Korixa debe estar presente en desktop');
+
+    expect(find.byType(TextFormField), findsNWidgets(2));
+    expect(find.byType(PrimaryGradientButton), findsOneWidget);
+    expect(find.byType(GoogleSignInButton), findsOneWidget);
+  });
+
+  testWidgets('GOOGLE_OFFICIAL_LOGO_USED = PASS (placeholder Icons.g_mobiledata ya no existe)',
+      (WidgetTester tester) async {
+    await pumpLoginPage(tester, repository);
+
+    // El ícono placeholder de Material ya no debe existir en absoluto en
+    // el árbol del botón de Google.
+    final Finder placeholderIcon = find.descendant(
+      of: find.byType(GoogleSignInButton),
+      matching: find.byWidgetPredicate((Widget widget) => widget is Icon && widget.icon == Icons.g_mobiledata),
+    );
+    expect(placeholderIcon, findsNothing, reason: 'Icons.g_mobiledata debía ser reemplazado por el logo oficial');
+
+    final Iterable<Image> images = tester.widgetList<Image>(
+      find.descendant(of: find.byType(GoogleSignInButton), matching: find.byType(Image)),
+    );
+    final bool hasOfficialLogo = images.any(
+      (Image image) => resolvedAssetName(image.image) == 'assets/icons/google_logo.png',
+    );
+    expect(hasOfficialLogo, isTrue, reason: 'el botón de Google debe usar el asset oficial local, no un ícono aproximado');
   });
 }

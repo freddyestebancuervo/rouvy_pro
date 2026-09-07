@@ -3,6 +3,14 @@ import 'package:flutter/material.dart';
 /// Botón de "Continuar con Google". Usa `OutlinedButton` (no el color de
 /// marca) porque Google exige no alterar su logo ni forzarlo a los colores
 /// primarios de la app — mismo criterio aplicado al de Apple.
+///
+/// KORIXA-SCREEN02-LOGIN-VISUAL-IMPLEMENTATION-20260907: el ícono
+/// placeholder (`Icons.g_mobiledata`, un glifo de Material sin relación
+/// real con la marca) se reemplaza por el logo oficial multicolor de
+/// Google (`assets/icons/google_logo.png`) — colores oficiales
+/// (#4285F4/#EA4335/#FBBC05/#34A853 vía las 4 franjas del path SVG
+/// estándar de Google, rasterizado localmente, sin fetch remoto), sin
+/// recolorear con la paleta Korixa ni aproximar con un ícono de Material.
 class GoogleSignInButton extends StatelessWidget {
   const GoogleSignInButton({required this.label, required this.onPressed, this.isLoading = false, super.key});
 
@@ -20,7 +28,7 @@ class GoogleSignInButton extends StatelessWidget {
               width: 18,
               child: CircularProgressIndicator(strokeWidth: 2),
             )
-          : const Icon(Icons.g_mobiledata, size: 26), // TODO(design): sustituir por logo oficial de Google
+          : Image.asset('assets/icons/google_logo.png', height: 20, width: 20, semanticLabel: 'Google'),
       label: Text(label),
     );
   }

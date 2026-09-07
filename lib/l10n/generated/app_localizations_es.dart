@@ -28,7 +28,7 @@ class AppLocalizationsEs extends AppLocalizations {
   String get loginTitle => 'Bienvenido de nuevo';
 
   @override
-  String get loginSubtitle => 'Inicia sesión para continuar entrenando';
+  String get loginSubtitle => 'Inicia sesión para continuar tu ruta';
 
   @override
   String get emailLabel => 'Correo electrónico';

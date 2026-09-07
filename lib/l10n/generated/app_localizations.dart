@@ -137,7 +137,7 @@ abstract class AppLocalizations {
   /// No description provided for @loginSubtitle.
   ///
   /// In es, this message translates to:
-  /// **'Inicia sesión para continuar entrenando'**
+  /// **'Inicia sesión para continuar tu ruta'**
   String get loginSubtitle;
 
   /// No description provided for @emailLabel.
