@@ -4,7 +4,7 @@
   "welcomeTitle": "Connect your energy.",
   "welcomeSubtitle": "Train, compete, and experience incredible routes indoors and outdoors.",
   "welcomeGetStarted": "Get started",
-  "welcomeSkipAction": "Skip",
+  "welcomeLoginAction": "Sign in",
   "loginTitle": "Welcome back",
   "loginSubtitle": "Sign in to continue your route",
   "emailLabel": "Email",

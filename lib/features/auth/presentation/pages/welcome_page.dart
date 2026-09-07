@@ -15,9 +15,11 @@ import '../../../../l10n/generated/app_localizations.dart';
 /// lógica de negocio: solo dirige a Registro o Login.
 ///
 /// KORIXA-UI-SCREEN-01-APPROVED-WELCOME — implementa el diseño hero
-/// aprobado por el dueño: foto de ciclista a pantalla completa, "Saltar"
-/// arriba a la derecha, marca/título/subtítulo/indicadores/CTA anclados
-/// abajo con degradado de lectura.
+/// aprobado por el dueño: foto de ciclista a pantalla completa,
+/// "Iniciar sesión" (KORIXA-SCREEN01-WELCOME-LOGIN-ACTION-COPY-
+/// PR127-20260907: antes "Saltar" — mismo destino, `AppRoute.login`,
+/// copy más explícita) arriba a la derecha, marca/título/subtítulo/
+/// indicadores/CTA anclados abajo con degradado de lectura.
 ///
 /// Deliberadamente NO reusa `DarkTechAuthShell` (compartido con Login/
 /// Register): ese shell está construido para un formulario centrado y
@@ -110,10 +112,11 @@ class WelcomePage extends StatelessWidget {
   }
 }
 
-/// Composición mobile (hero vertical + degradado + Saltar +
-/// marca/título/subtítulo/indicador/CTA anclados abajo). Sin cambios
-/// respecto a la versión aprobada — la corrección de esta tarea es
-/// exclusivamente de escritorio (ver [_DesktopWelcomeContent]).
+/// Composición mobile (hero vertical + degradado + acción secundaria
+/// "Iniciar sesión" + marca/título/subtítulo/indicador/CTA anclados
+/// abajo). Sin cambios respecto a la versión aprobada — la corrección
+/// de esta tarea es exclusivamente de escritorio (ver
+/// [_DesktopWelcomeContent]).
 class _MobileWelcomeContent extends StatelessWidget {
   const _MobileWelcomeContent({required this.l10n});
 
@@ -147,14 +150,17 @@ class _MobileWelcomeContent extends StatelessWidget {
             alignment: Alignment.topRight,
             child: Padding(
               padding: const EdgeInsets.all(AppSpacing.md),
-              child: _SkipButton(
-                label: l10n.welcomeSkipAction,
-                // "Saltar" = saltar el pitch de bienvenida directo a
-                // iniciar sesión — reusa exactamente el destino que ya
-                // tenía el botón secundario anterior ("Ya tengo cuenta"
-                // → login), no inventa un flujo nuevo ni evade el guard
-                // de autenticación (Login sigue siendo una auth route
-                // legítima).
+              child: _SecondaryActionButton(
+                label: l10n.welcomeLoginAction,
+                // KORIXA-SCREEN01-WELCOME-LOGIN-ACTION-COPY-PR127-
+                // 20260907: antes decía "Saltar" — el dueño lo aprobó
+                // como ambiguo ("saltar" no dice a dónde), así que la
+                // copy ahora nombra el destino real. El destino en sí no
+                // cambia: reusa exactamente el mismo `AppRoute.login`
+                // que ya tenía el botón secundario original ("Ya tengo
+                // cuenta" → login), no inventa un flujo nuevo ni evade
+                // el guard de autenticación (Login sigue siendo una
+                // auth route legítima).
                 onTap: () => context.go(AppRoute.login),
               ),
             ),
@@ -243,8 +249,9 @@ class _MobileWelcomeContent extends StatelessWidget {
 /// hero panorámico real a pantalla completa (`StackFit.expand`, sin
 /// ningún `SizedBox`/`ClipRect` que lo acote), con el contenido anclado
 /// a la izquierda/centro-izquierda para no tapar al ciclista (visible a
-/// la derecha del encuadre) y "Saltar" arriba a la derecha — misma
-/// esquina que en mobile, mismo destino.
+/// la derecha del encuadre) y "Iniciar sesión" arriba a la derecha
+/// (KORIXA-SCREEN01-WELCOME-LOGIN-ACTION-COPY-PR127-20260907: antes
+/// "Saltar") — misma esquina que en mobile, mismo destino.
 class _DesktopWelcomeContent extends StatelessWidget {
   const _DesktopWelcomeContent({required this.l10n, required this.viewport});
 
@@ -311,8 +318,8 @@ class _DesktopWelcomeContent extends StatelessWidget {
             alignment: Alignment.topRight,
             child: Padding(
               padding: const EdgeInsets.all(AppSpacing.lg),
-              child: _SkipButton(
-                label: l10n.welcomeSkipAction,
+              child: _SecondaryActionButton(
+                label: l10n.welcomeLoginAction,
                 onTap: () => context.go(AppRoute.login),
               ),
             ),
@@ -538,8 +545,8 @@ class _PhoneLandscapeWelcomeContent extends StatelessWidget {
                 alignment: Alignment.topRight,
                 child: Padding(
                   padding: const EdgeInsets.all(AppSpacing.sm),
-                  child: _SkipButton(
-                    label: l10n.welcomeSkipAction,
+                  child: _SecondaryActionButton(
+                    label: l10n.welcomeLoginAction,
                     onTap: () => context.go(AppRoute.login),
                   ),
                 ),
@@ -844,14 +851,17 @@ class _Bar extends StatelessWidget {
   }
 }
 
-/// Botón "Saltar" — vive SOBRE la foto de hero, no sobre una superficie
-/// Dark Tech plana, así que lleva su propia píldora translúcida
-/// (`DarkTech.overlayScrim`, el mismo scrim ya usado para diálogos/
-/// overlays de foto) para garantizar contraste sin importar qué tan
-/// clara sea la región de la foto detrás (Sección 9: "Skip accessible
-/// contrast").
-class _SkipButton extends StatelessWidget {
-  const _SkipButton({required this.label, required this.onTap});
+/// Acción secundaria de Welcome ("Iniciar sesión" — KORIXA-SCREEN01-
+/// WELCOME-LOGIN-ACTION-COPY-PR127-20260907: antes se llamaba
+/// `_SkipButton`/"Saltar", renombrado junto con la copy para no dejar
+/// un identificador engañoso). Vive SOBRE la foto de hero, no sobre una
+/// superficie Dark Tech plana, así que lleva su propia píldora
+/// translúcida (`DarkTech.overlayScrim`, el mismo scrim ya usado para
+/// diálogos/overlays de foto) para garantizar contraste sin importar
+/// qué tan clara sea la región de la foto detrás (Sección 9:
+/// "accessible contrast" sobre imagen).
+class _SecondaryActionButton extends StatelessWidget {
+  const _SecondaryActionButton({required this.label, required this.onTap});
 
   final String label;
   final VoidCallback onTap;

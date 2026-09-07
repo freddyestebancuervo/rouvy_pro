@@ -14,13 +14,19 @@ void main() {
     WidgetTester tester, {
     Size surfaceSize = const Size(390, 844),
     ThemeData? theme,
+    Locale locale = const Locale('es'),
   }) async {
     tester.view.physicalSize = surfaceSize;
     tester.view.devicePixelRatio = 1.0;
     addTearDown(tester.view.reset);
 
     await tester.pumpWidget(
-      authPageHarness(initialLocation: '/welcome', welcomePage: const WelcomePage(), theme: theme),
+      authPageHarness(
+        initialLocation: '/welcome',
+        welcomePage: const WelcomePage(),
+        theme: theme,
+        locale: locale,
+      ),
     );
     await tester.pumpAndSettle();
   }
@@ -41,9 +47,24 @@ void main() {
     expect(find.byType(PrimaryGradientButton), findsOneWidget);
   });
 
-  testWidgets('SKIP_ACTION_PRESENT = PASS', (WidgetTester tester) async {
+  // KORIXA-SCREEN01-WELCOME-LOGIN-ACTION-COPY-PR127-20260907: "Saltar"
+  // reemplazado por "Iniciar sesión" (mismo destino, `AppRoute.login`)
+  // — el dueño lo aprobó por ser copy de onboarding ambigua que no
+  // nombraba el destino real de la acción.
+  testWidgets('LOGIN_ACTION_PRESENT = PASS', (WidgetTester tester) async {
     await pumpWelcomePage(tester);
-    expect(find.text('Saltar'), findsOneWidget);
+    expect(find.text('Iniciar sesión'), findsOneWidget);
+  });
+
+  testWidgets('SKIP_TEXT_NOT_PRESENT = PASS ("Saltar" ya no debe existir)', (WidgetTester tester) async {
+    await pumpWelcomePage(tester);
+    expect(find.text('Saltar'), findsNothing);
+  });
+
+  testWidgets('EN_SIGN_IN_ACTION_PRESENT_SKIP_ABSENT = PASS', (WidgetTester tester) async {
+    await pumpWelcomePage(tester, locale: const Locale('en'));
+    expect(find.text('Sign in'), findsOneWidget, reason: 'la copy en inglés debe ser "Sign in", no "Skip"');
+    expect(find.text('Skip'), findsNothing);
   });
 
   testWidgets('HERO_ASSET_PRESENT = PASS', (WidgetTester tester) async {
@@ -179,11 +200,11 @@ void main() {
       );
       expect(hasDesktopLogo, isFalse, reason: '$label no debe mostrar el logo de escritorio');
 
-      // Contenido mobile mínimo viable: Saltar, título, subtítulo, CTA —
-      // todos deben seguir existiendo en el árbol (alcanzables vía el
-      // scroll ya existente si el alto es angosto), nunca reemplazados
-      // por el layout de escritorio.
-      expect(find.text('Saltar'), findsOneWidget);
+      // Contenido mobile mínimo viable: "Iniciar sesión", título,
+      // subtítulo, CTA — todos deben seguir existiendo en el árbol
+      // (alcanzables vía el scroll ya existente si el alto es angosto),
+      // nunca reemplazados por el layout de escritorio.
+      expect(find.text('Iniciar sesión'), findsOneWidget);
       expect(find.text('Conecta tu energía.'), findsOneWidget);
       expect(find.text('Entrena, compite y vive rutas increíbles en indoor y outdoor.'), findsOneWidget);
       expect(find.text('Comenzar'), findsOneWidget);
@@ -267,11 +288,12 @@ void main() {
     expect(find.text('REGISTER'), findsOneWidget);
   });
 
-  testWidgets('SKIP_NAVIGATION = PASS (Saltar -> Login, mismo destino que el botón secundario anterior)',
+  testWidgets(
+      'WELCOME_SECONDARY_NAVIGATION = PASS (Iniciar sesión -> Login, mismo destino que "Saltar" antes)',
       (WidgetTester tester) async {
     await pumpWelcomePage(tester);
 
-    await tester.tap(find.text('Saltar'));
+    await tester.tap(find.text('Iniciar sesión'));
     await tester.pumpAndSettle();
 
     expect(find.text('LOGIN'), findsOneWidget);
@@ -341,19 +363,19 @@ void main() {
     expect(ctaSize.width, greaterThan(200));
   });
 
-  testWidgets('DESKTOP_SKIP_TOP_RIGHT = PASS', (WidgetTester tester) async {
+  testWidgets('DESKTOP_LOGIN_ACTION_TOP_RIGHT = PASS', (WidgetTester tester) async {
     const Size desktopSize = Size(1440, 900);
     await pumpWelcomePage(tester, surfaceSize: desktopSize);
 
-    expect(find.text('Saltar'), findsOneWidget);
+    expect(find.text('Iniciar sesión'), findsOneWidget);
 
-    final Offset skipTopLeft = tester.getTopLeft(find.text('Saltar'));
+    final Offset actionTopLeft = tester.getTopLeft(find.text('Iniciar sesión'));
     // Arriba: bien por encima de la mitad vertical del viewport.
-    expect(skipTopLeft.dy, lessThan(desktopSize.height / 2));
+    expect(actionTopLeft.dy, lessThan(desktopSize.height / 2));
     // A la derecha: bien a la derecha de la mitad horizontal del
     // viewport (y, por construcción del layout, del bloque de contenido
     // anclado a la izquierda).
-    expect(skipTopLeft.dx, greaterThan(desktopSize.width / 2));
+    expect(actionTopLeft.dx, greaterThan(desktopSize.width / 2));
   });
 
   testWidgets('OUTER_LIGHT_THEME_DARK_TECH = PASS', (WidgetTester tester) async {
@@ -402,7 +424,7 @@ void main() {
       expect(find.byType(PrimaryGradientButton), findsOneWidget, reason: '$label: el CTA de escritorio debe existir');
       expect(find.byKey(const Key('welcome-desktop-cta')), findsOneWidget, reason: '$label: debe ser el CTA de escritorio, no el de teléfono en horizontal');
       expect(find.text('Conecta tu energía.'), findsOneWidget, reason: '$label: el título debe seguir visible');
-      expect(find.text('Saltar'), findsOneWidget, reason: '$label: Saltar debe seguir siendo alcanzable');
+      expect(find.text('Iniciar sesión'), findsOneWidget, reason: '$label: "Iniciar sesión" debe seguir siendo alcanzable');
     });
   }
 
@@ -463,7 +485,7 @@ void main() {
     expect(heroAssetImage(tester)?.assetName, 'assets/images/korixa_welcome_hero.webp', reason: 'tablet portrait reusa el hero/composición portrait ya aprobada');
     expect(hasDesktopLogo(tester), isFalse, reason: 'portrait nunca debe mostrar el logo de escritorio');
     expect(find.text('Comenzar'), findsOneWidget, reason: 'el CTA debe seguir siendo alcanzable');
-    expect(find.text('Saltar'), findsOneWidget);
+    expect(find.text('Iniciar sesión'), findsOneWidget);
   });
 
   // Barrido de no-overflow adicional a los ya existentes (320x568,

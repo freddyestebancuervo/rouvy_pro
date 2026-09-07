@@ -22,7 +22,7 @@ class AppLocalizationsEs extends AppLocalizations {
   String get welcomeGetStarted => 'Comenzar';
 
   @override
-  String get welcomeSkipAction => 'Saltar';
+  String get welcomeLoginAction => 'Iniciar sesión';
 
   @override
   String get loginTitle => 'Bienvenido de nuevo';
