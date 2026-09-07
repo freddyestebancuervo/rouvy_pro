@@ -406,6 +406,22 @@ void main() {
     });
   }
 
+  // KORIXA-SCREEN01-RESPONSIVE-LOGO-QUALITY-FIX-20260907: el dueño
+  // rechazó la reducción fluida del logo de escritorio (120-188 según
+  // el alto disponible) introducida por la fundación — el logo
+  // aprobado debe verse SIEMPRE a 188, incluido el caso real que
+  // motivó todo esto (1365x599). Este test cierra ese hueco: antes de
+  // este fix, habría fallado a 1365x599 (esperaría 188 pero mediría
+  // ~167.7).
+  for (final (String label, Size size, String _) in desktopViewports) {
+    testWidgets('${label}_DESKTOP_LOGO_HEIGHT_188 = PASS (la marca no es una variable de layout)', (WidgetTester tester) async {
+      await pumpWelcomePage(tester, surfaceSize: size);
+
+      final Size logoSize = tester.getSize(find.byKey(const Key('welcome-desktop-logo')));
+      expect(logoSize.height, 188, reason: '$label: el logo de escritorio debe verse siempre a 188, sin importar el alto disponible');
+    });
+  }
+
   testWidgets('1365x599_DESKTOP = YES (root cause del bug real, ahora corregido)', (WidgetTester tester) async {
     await pumpWelcomePage(tester, surfaceSize: const Size(1365, 599));
     expect(tester.takeException(), isNull, reason: 'no debe haber overflow al alto reducido');

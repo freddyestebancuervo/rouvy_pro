@@ -275,6 +275,20 @@ class _DesktopWelcomeContent extends StatelessWidget {
   /// suficiente para los 550 del CTA con margen.
   static const double _contentMaxWidth = 680;
 
+  /// KORIXA-SCREEN01-RESPONSIVE-LOGO-QUALITY-FIX-20260907: el alto del
+  /// logo quedó fijo en 188 (ver más abajo) — la calidad de marca nunca
+  /// debe reducirse por falta de alto. El lever real para alto reducido
+  /// es este espaciado vertical entre secciones (logo→título,
+  /// subtítulo→indicador, indicador→CTA), en ese orden de prioridad
+  /// ANTES que tocar el logo, y el `SingleChildScrollView` ya envolvente
+  /// como último recurso. Satura exactamente en `AppSpacing.xl` (24)
+  /// para CUALQUIER alto >= 586 — cero cambio visual en los 6 altos de
+  /// escritorio ya requeridos/aprobados (599, 600, 768, 864, 900, 1080,
+  /// 1440, todos >= 586); solo se reduce gradualmente por debajo de eso.
+  static double _desktopSectionGap(KorixaViewportInfo viewport) {
+    return viewport.fluid(16, (KorixaViewportInfo v) => v.height * 0.041, AppSpacing.xl);
+  }
+
   @override
   Widget build(BuildContext context) {
     final TextTheme textTheme = Theme.of(context).textTheme;
@@ -354,33 +368,31 @@ class _DesktopWelcomeContent extends StatelessWidget {
                     // PNG, así nunca se puede estirar. `FilterQuality.high`
                     // + tamaño renderizado subido a 200 (antes 180): logo
                     // más nítido y con más presencia.
-                    Builder(
-                      builder: (BuildContext context) {
-                        // KORIXA-RESPONSIVE-FOUNDATION-V1-SCREEN01-20260907:
-                        // `188` seguía siendo un valor fijo — a un alto de
-                        // escritorio reducido (p. ej. 1365×599, el laptop
-                        // real que motivó esta fundación) un logo fijo de
-                        // 188 deja mucho menos margen vertical que a
-                        // 900/1080/1440. `viewport.fluid` lo acota entre
-                        // 120 (piso legible) y 188 (el valor ya aprobado)
-                        // derivándolo del alto disponible — para CUALQUIER
-                        // alto >= ~672 el resultado sigue siendo
-                        // exactamente 188 (idéntico a antes, cero
-                        // regresión en 900/768/864/1080/1440); solo por
-                        // debajo de eso se reduce gradualmente, nunca de
-                        // golpe.
-                        final double logoHeight = viewport.fluid(120, (KorixaViewportInfo v) => v.height * 0.28, 188);
-                        return Image.asset(
-                          'assets/icons/korixa_logo_desktop.png',
-                          height: logoHeight,
-                          cacheHeight: (logoHeight * MediaQuery.of(context).devicePixelRatio).round(),
-                          filterQuality: FilterQuality.high,
-                          fit: BoxFit.contain,
-                          semanticLabel: 'Korixa',
-                        );
-                      },
+                    // KORIXA-SCREEN01-RESPONSIVE-LOGO-QUALITY-FIX-20260907:
+                    // la fundación (KORIXA-RESPONSIVE-FOUNDATION-V1-
+                    // SCREEN01-20260907) había hecho este alto fluido
+                    // (120-188 según el alto disponible) para ganar margen
+                    // vertical en 1365×599 — el dueño lo rechazó: el logo
+                    // de escritorio aprobado SIEMPRE debe verse a 188,
+                    // sin importar cuán reducido esté el alto. La marca no
+                    // es una variable de layout. El alto real necesario
+                    // para el resto del bloque (título+subtítulo+
+                    // indicador+CTA) a 599px de alto YA entra con margen
+                    // con el logo fijo en 188 (verificado: ~520px de
+                    // contenido total contra 599 disponibles) — el ajuste
+                    // real para espacio vertical reducido vive en
+                    // [_desktopSectionGap] (los `SizedBox` de abajo) y en
+                    // el `SingleChildScrollView` ya envolvente, nunca acá.
+                    Image.asset(
+                      key: const Key('welcome-desktop-logo'),
+                      'assets/icons/korixa_logo_desktop.png',
+                      height: 188,
+                      cacheHeight: (188 * MediaQuery.of(context).devicePixelRatio).round(),
+                      filterQuality: FilterQuality.high,
+                      fit: BoxFit.contain,
+                      semanticLabel: 'Korixa',
                     ),
-                    const SizedBox(height: AppSpacing.xl),
+                    SizedBox(height: _desktopSectionGap(viewport)),
                     Text(
                       l10n.welcomeTitle,
                       textAlign: TextAlign.left,
@@ -422,7 +434,7 @@ class _DesktopWelcomeContent extends StatelessWidget {
                         fontWeight: FontWeight.w500,
                       ),
                     ),
-                    const SizedBox(height: AppSpacing.xl),
+                    SizedBox(height: _desktopSectionGap(viewport)),
                     // KORIXA-UI-SCREEN01-FINAL-VISUAL-POLISH-20260905:
                     // indicador de escritorio dedicado — 3 barras en vez
                     // de la píldora única de mobile (`_OnboardingIndicator`).
@@ -430,7 +442,7 @@ class _DesktopWelcomeContent extends StatelessWidget {
                     // no hay swipe/navegación real entre "páginas", solo
                     // la primera barra activa.
                     const _DesktopOnboardingIndicator(),
-                    const SizedBox(height: AppSpacing.xl),
+                    SizedBox(height: _desktopSectionGap(viewport)),
                     // CTA "desktop-appropriate": ancho subido a 550 y alto
                     // a 64 (KORIXA-UI-SCREEN01-CRISP-LOGO-TEXT-CTA-20260905,
                     // dentro de los rangos 520-580 / 64-72 pedidos — 64 en
