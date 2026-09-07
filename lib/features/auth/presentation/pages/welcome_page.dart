@@ -440,10 +440,11 @@ class _DesktopWelcomeContent extends StatelessWidget {
 }
 
 /// Composición de teléfono en HORIZONTAL — KORIXA-SCREEN01-PHONE-
-/// LANDSCAPE-COMPOSITION-20260906. Sigue siendo MOBILE: hero vertical de
-/// mobile (nunca el panorámico de escritorio), sin logo Korixa flotante
-/// (el único branding es el ya impreso en la foto del ciclista), CTA e
-/// indicador a tamaño de teléfono — nunca los de [_DesktopWelcomeContent].
+/// LANDSCAPE-COMPOSITION-20260906, rediseñada en KORIXA-SCREEN01-FINAL-
+/// LANDSCAPE-HERO-ASSET-20260906. Sigue siendo MOBILE: sin logo Korixa
+/// flotante (el único branding es el ya impreso en la foto del
+/// ciclista), CTA e indicador a tamaño de teléfono — nunca los de
+/// [_DesktopWelcomeContent].
 ///
 /// Anclar el contenido ABAJO (como en portrait, [_MobileWelcomeContent])
 /// no funciona acá: a ~390-430px de alto el bloque completo título+
@@ -452,164 +453,171 @@ class _DesktopWelcomeContent extends StatelessWidget {
 /// desktop — contenido a la izquierda, ciclista a la derecha — pero con
 /// tamaños de teléfono, nunca los de escritorio.
 ///
-/// [_contentMaxWidth] (250, no los 300-380 sugeridos para el CTA, ni el
-/// 34-40% del ancho del viewport pedido en KORIXA-SCREEN01-LANDSCAPE-
-/// FINAL-POLISH-20260906) es deliberado: verificado con el hero real
-/// (ver [_PhoneLandscapeHeroImage]), el jersey/ribbon del ciclista
-/// empieza a mostrarse a partir de ~x=270 en un viewport de 932px de
-/// ancho — un bloque de contenido más ancho invadiría directamente el
-/// branding de la foto, que es la restricción explícita más dura del
-/// encargo (por encima del ancho de CTA sugerido, que el propio encargo
-/// marca como aproximado).
-///
-/// KORIXA-SCREEN01-LANDSCAPE-FINAL-POLISH-20260906: el dueño aprobó un
-/// mockup con el ciclista notablemente más chico y más paisaje visible
-/// — eso requiere una foto de hero DISTINTA (más "alejada"), no un
-/// simple ajuste de alineamiento sobre `korixa_welcome_hero.webp`: esa
-/// foto ya está compuesta apretada alrededor del ciclista de arriba a
-/// abajo, no hay "más paisaje" oculto para revelar solo recortando
-/// distinto. Los dos archivos adjuntados en esa tarea (`Saludo inicial
-/// correcion 1.html`-style) eran el MISMO mockup con el título/
-/// subtítulo/indicador/CTA/Saltar ya compuestos como píxeles — nunca
-/// una foto limpia — así que, siguiendo la instrucción explícita de esa
-/// tarea, NO se sustituyó el hero por esa imagen ni se intentó "borrar"
-/// la UI compuesta (habría sido fabricar contenido que no existe
-/// detrás). Lo que SÍ se aplicó sin necesitar el asset nuevo: título
-/// más grande (22→28), subtítulo con un renglón extra de margen
-/// (maxLines 2→3). El ancho de columna/CTA sigue acotado por el hero
-/// actual hasta que exista `assets/images/korixa_welcome_hero_landscape.webp`
-/// real.
+/// Historial de este ancho: la primera versión (KORIXA-SCREEN01-PHONE-
+/// LANDSCAPE-COMPOSITION-20260906) reusaba `korixa_welcome_hero.webp`
+/// (la foto vertical de portrait, compuesta apretada alrededor del
+/// ciclista) — con esa foto, el jersey empezaba a mostrarse a partir de
+/// ~x=270 en un viewport de 932px, así que el ancho de contenido tenía
+/// que quedar fijo en 250px para no invadirlo. KORIXA-SCREEN01-FINAL-
+/// LANDSCAPE-HERO-ASSET-20260906 reemplaza esa foto por
+/// [_PhoneLandscapeHeroImage] (`korixa_welcome_hero_landscape.webp`,
+/// una foto NUEVA con el ciclista deliberadamente más chico y corrido a
+/// ~70% del ancho) — verificado por inspección directa de la foto real
+/// antes de implementar: el margen izquierdo libre ahora es de ~590-650
+/// display-px incluso en el viewport más angosto (844×390), muy por
+/// encima del 34-40% del ancho de viewport pedido. Por eso
+/// [_contentWidthFor] ya puede ser un porcentaje real del ancho
+/// disponible en vez de un valor fijo acotado por la foto anterior.
 class _PhoneLandscapeWelcomeContent extends StatelessWidget {
   const _PhoneLandscapeWelcomeContent({required this.l10n});
 
   final AppLocalizations l10n;
 
-  static const double _contentMaxWidth = 250;
+  /// 40% del ancho del viewport (el extremo superior del rango 34-40%
+  /// pedido), acotado entre 280 y 380 — el mismo rango sugerido para el
+  /// CTA — como salvaguarda en viewports fuera de los 3 tamaños ya
+  /// verificados contra la foto real.
+  static double _contentWidthFor(double viewportWidth) {
+    return (viewportWidth * 0.40).clamp(280.0, 380.0);
+  }
 
   @override
   Widget build(BuildContext context) {
     final TextTheme textTheme = Theme.of(context).textTheme;
 
-    return Stack(
-      fit: StackFit.expand,
-      children: <Widget>[
-        const ExcludeSemantics(
-          key: Key('welcome-hero-image'),
-          child: _PhoneLandscapeHeroImage(),
-        ),
-        const Positioned.fill(child: _HorizontalContentScrim()),
-        SafeArea(
-          child: Align(
-            alignment: Alignment.topRight,
-            child: Padding(
-              padding: const EdgeInsets.all(AppSpacing.sm),
-              child: _SkipButton(
-                label: l10n.welcomeSkipAction,
-                onTap: () => context.go(AppRoute.login),
-              ),
+    return LayoutBuilder(
+      builder: (BuildContext context, BoxConstraints constraints) {
+        final double contentMaxWidth = _contentWidthFor(constraints.maxWidth);
+
+        return Stack(
+          fit: StackFit.expand,
+          children: <Widget>[
+            const ExcludeSemantics(
+              key: Key('welcome-hero-image'),
+              child: _PhoneLandscapeHeroImage(),
             ),
-          ),
-        ),
-        SafeArea(
-          child: Align(
-            alignment: Alignment.centerLeft,
-            child: ConstrainedBox(
-              key: const Key('welcome-content-max-width'),
-              constraints: const BoxConstraints(maxWidth: _contentMaxWidth),
-              child: SingleChildScrollView(
-                // Igual que portrait: si el alto disponible es
-                // excepcionalmente chico (texto localizado más largo,
-                // escala de fuente de accesibilidad alta), el contenido
-                // se desplaza en vez de desbordar — nunca cambia a la
-                // composición de escritorio por falta de espacio.
-                padding: const EdgeInsets.symmetric(horizontal: AppSpacing.md, vertical: AppSpacing.sm),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.stretch,
-                  mainAxisSize: MainAxisSize.min,
-                  children: <Widget>[
-                    Text(
-                      l10n.welcomeTitle,
-                      textAlign: TextAlign.left,
-                      maxLines: 2,
-                      overflow: TextOverflow.ellipsis,
-                      // KORIXA-SCREEN01-LANDSCAPE-FINAL-POLISH-20260906:
-                      // `fontSize` subido de 22 a 28 (el extremo más
-                      // conservador del rango 28-34 pedido — un valor
-                      // mayor arriesgaba forzar 3 líneas dentro del
-                      // ancho seguro de 250, ver `_contentMaxWidth`).
-                      // Sin `color:` explícito a propósito — `titleLarge`
-                      // ya hereda `DarkTech.textPrimary` vía
-                      // `AppTheme.darkTech`; forzar `Colors.white` acá se
-                      // ve idéntico pero es un valor distinto
-                      // (`0xFFFFFFFF` vs. el `0xFFF7F8FC` real de
-                      // `textPrimary`) y rompe la garantía "Dark Tech
-                      // gana sobre el tema exterior" que valida
-                      // `OUTER_LIGHT_THEME_DARK_TECH` (defecto real
-                      // encontrado y corregido en la iteración anterior).
-                      style: textTheme.titleLarge?.copyWith(fontSize: 28, fontWeight: FontWeight.w800),
-                    ),
-                    const SizedBox(height: AppSpacing.xs),
-                    Text(
-                      l10n.welcomeSubtitle,
-                      textAlign: TextAlign.left,
-                      // Subido de 2 a 3 (el encargo permite "2-3 líneas
-                      // según el viewport") — con el título más grande de
-                      // arriba, dar un renglón extra de margen antes de
-                      // truncar es más legible que arriesgar un "..." a
-                      // mitad de frase en el viewport más angosto (844×390).
-                      maxLines: 3,
-                      overflow: TextOverflow.ellipsis,
-                      style: textTheme.bodyMedium?.copyWith(color: DarkTech.textSecondary),
-                    ),
-                    const SizedBox(height: AppSpacing.sm),
-                    const _PhoneLandscapeOnboardingIndicator(),
-                    const SizedBox(height: AppSpacing.sm),
-                    // CTA compacto de horizontal: ancho responsivo (se
-                    // estira al ancho del bloque de contenido, ~226px
-                    // efectivos tras el padding — ver docblock de la
-                    // clase sobre por qué no llega a los 300-380
-                    // sugeridos) y alto 54 (dentro del rango 52-58
-                    // pedido), nunca el ancho fijo de 320+ de portrait.
-                    PrimaryGradientButton(
-                      key: const Key('welcome-landscape-cta'),
-                      label: l10n.welcomeGetStarted,
-                      onPressed: () => context.go(AppRoute.register),
-                      height: 54,
-                      fontSize: 15,
-                    ),
-                  ],
+            const Positioned.fill(child: _HorizontalContentScrim()),
+            SafeArea(
+              child: Align(
+                alignment: Alignment.topRight,
+                child: Padding(
+                  padding: const EdgeInsets.all(AppSpacing.sm),
+                  child: _SkipButton(
+                    label: l10n.welcomeSkipAction,
+                    onTap: () => context.go(AppRoute.login),
+                  ),
                 ),
               ),
             ),
-          ),
-        ),
-      ],
+            SafeArea(
+              child: Align(
+                alignment: Alignment.centerLeft,
+                child: ConstrainedBox(
+                  key: const Key('welcome-content-max-width'),
+                  constraints: BoxConstraints(maxWidth: contentMaxWidth),
+                  child: SingleChildScrollView(
+                    // Igual que portrait: si el alto disponible es
+                    // excepcionalmente chico (texto localizado más
+                    // largo, escala de fuente de accesibilidad alta),
+                    // el contenido se desplaza en vez de desbordar —
+                    // nunca cambia a la composición de escritorio por
+                    // falta de espacio.
+                    padding: const EdgeInsets.symmetric(horizontal: AppSpacing.md, vertical: AppSpacing.sm),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.stretch,
+                      mainAxisSize: MainAxisSize.min,
+                      children: <Widget>[
+                        Text(
+                          l10n.welcomeTitle,
+                          textAlign: TextAlign.left,
+                          maxLines: 2,
+                          overflow: TextOverflow.ellipsis,
+                          // `fontSize` 32 — el extremo más grande del
+                          // rango 28-34 pedido en la iteración anterior;
+                          // el nuevo hero deja mucho más ancho seguro,
+                          // así que ya no hace falta quedarse en el
+                          // extremo conservador. Sin `color:` explícito
+                          // a propósito — `titleLarge` ya hereda
+                          // `DarkTech.textPrimary` vía `AppTheme.darkTech`;
+                          // forzar `Colors.white` rompió antes la
+                          // garantía "Dark Tech gana sobre el tema
+                          // exterior" (`OUTER_LIGHT_THEME_DARK_TECH`).
+                          style: textTheme.titleLarge?.copyWith(fontSize: 32, fontWeight: FontWeight.w800),
+                        ),
+                        const SizedBox(height: AppSpacing.sm),
+                        Text(
+                          l10n.welcomeSubtitle,
+                          textAlign: TextAlign.left,
+                          // Con el ancho de columna ahora real (34-40%
+                          // del viewport, no los 250px fijos de la
+                          // versión anterior), el subtítulo completo
+                          // entra en 2 líneas en los 3 tamaños
+                          // requeridos — verificado con captura real.
+                          maxLines: 2,
+                          overflow: TextOverflow.ellipsis,
+                          // `bodyLarge` (16, como el subtítulo de
+                          // portrait) — el `bodyMedium` (14) de la
+                          // versión anterior era una concesión al ancho
+                          // acotado de esa foto, ya no necesaria.
+                          style: textTheme.bodyLarge?.copyWith(color: DarkTech.textSecondary),
+                        ),
+                        const SizedBox(height: AppSpacing.md),
+                        const _PhoneLandscapeOnboardingIndicator(),
+                        const SizedBox(height: AppSpacing.md),
+                        // CTA responsivo: se estira al ancho del bloque
+                        // de contenido (`contentMaxWidth` menos el
+                        // padding horizontal) — con `contentMaxWidth`
+                        // ya en el rango 280-380, el CTA cae en el
+                        // rango 300-380 pedido en los 3 tamaños
+                        // requeridos (verificado con captura real), sin
+                        // necesitar un ancho fijo aparte. Alto 56
+                        // (dentro del rango 52-58 pedido).
+                        PrimaryGradientButton(
+                          key: const Key('welcome-landscape-cta'),
+                          label: l10n.welcomeGetStarted,
+                          onPressed: () => context.go(AppRoute.register),
+                          height: 56,
+                          fontSize: 16,
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+              ),
+            ),
+          ],
+        );
+      },
     );
   }
 }
 
-/// Hero de teléfono en horizontal — KORIXA-SCREEN01-PHONE-LANDSCAPE-
-/// COMPOSITION-20260906. Mismo ARCHIVO que portrait
-/// (`korixa_welcome_hero.webp`) — nunca el panorámico de escritorio —
-/// pero con un `alignment` propio: en un viewport ancho y bajo,
-/// `BoxFit.cover` escala por ANCHO (sin recorte horizontal — el ancho
-/// completo de la foto original siempre es visible) y recorta
-/// verticalmente. `Alignment(0, -0.4)` (en vez del `-0.15` que ya usa
-/// [_HeroImage] para su propio caso de teléfono en horizontal, pensado
-/// para un recorte mucho más leve) muestra la franja que contiene TANTO
-/// el wordmark/ribbon del jersey como el logo del short — verificado
-/// recortando la foto real a 932×430 y 844×390 antes de implementar
-/// esto: con alineamiento centrado (0,0) el short queda pegado al borde
-/// superior y el jersey queda fuera de cuadro.
+/// Hero de teléfono en horizontal — KORIXA-SCREEN01-FINAL-LANDSCAPE-
+/// HERO-ASSET-20260906. Archivo DEDICADO (`korixa_welcome_hero_landscape.webp`,
+/// 1846×852, aprobado por el dueño) — ya NO reusa el hero vertical de
+/// portrait ni el panorámico de escritorio. El propio dueño de esta
+/// foto ya viene compuesta con el ciclista más chico, corrido a la
+/// derecha (~70% del ancho) y mucho paisaje/lago/camino visible a la
+/// izquierda — no requiere el mismo tipo de recorte agresivo que las
+/// otras dos fotos.
+///
+/// `Alignment.center`: el aspect ratio de esta foto (1846:852 ≈ 2.166)
+/// prácticamente COINCIDE con el de los 3 viewports de teléfono en
+/// horizontal requeridos (844:390≈2.164, 915:412≈2.221, 932:430≈2.167),
+/// así que `BoxFit.cover` recorta como máximo ~10px verticales en el
+/// peor caso (915×412) — verificado calculando el recorte exacto para
+/// los 3 tamaños antes de implementar. Cualquier alineamiento razonable
+/// muestra prácticamente la foto completa; `center` es el más simple y
+/// no sesga el recorte mínimo hacia ningún lado en particular.
 class _PhoneLandscapeHeroImage extends StatelessWidget {
   const _PhoneLandscapeHeroImage();
 
   @override
   Widget build(BuildContext context) {
     return Image.asset(
-      'assets/images/korixa_welcome_hero.webp',
+      'assets/images/korixa_welcome_hero_landscape.webp',
       fit: BoxFit.cover,
-      alignment: const Alignment(0, -0.4),
+      alignment: Alignment.center,
     );
   }
 }

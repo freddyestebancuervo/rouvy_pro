@@ -151,20 +151,26 @@ void main() {
   // escritorio completa. Estos 4 tamaños son teléfonos reales (portrait
   // y horizontal); ninguno debe activar desktop, sin importar qué tan
   // ancho se vea en horizontal — ver `_isDesktop` en welcome_page.dart.
-  const <String, Size>{
-    '390x844 (portrait)': Size(390, 844),
-    '844x390 (landscape)': Size(844, 390),
-    '915x412 (landscape)': Size(915, 412),
-    '932x430 (landscape)': Size(932, 430),
-  }.forEach((String label, Size size) {
+  //
+  // KORIXA-SCREEN01-FINAL-LANDSCAPE-HERO-ASSET-20260906: portrait y
+  // horizontal ahora usan ARCHIVOS DE HERO DISTINTOS (cada uno el suyo,
+  // nunca el panorámico de escritorio) — el mapa lleva el hero esperado
+  // por tamaño en vez de asumir uno solo para los 4.
+  const <String, (Size, String)>{
+    '390x844 (portrait)': (Size(390, 844), 'assets/images/korixa_welcome_hero.webp'),
+    '844x390 (landscape)': (Size(844, 390), 'assets/images/korixa_welcome_hero_landscape.webp'),
+    '915x412 (landscape)': (Size(915, 412), 'assets/images/korixa_welcome_hero_landscape.webp'),
+    '932x430 (landscape)': (Size(932, 430), 'assets/images/korixa_welcome_hero_landscape.webp'),
+  }.forEach((String label, (Size, String) entry) {
+    final (Size size, String expectedHero) = entry;
     testWidgets('${label}_USES_MOBILE_LAYOUT = PASS', (WidgetTester tester) async {
       await pumpWelcomePage(tester, surfaceSize: size);
       expect(tester.takeException(), isNull, reason: 'no debe haber overflow en $label');
 
       expect(
         heroAssetImage(tester)?.assetName,
-        'assets/images/korixa_welcome_hero.webp',
-        reason: '$label es un teléfono (incluso en horizontal): debe usar el hero vertical de mobile, no el panorámico',
+        expectedHero,
+        reason: '$label debe usar su hero dedicado (portrait o landscape, nunca el panorámico de escritorio)',
       );
 
       final Iterable<Image> images = tester.widgetList<Image>(find.byType(Image));
@@ -184,14 +190,11 @@ void main() {
     });
   });
 
-  // KORIXA-SCREEN01-PHONE-LANDSCAPE-COMPOSITION-20260906: el fix anterior
-  // solo corrigió la CLASIFICACIÓN (landscape ya no activaba desktop),
-  // pero seguía reusando la composición de portrait sin cambios — un
-  // bloque anclado abajo a tamaño completo no entra en ~390-430px de
-  // alto sin superponerse al ciclista. Estos 3 tamaños ahora deben usar
-  // [_PhoneLandscapeWelcomeContent]: 3 indicadores, un CTA de ancho
-  // compacto (no los 320+ de portrait/desktop), y un bloque de contenido
-  // que no invade el área donde empieza el branding del jersey.
+  // KORIXA-SCREEN01-FINAL-LANDSCAPE-HERO-ASSET-20260906: con el hero
+  // dedicado nuevo (ciclista más chico, corrido a ~70% del ancho), el
+  // bloque de contenido/CTA ya puede ser un porcentaje real del
+  // viewport (34-40%, CTA 300-380px) en vez del ancho fijo de 250px que
+  // exigía la foto anterior — ver [_PhoneLandscapeWelcomeContent].
   const <String, Size>{
     '844x390': Size(844, 390),
     '915x412': Size(915, 412),
@@ -207,22 +210,27 @@ void main() {
       );
       expect(bars.length, 3, reason: '$label debe mostrar exactamente 3 líneas indicadoras');
 
-      // CTA propio de horizontal (`welcome-landscape-cta`) — nunca el
-      // ancho de 320+ de portrait ni el de 550 de desktop.
+      // CTA responsivo — 300-380px pedido, nunca el ancho de 320+ fijo
+      // de portrait ni el de 550 de desktop.
       expect(find.byKey(const Key('welcome-landscape-cta')), findsOneWidget);
       final Size ctaSize = tester.getSize(find.byKey(const Key('welcome-landscape-cta')));
-      expect(ctaSize.width, lessThan(300), reason: '$label: el CTA de horizontal debe ser compacto, no el ancho de portrait/desktop');
+      expect(ctaSize.width, greaterThanOrEqualTo(280), reason: '$label: el CTA debe acercarse al rango 300-380 pedido');
+      expect(ctaSize.width, lessThanOrEqualTo(380), reason: '$label: el CTA no debe exceder el rango 300-380 pedido');
       expect(ctaSize.height, greaterThanOrEqualTo(48), reason: '$label: el CTA debe seguir siendo táctil (>=48dp)');
 
-      // El bloque de contenido no debe invadir la zona donde empieza el
-      // branding del jersey en la foto real (~x=270 a 932px de ancho,
-      // verificado por inspección directa antes de implementar la
-      // composición — ver docblock de `_PhoneLandscapeWelcomeContent`).
+      // El bloque de contenido debe quedar en el rango 34-40% del
+      // viewport pedido (acotado 280-380) — con el hero nuevo, el
+      // margen libre real es de ~590-650px, muy por encima de este
+      // rango, así que no hay riesgo de invadir al ciclista.
       final Size contentSize = tester.getSize(find.byKey(const Key('welcome-content-max-width')));
+      expect(contentSize.width, greaterThanOrEqualTo(280), reason: '$label: el contenido debe acercarse al 34-40% pedido');
+      expect(contentSize.width, lessThanOrEqualTo(380), reason: '$label: el contenido no debe exceder el rango pedido');
+
+      // El hero debe ser el dedicado de horizontal, nunca el vertical
+      // de portrait ni el panorámico de escritorio.
       expect(
-        contentSize.width,
-        lessThanOrEqualTo(260),
-        reason: '$label: el contenido no debe extenderse hasta el área de branding del ciclista',
+        heroAssetImage(tester)?.assetName,
+        'assets/images/korixa_welcome_hero_landscape.webp',
       );
     });
   });
