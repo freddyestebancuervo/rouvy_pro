@@ -439,7 +439,6 @@ class _DesktopWelcomeContent extends StatelessWidget {
   }
 }
 
-/// Scrim horizontal — compartido por escritorio (ver
 /// Composición de teléfono en HORIZONTAL — KORIXA-SCREEN01-PHONE-
 /// LANDSCAPE-COMPOSITION-20260906. Sigue siendo MOBILE: hero vertical de
 /// mobile (nunca el panorámico de escritorio), sin logo Korixa flotante
@@ -453,13 +452,33 @@ class _DesktopWelcomeContent extends StatelessWidget {
 /// desktop — contenido a la izquierda, ciclista a la derecha — pero con
 /// tamaños de teléfono, nunca los de escritorio.
 ///
-/// [_contentMaxWidth] (250, no los 300-380 sugeridos para el CTA) es
-/// deliberado: verificado con el hero real (ver [_PhoneLandscapeHeroImage]),
-/// el jersey/ribbon del ciclista empieza a mostrarse a partir de
-/// ~x=270 en un viewport de 932px de ancho — un bloque de contenido más
-/// ancho invadiría directamente el branding de la foto, que es la
-/// restricción explícita más dura del encargo (por encima del ancho de
-/// CTA sugerido, que el propio encargo marca como aproximado).
+/// [_contentMaxWidth] (250, no los 300-380 sugeridos para el CTA, ni el
+/// 34-40% del ancho del viewport pedido en KORIXA-SCREEN01-LANDSCAPE-
+/// FINAL-POLISH-20260906) es deliberado: verificado con el hero real
+/// (ver [_PhoneLandscapeHeroImage]), el jersey/ribbon del ciclista
+/// empieza a mostrarse a partir de ~x=270 en un viewport de 932px de
+/// ancho — un bloque de contenido más ancho invadiría directamente el
+/// branding de la foto, que es la restricción explícita más dura del
+/// encargo (por encima del ancho de CTA sugerido, que el propio encargo
+/// marca como aproximado).
+///
+/// KORIXA-SCREEN01-LANDSCAPE-FINAL-POLISH-20260906: el dueño aprobó un
+/// mockup con el ciclista notablemente más chico y más paisaje visible
+/// — eso requiere una foto de hero DISTINTA (más "alejada"), no un
+/// simple ajuste de alineamiento sobre `korixa_welcome_hero.webp`: esa
+/// foto ya está compuesta apretada alrededor del ciclista de arriba a
+/// abajo, no hay "más paisaje" oculto para revelar solo recortando
+/// distinto. Los dos archivos adjuntados en esa tarea (`Saludo inicial
+/// correcion 1.html`-style) eran el MISMO mockup con el título/
+/// subtítulo/indicador/CTA/Saltar ya compuestos como píxeles — nunca
+/// una foto limpia — así que, siguiendo la instrucción explícita de esa
+/// tarea, NO se sustituyó el hero por esa imagen ni se intentó "borrar"
+/// la UI compuesta (habría sido fabricar contenido que no existe
+/// detrás). Lo que SÍ se aplicó sin necesitar el asset nuevo: título
+/// más grande (22→28), subtítulo con un renglón extra de margen
+/// (maxLines 2→3). El ancho de columna/CTA sigue acotado por el hero
+/// actual hasta que exista `assets/images/korixa_welcome_hero_landscape.webp`
+/// real.
 class _PhoneLandscapeWelcomeContent extends StatelessWidget {
   const _PhoneLandscapeWelcomeContent({required this.l10n});
 
@@ -513,23 +532,32 @@ class _PhoneLandscapeWelcomeContent extends StatelessWidget {
                       textAlign: TextAlign.left,
                       maxLines: 2,
                       overflow: TextOverflow.ellipsis,
-                      // `titleLarge` (22) — más chico que el
-                      // `headlineMedium` (28) de portrait, "smaller than
-                      // portrait if necessary" del encargo. Sin `color:`
-                      // explícito a propósito — `titleLarge` ya hereda
-                      // `DarkTech.textPrimary` vía `AppTheme.darkTech`;
-                      // forzar `Colors.white` acá se ve idéntico pero es
-                      // un valor distinto (`0xFFFFFFFF` vs. el
-                      // `0xFFF7F8FC` real de `textPrimary`) y rompe la
-                      // garantía "Dark Tech gana sobre el tema exterior"
-                      // que valida `OUTER_LIGHT_THEME_DARK_TECH`.
-                      style: textTheme.titleLarge?.copyWith(fontWeight: FontWeight.w800),
+                      // KORIXA-SCREEN01-LANDSCAPE-FINAL-POLISH-20260906:
+                      // `fontSize` subido de 22 a 28 (el extremo más
+                      // conservador del rango 28-34 pedido — un valor
+                      // mayor arriesgaba forzar 3 líneas dentro del
+                      // ancho seguro de 250, ver `_contentMaxWidth`).
+                      // Sin `color:` explícito a propósito — `titleLarge`
+                      // ya hereda `DarkTech.textPrimary` vía
+                      // `AppTheme.darkTech`; forzar `Colors.white` acá se
+                      // ve idéntico pero es un valor distinto
+                      // (`0xFFFFFFFF` vs. el `0xFFF7F8FC` real de
+                      // `textPrimary`) y rompe la garantía "Dark Tech
+                      // gana sobre el tema exterior" que valida
+                      // `OUTER_LIGHT_THEME_DARK_TECH` (defecto real
+                      // encontrado y corregido en la iteración anterior).
+                      style: textTheme.titleLarge?.copyWith(fontSize: 28, fontWeight: FontWeight.w800),
                     ),
                     const SizedBox(height: AppSpacing.xs),
                     Text(
                       l10n.welcomeSubtitle,
                       textAlign: TextAlign.left,
-                      maxLines: 2,
+                      // Subido de 2 a 3 (el encargo permite "2-3 líneas
+                      // según el viewport") — con el título más grande de
+                      // arriba, dar un renglón extra de margen antes de
+                      // truncar es más legible que arriesgar un "..." a
+                      // mitad de frase en el viewport más angosto (844×390).
+                      maxLines: 3,
                       overflow: TextOverflow.ellipsis,
                       style: textTheme.bodyMedium?.copyWith(color: DarkTech.textSecondary),
                     ),
