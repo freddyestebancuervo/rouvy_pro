@@ -3,6 +3,7 @@ import 'dart:math';
 import '../../features/device_connection/domain/entities/ble_device.dart';
 import '../../features/device_connection/domain/entities/device_connection_status.dart';
 import '../../features/device_connection/domain/entities/sport_device_type.dart';
+import '../../features/device_connection/domain/entities/telemetry_source.dart';
 import '../../features/device_connection/domain/entities/telemetry_snapshot.dart';
 
 /// Dispositivos que aparecen al "escanear" en modo demo — un rodillo
@@ -48,7 +49,12 @@ class DemoTelemetryGenerator {
   TelemetrySnapshot next() {
     if (isHeartRateMonitor) {
       _heartRateBpm = (_heartRateBpm + _randomStep(3)).clamp(110, 175).round();
-      return TelemetrySnapshot(deviceId: deviceId, timestamp: DateTime.now(), heartRateBpm: _heartRateBpm);
+      return TelemetrySnapshot(
+        deviceId: deviceId,
+        source: TelemetrySourceKind.demo,
+        timestamp: DateTime.now(),
+        heartRateBpm: _heartRateBpm,
+      );
     }
 
     _speedKmh = (_speedKmh + _randomStep(1.5)).clamp(15, 45).toDouble();
@@ -57,6 +63,7 @@ class DemoTelemetryGenerator {
 
     return TelemetrySnapshot(
       deviceId: deviceId,
+      source: TelemetrySourceKind.demo,
       timestamp: DateTime.now(),
       speedKmh: _speedKmh,
       powerWatts: _powerWatts,

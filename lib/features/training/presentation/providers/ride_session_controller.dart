@@ -284,6 +284,7 @@ class RideSessionController extends Notifier<RideSessionState> {
       final List<String> toRemove =
           _deviceSubs.keys.where((String id) => !currentlyConnected.contains(id)).toList();
       for (final String id in toRemove) {
+        _aggregator.removeSource(id);
         _deviceSubs.remove(id)?.cancel();
       }
 
@@ -298,6 +299,9 @@ class RideSessionController extends Notifier<RideSessionState> {
       }
 
       state = state.copyWith(connectedDeviceCount: currentlyConnected.length);
+      if (toRemove.isNotEmpty) {
+        state = state.copyWith(telemetry: _aggregator.currentState);
+      }
     });
   }
 
