@@ -276,7 +276,7 @@ void main() {
     /// del archivo: `Future<void>.delayed(Duration.zero)`).
     Future<void> feed(DateTime timestamp, {required double speedKmh}) async {
       telemetryController.add(
-        TelemetrySnapshot(deviceId: trainerId, timestamp: timestamp, speedKmh: speedKmh, powerWatts: 150),
+        TelemetrySnapshot(deviceId: trainerId, source: TelemetrySourceKind.ftms, timestamp: timestamp, speedKmh: speedKmh, powerWatts: 150),
       );
       await Future<void>.delayed(Duration.zero);
     }
@@ -587,7 +587,7 @@ void main() {
 
     Future<void> feed(DateTime timestamp, {required double speedKmh}) async {
       telemetryController.add(
-        TelemetrySnapshot(deviceId: trainerId, timestamp: timestamp, speedKmh: speedKmh, powerWatts: 150),
+        TelemetrySnapshot(deviceId: trainerId, source: TelemetrySourceKind.ftms, timestamp: timestamp, speedKmh: speedKmh, powerWatts: 150),
       );
       await Future<void>.delayed(Duration.zero);
     }
