@@ -738,6 +738,18 @@ conexión a internet. Ninguna arquitectura de tiempo real de backend
 aplica aquí; ya está resuelto y documentado en `BLE_PERMISSIONS.md` y el
 propio código de `device_connection`.
 
+La telemetría agregada ya no es "last write wins" ciego: cada snapshot
+lleva `source` normalizado, el agregador conserva metadata de origen y
+frescura por métrica, prioriza de forma determinista según el tipo de
+fuente, expira estado obsoleto y hace fallback cuando la fuente preferida
+caduca. La desconexión de una fuente elimina su contribución del estado de
+sesión; los parsers con estado expuestos aquí incluyen hooks de `reset()`
+para reiniciar su histórico al reconectar.
+
+Esto sigue siendo solo el contrato local BLE→HUD: no implica ninguna
+integración real con Route Engine ni validación física con sensores
+reales, que permanecen fuera de alcance de esta tarea.
+
 ### 6.2 App → Backend / App → App (pendiente, requiere servidor)
 
 Esto sí necesita diseño: cuándo una sesión de un usuario debe verse en
