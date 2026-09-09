@@ -146,6 +146,71 @@ PRODUCTION_MIGRATED = YES    -> NO SE AFIRMA
 KORIXA_APP_REMEDIATED = YES  -> NO SE AFIRMA
 ```
 
+---
+
+## Adenda POST-106 — H9 ULTRA PLUS BLE/HR proprietary protocol
+
+**Tarea documental:** `H9-HR-PROTOCOL-AUDIT-DOCUMENTATION-CLOSEOUT`.
+Esta adenda registra el cierre documental de la investigación estática y
+física limitada del protocolo propietario BLE/HR del H9 ULTRA PLUS. No
+implementa soporte, no modifica código y no autoriza nuevas pruebas BLE.
+
+```text
+PHYSICAL_H9_HEART_RATE_PROTOCOL = UNPROVEN
+KORIXA_H9_ADAPTER = NOT_IMPLEMENTED
+NEXT_REQUIRED_PROOF = external/full BLE runtime capture of official app session
+MOTOR_TELEMETRY_COMPLETION_ESTIMATE = 64% (UNCHANGED)
+```
+
+### Probado o estáticamente probado
+
+| Hecho | Estado | Evidencia |
+|---|---|---|
+| H9 ULTRA PLUS expone Nordic UART Service `6E400001-B5A3-F393-E0A9-E50E24DCCA9E` | Probado físicamente | Conexión BLE real y descubrimiento de servicio en nRF Connect |
+| RX/write `6E400002-B5A3-F393-E0A9-E50E24DCCA9E` | Probado físicamente | Característica RX encontrada y escritura aceptada |
+| TX/notify `6E400003-B5A3-F393-E0A9-E50E24DCCA9E` | Probado físicamente | Característica TX encontrada y notificaciones habilitadas |
+| Builder oficial de inicio HR | Estáticamente probado | `setOnceOrRealTimeMeasure(9, 1)` produce `AB 00 04 FF 31 09 01` |
+| Builder oficial de stop HR | Estáticamente probado | `setOnceOrRealTimeMeasure(9, 0)` produce `AB 00 04 FF 31 09 00` |
+| Parser oficial de respuesta HR single | Estáticamente probado | `0x31 / 0x09 -> single HR` |
+| Parser oficial de respuesta HR realtime/current | Estáticamente probado | `0x31 / 0x0A -> realtime/current HR` |
+| Posición de BPM en parser oficial | Estáticamente probado | el parser lee BPM desde `datas[6]` |
+| Trafico `AB ... 91 ...` | Estáticamente probado como no-HR inmediato | ruta de parser relacionada con batería/estado, no inicio HR |
+| Ciclo de sesión/setup previo a comandos de feature | Estáticamente probado | la app oficial habilita notificaciones, espera información de dispositivo y ejecuta setup/sync antes de operaciones normales |
+| Write type en ruta Nordic | Estáticamente probado como dependiente de propiedades | puede usar `WRITE_NO_RESPONSE` cuando la característica lo soporta |
+
+### Evidencia física limitada
+
+```text
+REAL_H9_BLE_CONNECTION = PROVEN
+REAL_NORDIC_UART_NOTIFICATIONS = PROVEN
+ISOLATED_MANUAL_HR_COMMAND = AB 00 04 FF 31 09 01
+BLE_WRITE_ACCEPTED = YES
+WATCH_HR_MEASUREMENT_STARTED = NO
+NEW_HR_RESPONSE_OBSERVED = NO
+```
+
+La escritura manual aislada prueba que el dispositivo acepta el write BLE en
+RX, pero no prueba la semántica completa de inicio HR en runtime. La evidencia
+estática indica que la app oficial opera dentro de un ciclo de sesión/setup
+propio antes de comandos de feature; por tanto, una escritura suelta desde
+nRF Connect no equivale a una sesión oficial reproducida.
+
+### No probado
+
+```text
+RUNTIME_HR_REQUEST_RESPONSE_SEQUENCE = UNPROVEN
+DATAS_6_MATCHES_PHYSICAL_WATCH_BPM = UNPROVEN
+MANDATORY_SESSION_INITIALIZATION_SUBSET = UNPROVEN
+H9_ADAPTER_INSIDE_KORIXA = NOT_IMPLEMENTED
+UNIVERSAL_PROPRIETARY_DEVICE_SUPPORT = NOT_CLAIMED
+RUNTIME_H9_HEART_RATE_SUPPORT = NOT_CLAIMED
+```
+
+No se aumenta el porcentaje de Motor/Telemetry por esta investigación. La
+estimación vigente permanece en `64%` hasta que exista una captura BLE runtime
+completa de la app oficial o un sniffer externo equivalente que pruebe la
+secuencia obligatoria de sesión y la respuesta HR real.
+
 ## Seguridad de esta reconciliación
 
 ```text

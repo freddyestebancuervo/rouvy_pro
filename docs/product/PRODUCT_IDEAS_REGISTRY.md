@@ -68,6 +68,36 @@ Cita un archivo/documento/PR/commit real del repositorio cuando existe, o indica
 | IDEA-CONN-10 | Funcionamiento local sin internet — **Korixa Receiver/estación (no implementado)** | Propuesta | Operación completamente offline del Receiver: no depende de Firestore/backend para funcionar en tiempo real; almacena telemetría cruda localmente y sincroniza después solo resúmenes/resultados cuando haya conectividad (ver IDEA-CONN-02). Conceptualmente distinto del offline-first ya implementado en Flutter/Firestore (IDEA-CONN-08) — no se debe presentar como ya resuelto por lo que ya existe en el cliente. | IDEA-CONN-02 (Korixa Receiver) | Sin fase asignada | Idea aclarada explícitamente en esta corrección (2026-07-31), a partir del alcance de Korixa Receiver descrito por el propietario; sin documentación previa | 2026-07-31 — registrada/separada de IDEA-CONN-08 para no confundir el offline ya implementado en Flutter con el offline futuro, no implementado, de la estación. |
 | IDEA-CONN-11 | Estación Windows con salida a televisor/pantalla | Propuesta | Korixa Receiver podría emitir su interfaz (incluyendo el futuro módulo visual Unity, ver IDEA-EXP-08) a un televisor o pantalla externa — pensado para uso en gimnasio/estudio (ver IDEA-EXP-01). | IDEA-CONN-02 (Korixa Receiver), IDEA-EXP-08 (módulo visual Unity) | Sin fase asignada | Idea nueva, sin documentación previa en el repositorio | 2026-07-31 — registrada por primera vez. |
 
+### Nota de evidencia — H9 ULTRA PLUS proprietary BLE/HR
+
+La investigación `H9-HR-PROTOCOL-AUDIT-DOCUMENTATION-CLOSEOUT` documenta un
+caso propietario fuera del soporte ya implementado para el estándar BLE Heart
+Rate Measurement (`IDEA-HW-02`) y fuera de la normalización ya implementada
+para protocolos estándar (`IDEA-CONN-07`). El H9 ULTRA PLUS expone Nordic UART
+Service (`6E400001-B5A3-F393-E0A9-E50E24DCCA9E`), RX/write
+`6E400002-B5A3-F393-E0A9-E50E24DCCA9E` y TX/notify
+`6E400003-B5A3-F393-E0A9-E50E24DCCA9E`. La app oficial construye
+`AB 00 04 FF 31 09 01` para inicio HR y `AB 00 04 FF 31 09 00` para stop HR;
+su parser enruta `0x31 / 0x09` a single HR, `0x31 / 0x0A` a realtime/current HR
+y lee BPM desde `datas[6]`. `AB ... 91 ...` queda documentado como tráfico de
+batería/estado, no HR inmediato.
+
+La evidencia física solo prueba conexión BLE real, notificaciones Nordic UART
+reales y que una escritura manual aislada de `AB 00 04 FF 31 09 01` fue
+aceptada sin iniciar medición HR. Por tanto:
+
+```text
+PHYSICAL_H9_HEART_RATE_PROTOCOL = UNPROVEN
+KORIXA_H9_ADAPTER = NOT_IMPLEMENTED
+NEXT_REQUIRED_PROOF = external/full BLE runtime capture of official app session
+```
+
+No se afirma soporte runtime HR para H9, no se afirma que `datas[6]` coincida
+con el BPM físico del reloj, no se conoce el subconjunto obligatorio exacto de
+comandos de inicialización de sesión, y no se generaliza soporte propietario
+universal. La estimación de Motor/Telemetry permanece en `64%`; esta nota no
+la incrementa.
+
 ## C. Experiencia de entrenamiento y comunidad
 
 | ID | Nombre | Estado | Descripción | Dependencias | Fase estimada | Evidencia u origen | Última decisión |
