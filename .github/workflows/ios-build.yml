@@ -73,10 +73,10 @@ jobs:
           echo "=== pod --version ==="
           pod --version || echo "CocoaPods no preinstalado en este runner"
 
-      - name: Set up Flutter 3.32.0
+      - name: Set up Flutter 3.44.7
         uses: subosito/flutter-action@v2
         with:
-          flutter-version: '3.32.0'
+          flutter-version: '3.44.7'
           channel: stable
 
       - name: Flutter doctor
