@@ -62,7 +62,7 @@
   },
   "overrides": {
     "file-type": "21.3.4",
-    "multer": "2.2.0",
+    "multer": "2.3.0",
     "glob": "10.5.0",
     "brace-expansion": "2.1.4"
   }
