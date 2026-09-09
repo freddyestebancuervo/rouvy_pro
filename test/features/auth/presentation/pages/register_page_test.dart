@@ -170,6 +170,17 @@ void main() {
     expect(find.text('LOGIN'), findsOneWidget);
   });
 
+  testWidgets('390x844_NO_OVERFLOW = PASS', (WidgetTester tester) async {
+    tester.view.physicalSize = const Size(390, 844);
+    tester.view.devicePixelRatio = 1.0;
+    addTearDown(tester.view.reset);
+
+    await pumpRegisterPage(tester, repository);
+
+    expect(tester.takeException(), isNull);
+    expect(find.text('Inicia sesión'), findsOneWidget);
+  });
+
   testWidgets('el botón de Apple solo aparece en la plataforma Apple soportada', (WidgetTester tester) async {
     await pumpRegisterPage(tester, repository);
     expect(find.byType(AppleSignInButton), findsNothing);
