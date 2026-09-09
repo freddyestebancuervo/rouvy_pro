@@ -4,6 +4,7 @@ import 'dart:math';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:crypto/crypto.dart';
 import 'package:firebase_auth/firebase_auth.dart' as fb;
+import 'package:flutter/foundation.dart' show kIsWeb, visibleForTesting;
 import 'package:google_sign_in/google_sign_in.dart';
 import 'package:sign_in_with_apple/sign_in_with_apple.dart';
 
@@ -53,13 +54,21 @@ class AuthRemoteDataSourceImpl implements AuthRemoteDataSource {
     required fb.FirebaseAuth firebaseAuth,
     required FirebaseFirestore firestore,
     required GoogleSignIn googleSignIn,
+    @visibleForTesting bool? debugIsWeb,
   })  : _firebaseAuth = firebaseAuth,
         _firestore = firestore,
-        _googleSignIn = googleSignIn;
+        _googleSignIn = googleSignIn,
+        _isWeb = debugIsWeb ?? kIsWeb;
 
   final fb.FirebaseAuth _firebaseAuth;
   final FirebaseFirestore _firestore;
   final GoogleSignIn _googleSignIn;
+
+  /// `flutter test` corre siempre sobre la VM (`kIsWeb` es `false` ahí sin
+  /// excepción) — mismo patrón ya usado en `resolveGoogleSignInClientId`
+  /// (`core/di/injection.dart`) y en el resto de la app para poder probar
+  /// la rama Web sin compilar a Web real.
+  final bool _isWeb;
 
   static const String _usersCollection = 'users';
 
@@ -118,7 +127,24 @@ class AuthRemoteDataSourceImpl implements AuthRemoteDataSource {
 
   @override
   Future<UserModel> signInWithGoogle() async {
+    // KORIXA-WEB-GOOGLE-FIREBASE-POPUP-POC-20260908: en Web, GIS
+    // (`renderButton()`/`HtmlElementView`) queda reemplazado por
+    // `FirebaseAuth.signInWithPopup` — sin platform view, sin depender
+    // de `google_sign_in_web`. Android/iOS siguen EXACTAMENTE igual
+    // (`GoogleSignIn().signIn()` nativo, sin popup ni COOP de por medio).
+    if (_isWeb) {
+      final fb.UserCredential credential = await _firebaseAuth.signInWithPopup(fb.GoogleAuthProvider());
+      final fb.User? firebaseUser = credential.user;
+      if (firebaseUser == null) {
+        throw const AuthException('Inicio de sesión cancelado.', code: 'sign-in-cancelled');
+      }
+      return _fetchOrCreateSocialUser(firebaseUser, AuthProviderType.google);
+    }
     final GoogleSignInAccount? googleUser = await _googleSignIn.signIn();
+    return _completeGoogleSignIn(googleUser);
+  }
+
+  Future<UserModel> _completeGoogleSignIn(GoogleSignInAccount? googleUser) async {
     if (googleUser == null) {
       // El usuario cerró el selector de cuentas — no es un error real.
       throw const AuthException('Inicio de sesión cancelado.', code: 'sign-in-cancelled');

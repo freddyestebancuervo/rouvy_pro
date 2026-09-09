@@ -3,8 +3,19 @@ import 'package:flutter/material.dart';
 /// Botón de "Continuar con Google". Usa `OutlinedButton` (no el color de
 /// marca) porque Google exige no alterar su logo ni forzarlo a los colores
 /// primarios de la app — mismo criterio aplicado al de Apple.
+///
+/// Mismo widget en todas las plataformas: en Web, el flujo real es
+/// `FirebaseAuth.signInWithPopup` (ver `AuthRemoteDataSourceImpl`), que
+/// no necesita ningún botón/HtmlElementView oficial de Google incrustado
+/// en la página — el popup lo abre Firebase directamente al llamar
+/// `onPressed`.
 class GoogleSignInButton extends StatelessWidget {
-  const GoogleSignInButton({required this.label, required this.onPressed, this.isLoading = false, super.key});
+  const GoogleSignInButton({
+    required this.label,
+    required this.onPressed,
+    this.isLoading = false,
+    super.key,
+  });
 
   final String label;
   final VoidCallback? onPressed;
