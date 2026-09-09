@@ -8,6 +8,7 @@ import '../../../../core/ble/ble_uuids.dart';
 import '../../../../core/error/exceptions.dart';
 import '../../domain/entities/device_connection_status.dart';
 import '../../domain/entities/sport_device_type.dart';
+import '../../domain/entities/telemetry_source.dart';
 import '../../domain/entities/telemetry_snapshot.dart';
 import 'known_devices_local_datasource.dart';
 import '../models/ble_device_model.dart';
@@ -155,6 +156,8 @@ class BleDataSourceImpl implements BleDataSource {
   @override
   Future<void> connect(String deviceId) async {
     final _DeviceSession session = _sessionFor(deviceId);
+    session.cyclingPowerParser.reset();
+    session.cscParser.reset();
     _updateStatus(deviceId, DeviceConnectionStatus.connecting);
 
     final BluetoothDevice device = session.bluetoothDevice ?? BluetoothDevice.fromId(deviceId);
@@ -218,6 +221,7 @@ class BleDataSourceImpl implements BleDataSource {
           _emitTelemetry(
             session,
             deviceId,
+            source: TelemetrySourceKind.ftms,
             speedKmh: data.speedKmh,
             powerWatts: data.powerWatts,
             cadenceRpm: data.cadenceRpm,
@@ -230,7 +234,13 @@ class BleDataSourceImpl implements BleDataSource {
         await _subscribeCharacteristic(session, service, BleUuids.cyclingPowerMeasurement, (List<int> bytes) {
           final CyclingPowerReading? reading = session.cyclingPowerParser.parse(_asUint8List(bytes));
           if (reading != null) {
-            _emitTelemetry(session, deviceId, powerWatts: reading.powerWatts, cadenceRpm: reading.cadenceRpm);
+            _emitTelemetry(
+              session,
+              deviceId,
+              source: TelemetrySourceKind.cyclingPower,
+              powerWatts: reading.powerWatts,
+              cadenceRpm: reading.cadenceRpm,
+            );
           }
         });
       }
@@ -238,14 +248,27 @@ class BleDataSourceImpl implements BleDataSource {
       if (serviceUuid == BleUuids.cyclingSpeedCadence) {
         await _subscribeCharacteristic(session, service, BleUuids.cscMeasurement, (List<int> bytes) {
           final CscReading reading = session.cscParser.parse(_asUint8List(bytes));
-          _emitTelemetry(session, deviceId, speedKmh: reading.speedKmh, cadenceRpm: reading.cadenceRpm);
+          _emitTelemetry(
+            session,
+            deviceId,
+            source: TelemetrySourceKind.csc,
+            speedKmh: reading.speedKmh,
+            cadenceRpm: reading.cadenceRpm,
+          );
         });
       }
 
       if (serviceUuid == BleUuids.heartRate) {
         await _subscribeCharacteristic(session, service, BleUuids.heartRateMeasurement, (List<int> bytes) {
           final int? bpm = HeartRateParser.parseHeartRateMeasurement(_asUint8List(bytes));
-          if (bpm != null) _emitTelemetry(session, deviceId, heartRateBpm: bpm);
+          if (bpm != null) {
+            _emitTelemetry(
+              session,
+              deviceId,
+              source: TelemetrySourceKind.heartRate,
+              heartRateBpm: bpm,
+            );
+          }
         });
       }
 
@@ -287,6 +310,7 @@ class BleDataSourceImpl implements BleDataSource {
   void _emitTelemetry(
     _DeviceSession session,
     String deviceId, {
+    required TelemetrySourceKind source,
     double? speedKmh,
     int? powerWatts,
     int? cadenceRpm,
@@ -295,6 +319,7 @@ class BleDataSourceImpl implements BleDataSource {
     session.telemetryController.add(
       TelemetrySnapshot(
         deviceId: deviceId,
+        source: source,
         timestamp: DateTime.now(),
         speedKmh: speedKmh,
         powerWatts: powerWatts,
@@ -322,6 +347,8 @@ class BleDataSourceImpl implements BleDataSource {
     _emitConnectedDevices();
 
     await session.bluetoothDevice?.disconnect();
+    session.cyclingPowerParser.reset();
+    session.cscParser.reset();
     session.disposeSubscriptions();
   }
 

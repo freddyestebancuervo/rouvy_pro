@@ -420,7 +420,10 @@ antes de afirmar compatibilidad confirmada dispositivo por dispositivo.
   señal inesperada.
 - `domain/services/telemetry_aggregator.dart` — fusiona snapshots de
   varios dispositivos en una sola vista para el futuro HUD de
-  entrenamiento (M2), integrando distancia y calorías en el tiempo.
+  entrenamiento (M2). La implementación actual ya normaliza `source`
+  por lectura, conserva metadata de origen/frescura por métrica y aplica
+  arbitraje determinista con expiración y fallback al integrar distancia
+  y calorías en el tiempo.
 - `presentation/pages/device_management_page.dart` — pantalla accesible
   desde Perfil → Dispositivos conectados.
 

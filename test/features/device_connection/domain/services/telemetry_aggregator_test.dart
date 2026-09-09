@@ -1,6 +1,7 @@
 import 'package:flutter_test/flutter_test.dart';
 import 'package:rouvy_pro/features/device_connection/domain/entities/aggregated_telemetry.dart';
 import 'package:rouvy_pro/features/device_connection/domain/entities/telemetry_snapshot.dart';
+import 'package:rouvy_pro/features/device_connection/domain/entities/telemetry_source.dart';
 import 'package:rouvy_pro/features/device_connection/domain/services/telemetry_aggregator.dart';
 
 void main() {
@@ -10,7 +11,14 @@ void main() {
       final DateTime t0 = DateTime(2026, 1, 1, 12, 0, 0);
 
       final AggregatedTelemetry result = aggregator.ingest(
-        TelemetrySnapshot(deviceId: 'trainer-1', timestamp: t0, speedKmh: 30, powerWatts: 200, cadenceRpm: 90),
+        TelemetrySnapshot(
+          deviceId: 'trainer-1',
+          source: TelemetrySourceKind.ftms,
+          timestamp: t0,
+          speedKmh: 30,
+          powerWatts: 200,
+          cadenceRpm: 90,
+        ),
       );
 
       expect(result.speedKmh, 30);
@@ -24,13 +32,20 @@ void main() {
       final DateTime t0 = DateTime(2026, 1, 1, 12, 0, 0);
 
       aggregator.ingest(
-        TelemetrySnapshot(deviceId: 'trainer-1', timestamp: t0, speedKmh: 36, powerWatts: 200),
+        TelemetrySnapshot(
+          deviceId: 'trainer-1',
+          source: TelemetrySourceKind.ftms,
+          timestamp: t0,
+          speedKmh: 36,
+          powerWatts: 200,
+        ),
       );
 
       // 10 segundos después, misma velocidad/potencia sostenida.
       final AggregatedTelemetry result = aggregator.ingest(
         TelemetrySnapshot(
           deviceId: 'trainer-1',
+          source: TelemetrySourceKind.ftms,
           timestamp: t0.add(const Duration(seconds: 10)),
           speedKmh: 36,
           powerWatts: 200,
@@ -49,7 +64,13 @@ void main() {
 
       // Rodillo aporta velocidad y potencia.
       aggregator.ingest(
-        TelemetrySnapshot(deviceId: 'trainer-1', timestamp: t0, speedKmh: 28, powerWatts: 180),
+        TelemetrySnapshot(
+          deviceId: 'trainer-1',
+          source: TelemetrySourceKind.ftms,
+          timestamp: t0,
+          speedKmh: 28,
+          powerWatts: 180,
+        ),
       );
 
       // Pulsómetro, un segundo después, solo aporta FC — no debe borrar
@@ -57,6 +78,7 @@ void main() {
       final AggregatedTelemetry result = aggregator.ingest(
         TelemetrySnapshot(
           deviceId: 'hr-1',
+          source: TelemetrySourceKind.heartRate,
           timestamp: t0.add(const Duration(seconds: 1)),
           heartRateBpm: 145,
         ),
@@ -67,13 +89,227 @@ void main() {
       expect(result.powerWatts, 180);
     });
 
+    test('prioriza la fuente de mayor peso para la misma métrica', () {
+      final TelemetryAggregator aggregator = TelemetryAggregator();
+      final DateTime t0 = DateTime(2026, 1, 1, 12, 0, 0);
+
+      aggregator.ingest(
+        TelemetrySnapshot(
+          deviceId: 'trainer-ftms',
+          source: TelemetrySourceKind.ftms,
+          timestamp: t0,
+          speedKmh: 31,
+          powerWatts: 185,
+        ),
+      );
+
+      final AggregatedTelemetry result = aggregator.ingest(
+        TelemetrySnapshot(
+          deviceId: 'trainer-powermeter',
+          source: TelemetrySourceKind.cyclingPower,
+          timestamp: t0.add(const Duration(seconds: 1)),
+          powerWatts: 220,
+        ),
+      );
+
+      expect(result.speedKmh, 31);
+      expect(result.powerWatts, 220);
+      expect(result.powerSource, TelemetrySourceKind.cyclingPower);
+    });
+
+    test('expira métricas viejas y permite fallback cuando la fuente principal caduca', () {
+      final TelemetryAggregator aggregator = TelemetryAggregator();
+      final DateTime t0 = DateTime(2026, 1, 1, 12, 0, 0);
+
+      aggregator.ingest(
+        TelemetrySnapshot(
+          deviceId: 'trainer-ftms',
+          source: TelemetrySourceKind.ftms,
+          timestamp: t0,
+          speedKmh: 34,
+          powerWatts: 190,
+        ),
+      );
+
+      final AggregatedTelemetry result = aggregator.ingest(
+        TelemetrySnapshot(
+          deviceId: 'sensor-csc',
+          source: TelemetrySourceKind.csc,
+          timestamp: t0.add(const Duration(seconds: 4)),
+          speedKmh: 29,
+          cadenceRpm: 92,
+        ),
+      );
+
+      expect(result.speedKmh, 29);
+      expect(result.speedSource, TelemetrySourceKind.csc);
+      expect(result.powerWatts, 0);
+    });
+
+    test('la fuente preferida puede recuperarse cuando vuelve a emitir una lectura fresca', () {
+      final TelemetryAggregator aggregator = TelemetryAggregator();
+      final DateTime t0 = DateTime(2026, 1, 1, 12, 0, 0);
+
+      aggregator.ingest(
+        TelemetrySnapshot(
+          deviceId: 'trainer-ftms',
+          source: TelemetrySourceKind.ftms,
+          timestamp: t0,
+          speedKmh: 33,
+          powerWatts: 185,
+        ),
+      );
+      aggregator.ingest(
+        TelemetrySnapshot(
+          deviceId: 'sensor-csc',
+          source: TelemetrySourceKind.csc,
+          timestamp: t0.add(const Duration(seconds: 4)),
+          speedKmh: 29,
+          cadenceRpm: 92,
+        ),
+      );
+
+      final AggregatedTelemetry result = aggregator.ingest(
+        TelemetrySnapshot(
+          deviceId: 'trainer-ftms',
+          source: TelemetrySourceKind.ftms,
+          timestamp: t0.add(const Duration(seconds: 5)),
+          speedKmh: 35,
+          powerWatts: 190,
+        ),
+      );
+
+      expect(result.speedKmh, 35);
+      expect(result.speedSource, TelemetrySourceKind.ftms);
+    });
+
+    test('ignora lecturas fuera de orden y con timestamp duplicado sin retroceder distancia', () {
+      final TelemetryAggregator aggregator = TelemetryAggregator();
+      final DateTime t0 = DateTime(2026, 1, 1, 12, 0, 0);
+
+      aggregator.ingest(
+        TelemetrySnapshot(
+          deviceId: 'trainer-1',
+          source: TelemetrySourceKind.ftms,
+          timestamp: t0,
+          speedKmh: 30,
+          powerWatts: 200,
+        ),
+      );
+      final AggregatedTelemetry forward = aggregator.ingest(
+        TelemetrySnapshot(
+          deviceId: 'trainer-1',
+          source: TelemetrySourceKind.ftms,
+          timestamp: t0.add(const Duration(seconds: 8)),
+          speedKmh: 30,
+          powerWatts: 200,
+        ),
+      );
+      final AggregatedTelemetry outOfOrder = aggregator.ingest(
+        TelemetrySnapshot(
+          deviceId: 'trainer-1',
+          source: TelemetrySourceKind.ftms,
+          timestamp: t0.add(const Duration(seconds: 3)),
+          speedKmh: 40,
+          powerWatts: 250,
+        ),
+      );
+      final AggregatedTelemetry duplicate = aggregator.ingest(
+        TelemetrySnapshot(
+          deviceId: 'trainer-1',
+          source: TelemetrySourceKind.ftms,
+          timestamp: t0.add(const Duration(seconds: 3)),
+          speedKmh: 41,
+          powerWatts: 255,
+        ),
+      );
+
+      expect(forward.distanceMeters, greaterThan(0));
+      expect(outOfOrder.distanceMeters, closeTo(forward.distanceMeters, 0.01));
+      expect(duplicate.distanceMeters, closeTo(forward.distanceMeters, 0.01));
+      expect(outOfOrder.speedKmh, 30);
+      expect(duplicate.powerWatts, 200);
+    });
+
+    test('un hueco largo no integra distancia ni calorías para evitar saltos regresivos', () {
+      final TelemetryAggregator aggregator = TelemetryAggregator();
+      final DateTime t0 = DateTime(2026, 1, 1, 12, 0, 0);
+
+      aggregator.ingest(
+        TelemetrySnapshot(
+          deviceId: 'trainer-1',
+          source: TelemetrySourceKind.ftms,
+          timestamp: t0,
+          speedKmh: 32,
+          powerWatts: 210,
+        ),
+      );
+
+      final AggregatedTelemetry result = aggregator.ingest(
+        TelemetrySnapshot(
+          deviceId: 'trainer-1',
+          source: TelemetrySourceKind.ftms,
+          timestamp: t0.add(const Duration(seconds: 15)),
+          speedKmh: 32,
+          powerWatts: 210,
+        ),
+      );
+
+      expect(result.distanceMeters, 0);
+      expect(result.caloriesKcal, 0);
+    });
+
+    test('removeSource() limpia la telemetría de un dispositivo desconectado', () {
+      final TelemetryAggregator aggregator = TelemetryAggregator();
+      final DateTime t0 = DateTime(2026, 1, 1, 12, 0, 0);
+
+      aggregator.ingest(
+        TelemetrySnapshot(
+          deviceId: 'trainer-1',
+          source: TelemetrySourceKind.ftms,
+          timestamp: t0,
+          speedKmh: 32,
+          powerWatts: 210,
+          cadenceRpm: 88,
+        ),
+      );
+      aggregator.ingest(
+        TelemetrySnapshot(
+          deviceId: 'hr-1',
+          source: TelemetrySourceKind.heartRate,
+          timestamp: t0.add(const Duration(seconds: 1)),
+          heartRateBpm: 146,
+        ),
+      );
+
+      aggregator.removeSource('trainer-1');
+
+      expect(aggregator.currentState.speedKmh, 0);
+      expect(aggregator.currentState.powerWatts, 0);
+      expect(aggregator.currentState.cadenceRpm, 0);
+      expect(aggregator.currentState.heartRateBpm, 146);
+    });
+
     test('reset() vuelve el estado a cero para empezar una nueva sesión', () {
       final TelemetryAggregator aggregator = TelemetryAggregator();
       final DateTime t0 = DateTime(2026, 1, 1, 12, 0, 0);
 
-      aggregator.ingest(TelemetrySnapshot(deviceId: 'trainer-1', timestamp: t0, speedKmh: 30, powerWatts: 200));
       aggregator.ingest(
-        TelemetrySnapshot(deviceId: 'trainer-1', timestamp: t0.add(const Duration(seconds: 5)), speedKmh: 30),
+        TelemetrySnapshot(
+          deviceId: 'trainer-1',
+          source: TelemetrySourceKind.ftms,
+          timestamp: t0,
+          speedKmh: 30,
+          powerWatts: 200,
+        ),
+      );
+      aggregator.ingest(
+        TelemetrySnapshot(
+          deviceId: 'trainer-1',
+          source: TelemetrySourceKind.ftms,
+          timestamp: t0.add(const Duration(seconds: 5)),
+          speedKmh: 30,
+        ),
       );
 
       aggregator.reset();
@@ -89,10 +325,19 @@ void main() {
       expect(aggregator.currentState.caloriesKcal, 120);
 
       final DateTime t0 = DateTime(2026, 1, 1, 12, 0, 0);
-      aggregator.ingest(TelemetrySnapshot(deviceId: 'trainer-1', timestamp: t0, speedKmh: 36, powerWatts: 200));
+      aggregator.ingest(
+        TelemetrySnapshot(
+          deviceId: 'trainer-1',
+          source: TelemetrySourceKind.ftms,
+          timestamp: t0,
+          speedKmh: 36,
+          powerWatts: 200,
+        ),
+      );
       final AggregatedTelemetry result = aggregator.ingest(
         TelemetrySnapshot(
           deviceId: 'trainer-1',
+          source: TelemetrySourceKind.ftms,
           timestamp: t0.add(const Duration(seconds: 10)),
           speedKmh: 36,
           powerWatts: 200,
