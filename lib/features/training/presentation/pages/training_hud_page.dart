@@ -3,6 +3,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
 import '../../../../app/router/app_router.dart';
+import '../../../../app/theme/app_typography.dart';
 import '../../../../core/utils/duration_formatter.dart';
 import '../../../../l10n/generated/app_localizations.dart';
 import '../../../device_connection/domain/entities/aggregated_telemetry.dart';
@@ -322,22 +323,26 @@ class _TrainingHudPageState extends ConsumerState<TrainingHudPage> {
                               label: l10n.metricSpeedLabel,
                               value: t.speedKmh.toStringAsFixed(1),
                               unit: 'km/h',
+                              valueStyle: AppTypography.metricLarge,
                             ),
                             MetricDisplay(
                               label: l10n.metricPowerLabel,
                               value: t.powerWatts.toString(),
                               unit: 'W',
+                              valueStyle: AppTypography.metricLarge,
                             ),
                             MetricDisplay(
                               label: l10n.metricCadenceLabel,
                               value: t.cadenceRpm.toString(),
                               unit: 'rpm',
+                              valueStyle: AppTypography.metricMedium,
                             ),
                             MetricDisplay(
                               label: l10n.metricHeartRateLabel,
                               value: t.heartRateBpm?.toString() ?? '--',
                               unit: 'bpm',
                               color: t.heartRateBpm != null ? Colors.redAccent : null,
+                              valueStyle: AppTypography.metricMedium,
                             ),
                           ],
                         ),

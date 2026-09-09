@@ -3,6 +3,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
 import '../../../../app/router/app_router.dart';
+import '../../../../core/widgets/error_state_view.dart';
 import '../../../../l10n/generated/app_localizations.dart';
 import '../../../auth/domain/entities/user_entity.dart';
 import '../../../auth/presentation/providers/auth_providers.dart';
@@ -45,8 +46,10 @@ class HomePage extends ConsumerWidget {
       ),
       body: authState.when(
         loading: () => const Center(child: CircularProgressIndicator()),
-        error: (Object error, StackTrace stackTrace) =>
-            Center(child: Text(l10n.genericErrorMessage)),
+        error: (Object error, StackTrace stackTrace) => ErrorStateView(
+          message: l10n.genericErrorMessage,
+          onRetry: () => ref.invalidate(authStateProvider),
+        ),
         data: (UserEntity? user) {
           final String name = (user?.displayName.isNotEmpty ?? false)
               ? user!.displayName

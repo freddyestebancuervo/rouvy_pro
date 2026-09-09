@@ -120,19 +120,25 @@ class _SessionSummaryPageState extends ConsumerState<SessionSummaryPage> {
                     child: Padding(
                       padding: const EdgeInsets.all(20),
                       child: Row(
-                        mainAxisAlignment: MainAxisAlignment.spaceAround,
+                        crossAxisAlignment: CrossAxisAlignment.start,
                         children: <Widget>[
-                          _SummaryStat(
-                            label: l10n.metricTimeLabel,
-                            value: DurationFormatter.format(summary.duration),
+                          Expanded(
+                            child: _SummaryStat(
+                              label: l10n.metricTimeLabel,
+                              value: DurationFormatter.format(summary.duration),
+                            ),
                           ),
-                          _SummaryStat(
-                            label: l10n.metricDistanceLabel,
-                            value: '${(telemetry.distanceMeters / 1000).toStringAsFixed(2)} km',
+                          Expanded(
+                            child: _SummaryStat(
+                              label: l10n.metricDistanceLabel,
+                              value: '${(telemetry.distanceMeters / 1000).toStringAsFixed(2)} km',
+                            ),
                           ),
-                          _SummaryStat(
-                            label: l10n.metricCaloriesLabel,
-                            value: '${telemetry.caloriesKcal.round()} kcal',
+                          Expanded(
+                            child: _SummaryStat(
+                              label: l10n.metricCaloriesLabel,
+                              value: '${telemetry.caloriesKcal.round()} kcal',
+                            ),
                           ),
                         ],
                       ),
@@ -202,9 +208,21 @@ class _SummaryStat extends StatelessWidget {
   Widget build(BuildContext context) {
     return Column(
       children: <Widget>[
-        Text(value, style: Theme.of(context).textTheme.headlineSmall?.copyWith(fontWeight: FontWeight.w700)),
+        Text(
+          value,
+          textAlign: TextAlign.center,
+          maxLines: 1,
+          overflow: TextOverflow.ellipsis,
+          style: Theme.of(context).textTheme.headlineSmall?.copyWith(fontWeight: FontWeight.w700),
+        ),
         const SizedBox(height: 4),
-        Text(label, style: Theme.of(context).textTheme.bodySmall),
+        Text(
+          label,
+          textAlign: TextAlign.center,
+          maxLines: 1,
+          overflow: TextOverflow.ellipsis,
+          style: Theme.of(context).textTheme.bodySmall,
+        ),
       ],
     );
   }
