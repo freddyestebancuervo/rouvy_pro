@@ -44,10 +44,10 @@ jobs:
           echo "=== dispositivos iPhone disponibles ==="
           xcrun simctl list devices available | grep -E "^-- iOS|iPhone" || echo "Ningun simulador de iPhone disponible en este runner"
 
-      - name: Set up Flutter 3.32.0
+      - name: Set up Flutter 3.44.7
         uses: subosito/flutter-action@v2
         with:
-          flutter-version: '3.32.0'
+          flutter-version: '3.44.7'
           channel: stable
 
       - name: Flutter doctor
