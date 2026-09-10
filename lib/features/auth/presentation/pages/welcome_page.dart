@@ -268,6 +268,15 @@ class _DesktopWelcomeContent extends StatelessWidget {
   /// suficiente para los 550 del CTA con margen.
   static const double _contentMaxWidth = 680;
 
+  /// KORIXA-SCREEN01-CENTER-PAGE-INDICATORS-20260910: ancho real del CTA
+  /// (ver `welcome-desktop-cta` más abajo) — el indicador de 3 barras
+  /// comparte esta misma constante para quedar centrado horizontalmente
+  /// respecto al botón (el dueño reportó el indicador pegado a la
+  /// izquierda de la columna, sin relación visual con el CTA). Una sola
+  /// fuente de verdad evita que ambos anchos diverjan si el CTA cambia
+  /// de tamaño en el futuro.
+  static const double _ctaWidth = 550;
+
   /// KORIXA-SCREEN01-RESPONSIVE-LOGO-QUALITY-FIX-20260907: el alto del
   /// logo quedó fijo en 188 (ver más abajo) — la calidad de marca nunca
   /// debe reducirse por falta de alto. El lever real para alto reducido
@@ -422,7 +431,20 @@ class _DesktopWelcomeContent extends StatelessWidget {
                     // Puramente visual (ver [_DesktopOnboardingIndicator]):
                     // no hay swipe/navegación real entre "páginas", solo
                     // la primera barra activa.
-                    const _DesktopOnboardingIndicator(),
+                    //
+                    // KORIXA-SCREEN01-CENTER-PAGE-INDICATORS-20260910: la
+                    // columna usa `crossAxisAlignment.start`, así que el
+                    // indicador (mucho más angosto que el CTA) quedaba
+                    // pegado al borde izquierdo en vez de centrado sobre
+                    // el botón — el dueño pidió que comparta el mismo
+                    // centro horizontal que "Comenzar". `SizedBox(width:
+                    // _ctaWidth)` + `Center` (estructural, sin offsets
+                    // fijos) fuerza al indicador al mismo ancho que el
+                    // CTA para que ambos compartan centro.
+                    const SizedBox(
+                      width: _ctaWidth,
+                      child: Center(child: _DesktopOnboardingIndicator()),
+                    ),
                     SizedBox(height: _desktopSectionGap(viewport)),
                     // CTA "desktop-appropriate": ancho subido a 550 y alto
                     // a 64 (KORIXA-UI-SCREEN01-CRISP-LOGO-TEXT-CTA-20260905,
@@ -436,7 +458,7 @@ class _DesktopWelcomeContent extends StatelessWidget {
                     // del bloque de contenido (680).
                     SizedBox(
                       key: const Key('welcome-desktop-cta'),
-                      width: 550,
+                      width: _ctaWidth,
                       child: PrimaryGradientButton(
                         label: l10n.welcomeGetStarted,
                         // KORIXA-WELCOME-SINGLE-CTA-NAVIGATION-PR127-
@@ -509,6 +531,11 @@ class _PhoneLandscapeWelcomeContent extends StatelessWidget {
     return LayoutBuilder(
       builder: (BuildContext context, BoxConstraints constraints) {
         final double contentMaxWidth = _contentWidthFor(constraints.maxWidth);
+        // KORIXA-SCREEN01-CENTER-PAGE-INDICATORS-20260910: mismo ancho
+        // que usa el CTA de abajo (`welcome-landscape-cta`) — una sola
+        // fuente de verdad para que el indicador y el botón compartan
+        // centro horizontal exacto sin duplicar la fórmula.
+        final double ctaWidth = (contentMaxWidth - 2 * AppSpacing.md) * 0.90;
 
         return Stack(
           fit: StackFit.expand,
@@ -571,24 +598,42 @@ class _PhoneLandscapeWelcomeContent extends StatelessWidget {
                           style: textTheme.bodyLarge?.copyWith(color: DarkTech.textSecondary),
                         ),
                         const SizedBox(height: AppSpacing.md),
-                        const _PhoneLandscapeOnboardingIndicator(),
+                        // KORIXA-SCREEN01-CENTER-PAGE-INDICATORS-20260910:
+                        // antes el indicador quedaba estirado a lo ancho
+                        // completo de la columna (`crossAxisAlignment.
+                        // stretch`) con sus barras pegadas a la izquierda
+                        // — el CTA de abajo, en cambio, es más angosto
+                        // que la columna (`ctaWidth`, 90% del contenido).
+                        // Mismo patrón que en desktop: se envuelve en un
+                        // `SizedBox` del ancho EXACTO del CTA + `Align`
+                        // al mismo borde izquierdo, luego `Center` adentro
+                        // — así ambos comparten centro horizontal real.
+                        Align(
+                          alignment: Alignment.centerLeft,
+                          child: SizedBox(
+                            width: ctaWidth,
+                            child: const Center(child: _PhoneLandscapeOnboardingIndicator()),
+                          ),
+                        ),
                         const SizedBox(height: AppSpacing.md),
                         // KORIXA-SCREEN01-LANDSCAPE-CTA-MICRO-REDUCTION-
                         // 20260906: el dueño pidió el CTA "un poco menos
                         // dominante" — 10% más angosto que el ancho que
                         // stretch le daba antes (el mismo ancho que
-                        // título/subtítulo/indicador, que NO cambian).
-                        // `Align` en vez de dejar que el `Column`
+                        // título/subtítulo, que NO cambian — el indicador
+                        // comparte `ctaWidth` con el CTA desde KORIXA-
+                        // SCREEN01-CENTER-PAGE-INDICATORS-20260910, ver
+                        // arriba). `Align` en vez de dejar que el `Column`
                         // (`crossAxisAlignment.stretch`) lo estire: solo
-                        // el CTA se saca de ese comportamiento, todo lo
-                        // demás sigue ocupando el ancho completo de la
-                        // columna exactamente igual que antes. Alto sin
-                        // cambios (56, dentro del rango 52-58 pedido) —
-                        // el encargo pide reducir SOLO el ancho.
+                        // el CTA se saca de ese comportamiento, título y
+                        // subtítulo siguen ocupando el ancho completo de
+                        // la columna exactamente igual que antes. Alto
+                        // sin cambios (56, dentro del rango 52-58 pedido)
+                        // — el encargo pide reducir SOLO el ancho.
                         Align(
                           alignment: Alignment.centerLeft,
                           child: SizedBox(
-                            width: (contentMaxWidth - 2 * AppSpacing.md) * 0.90,
+                            width: ctaWidth,
                             child: PrimaryGradientButton(
                               key: const Key('welcome-landscape-cta'),
                               label: l10n.welcomeGetStarted,
