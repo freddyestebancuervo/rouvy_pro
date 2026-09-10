@@ -398,8 +398,8 @@ app.
 
 Escaneo, emparejamiento, reconexión automática y lectura en tiempo real de
 rodillos inteligentes, medidores de potencia, sensores de cadencia/velocidad
-y pulsómetros, implementado contra los **estándares BLE**. PR #138 introduce
-la Fase A de Device Adapter: `BleDataSourceImpl` sigue siendo dueño de
+y pulsómetros, implementado contra los **estándares BLE**. PR #138 fusionó
+la Fase A de Device Adapter en `main`: `BleDataSourceImpl` sigue siendo dueño de
 discovery, conexión/desconexión, service discovery, suscripciones,
 reconexión, batería y orquestación de sesiones; `StandardBleDeviceAdapterResolver`
 resuelve de forma determinista los adapters estándar compatibles.

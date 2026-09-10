@@ -1,7 +1,7 @@
 # ADR-0008: BLE Protocol Device Adapters
 
 - **Fecha:** 2026-09-09
-- **Estado:** Aceptado en PR #138, pendiente de merge humano
+- **Estado:** Aceptado y fusionado en `main` por PR #138 (`bdd40fecd158120454607ad6526e5859a1ef7679`)
 - **Tarea:** `T-NEW.3` — Device Adapter Phase A, core estándar BLE
 
 ## Contexto
