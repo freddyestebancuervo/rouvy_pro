@@ -90,7 +90,7 @@ flutter test
 ## Flujo de pantallas y protección de rutas
 
 ```
-Sin sesión ──► Welcome ──► Login / Registro / Recuperar contraseña
+Sin sesión ──► Welcome ──► Login ──► Registro / Recuperar contraseña
                               │
                     (login o registro exitoso)
                               │
