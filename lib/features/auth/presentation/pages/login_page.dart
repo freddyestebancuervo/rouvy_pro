@@ -106,6 +106,27 @@ class _LoginPageState extends ConsumerState<LoginPage> {
 
   static bool _isPhoneLandscape(KorixaViewportInfo viewport) => viewport.isLandscape && !viewport.canFitWideLayout();
 
+  // -------------------------------------------------------------------
+  // KORIXA-SCREEN02-LOGIN-MATCH-SCREEN01-DESKTOP-SCALE-20260910: el dueño
+  // reportó que, tras quitar el panel de vidrio, el contenido de Login se
+  // veía "como un formulario chico flotando en la esquina de un paisaje
+  // enorme" — pidió explícitamente igualar la escala visual ya aprobada
+  // de SCREEN_01 Welcome en desktop, no una escala nueva inventada. Estos
+  // 6 valores son una copia EXACTA de las constantes/literales ya
+  // vigentes en `WelcomePage._DesktopWelcomeContent`
+  // (`_contentMaxWidth`/`_ctaWidth`/altura de `welcome-desktop-cta`/altura
+  // de `welcome-desktop-logo`/`fontSize` de título y subtítulo de
+  // escritorio) — ver ese archivo para el razonamiento original de cada
+  // número. Solo aplican a `_buildDesktop`; phone landscape y mobile
+  // portrait no cambian.
+  static const double _desktopContentMaxWidth = 680;
+  static const double _desktopControlWidth = 550;
+  static const double _desktopCtaHeight = 64;
+  static const double _desktopCtaFontSize = 20;
+  static const double _desktopLogoHeight = 188;
+  static const double _desktopTitleFontSize = 51;
+  static const double _desktopSubtitleFontSize = 24;
+
   @override
   Widget build(BuildContext context) {
     final AppLocalizations l10n = AppLocalizations.of(context);
@@ -321,7 +342,8 @@ class _LoginPageState extends ConsumerState<LoginPage> {
             child: Padding(
               padding: const EdgeInsets.all(AppSpacing.xxxl),
               child: ConstrainedBox(
-                constraints: const BoxConstraints(maxWidth: 420),
+                key: const Key('login-desktop-content-max-width'),
+                constraints: const BoxConstraints(maxWidth: _desktopContentMaxWidth),
                 child: SingleChildScrollView(
                   child: _buildFormColumn(
                     context: context,
@@ -330,10 +352,15 @@ class _LoginPageState extends ConsumerState<LoginPage> {
                     socialState: socialState,
                     anyLoading: anyLoading,
                     logoAsset: 'assets/icons/korixa_logo_desktop.png',
-                    logoHeight: 56,
+                    logoHeight: _desktopLogoHeight,
                     compact: false,
                     highQualityLogo: true,
                     floatingOverPhoto: true,
+                    controlWidth: _desktopControlWidth,
+                    titleFontSize: _desktopTitleFontSize,
+                    subtitleFontSize: _desktopSubtitleFontSize,
+                    ctaHeight: _desktopCtaHeight,
+                    ctaFontSize: _desktopCtaFontSize,
                   ),
                 ),
               ),
@@ -370,6 +397,22 @@ class _LoginPageState extends ConsumerState<LoginPage> {
     // formulario sigue sobre un fondo Dark Tech sólido, donde una sombra
     // no tendría ningún efecto visible ni sentido.
     bool floatingOverPhoto = false,
+    // KORIXA-SCREEN02-LOGIN-MATCH-SCREEN01-DESKTOP-SCALE-20260910: `null`
+    // (portrait/landscape, sin cambios) conserva el único `Column` con
+    // `crossAxisAlignment.stretch` de siempre — logo/título/subtítulo y
+    // los controles comparten el mismo ancho completo, exactamente como
+    // antes de esta tarea. Cuando no es `null` (solo desktop, 550).
+    // logo/título/subtítulo dejan de estirarse al ancho completo del
+    // bloque exterior (`crossAxisAlignment.end`, igual que
+    // `WelcomePage._DesktopWelcomeContent`) y los controles interactivos
+    // (campos, CTA, divisor, Google/Apple, enlaces) quedan envueltos en
+    // un `SizedBox` de este ancho — la misma jerarquía "región exterior
+    // ancha / control angosto" ya aprobada en SCREEN_01.
+    double? controlWidth,
+    double? titleFontSize,
+    double? subtitleFontSize,
+    double? ctaHeight,
+    double? ctaFontSize,
   }) {
     final TextTheme textTheme = Theme.of(context).textTheme;
     final double sectionGap = compact ? AppSpacing.sm : AppSpacing.xl;
@@ -378,153 +421,200 @@ class _LoginPageState extends ConsumerState<LoginPage> {
         ? <Shadow>[Shadow(color: Colors.black.withValues(alpha: 0.65), blurRadius: 10)]
         : null;
 
-    return Form(
-      key: _formKey,
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        mainAxisSize: MainAxisSize.min,
+    // KORIXA-SCREEN02-LOGIN-VISUAL-IMPLEMENTATION-20260907: branding
+    // Korixa — antes esta pantalla no tenía NINGÚN logo (auditoría
+    // KORIXA-SCREEN02-LOGIN-BASELINE-AUDIT-20260906, hallazgo P0). Mismos
+    // archivos ya aprobados que usa/usaba Welcome (`korixa_logo.png`
+    // mobile/landscape, `korixa_logo_desktop.png` desktop) — ningún logo
+    // nuevo.
+    // KORIXA-SCREEN02-LOGIN-DESKTOP-POLISH-LOGO-PANEL-20260907: en
+    // desktop el logo se decodificaba al tamaño lógico completo del
+    // asset (927px de alto) y se reducía a solo 56px vía el filtro de
+    // baja calidad por defecto de `Image` — visible como bordes dentados
+    // en el texto al hacer zoom sobre la captura. Decodificar directo al
+    // tamaño físico real (`cacheHeight` según devicePixelRatio) +
+    // `FilterQuality.high` da un resample nítido en vez de ese downscale
+    // en vivo. Solo aplica en desktop (`highQualityLogo`) —
+    // portrait/landscape quedan bit-a-bit iguales a como estaban (mismo
+    // asset, mismo tamaño, sin cambio).
+    final Widget logoWidget = Image.asset(
+      logoAsset,
+      height: logoHeight,
+      fit: BoxFit.contain,
+      filterQuality: highQualityLogo ? FilterQuality.high : FilterQuality.low,
+      cacheHeight: highQualityLogo ? (logoHeight * MediaQuery.of(context).devicePixelRatio).round() : null,
+      semanticLabel: 'Korixa',
+    );
+
+    final Widget titleWidget = Text(
+      l10n.loginTitle,
+      style: textTheme.headlineMedium?.copyWith(
+        fontSize: titleFontSize ?? (compact ? 22 : null),
+        // KORIXA-SCREEN02-LOGIN-MATCH-SCREEN01-DESKTOP-SCALE-20260910:
+        // mismo peso/tracking/interlineado que el título de escritorio de
+        // Welcome (`_DesktopWelcomeContent`) — solo aplica cuando se pide
+        // el tamaño grande de desktop (`titleFontSize` no nulo).
+        fontWeight: titleFontSize != null ? FontWeight.w800 : null,
+        letterSpacing: titleFontSize != null ? -0.5 : null,
+        height: titleFontSize != null ? 1.08 : null,
+        shadows: legibilityShadow,
+      ),
+    );
+
+    final Widget subtitleWidget = Text(
+      l10n.loginSubtitle,
+      style: textTheme.bodyMedium?.copyWith(
+        fontSize: subtitleFontSize,
+        color: DarkTech.textSecondary,
+        fontWeight: subtitleFontSize != null ? FontWeight.w500 : null,
+        shadows: legibilityShadow,
+      ),
+    );
+
+    final List<Widget> controlChildren = <Widget>[
+      TextFormField(
+        controller: _emailController,
+        keyboardType: TextInputType.emailAddress,
+        textInputAction: TextInputAction.next,
+        autofillHints: const <String>[AutofillHints.email],
+        decoration: InputDecoration(labelText: l10n.emailLabel),
+        validator: (String? value) => Validators.email(value).message(l10n),
+      ),
+      SizedBox(height: compact ? AppSpacing.sm : AppSpacing.base),
+      TextFormField(
+        controller: _passwordController,
+        obscureText: _obscurePassword,
+        textInputAction: TextInputAction.done,
+        autofillHints: const <String>[AutofillHints.password],
+        decoration: InputDecoration(
+          labelText: l10n.passwordLabel,
+          suffixIcon: Semantics(
+            // `toggled` anuncia al lector de pantalla el estado actual
+            // (mostrando/ocultando), no solo "botón" — sin esto,
+            // VoiceOver/TalkBack solo dirían "botón, doble toque para
+            // activar", sin que la persona sepa qué hace ni en qué
+            // estado está.
+            key: const Key('login-password-visibility-semantics'),
+            label: _obscurePassword ? l10n.showPasswordAction : l10n.hidePasswordAction,
+            toggled: !_obscurePassword,
+            child: IconButton(
+              tooltip: _obscurePassword ? l10n.showPasswordAction : l10n.hidePasswordAction,
+              icon: Icon(_obscurePassword ? Icons.visibility_outlined : Icons.visibility_off_outlined),
+              onPressed: () => setState(() => _obscurePassword = !_obscurePassword),
+            ),
+          ),
+        ),
+        onFieldSubmitted: (_) => _handleSubmit(),
+        // En login (a diferencia de registro) solo se exige que no esté
+        // vacío — no se re-valida la política de complejidad de una
+        // contraseña ya creada.
+        validator: (String? value) {
+          if (value == null || value.isEmpty) {
+            return ValidationError.passwordRequired.message(l10n);
+          }
+          return null;
+        },
+      ),
+      Align(
+        alignment: Alignment.centerRight,
+        child: TextButton(
+          onPressed: () => context.push(AppRoute.forgotPassword),
+          child: Text(l10n.forgotPasswordLink),
+        ),
+      ),
+      const SizedBox(height: AppSpacing.xs),
+      PrimaryGradientButton(
+        label: l10n.loginButton,
+        isLoading: loginState.isLoading,
+        onPressed: anyLoading ? null : _handleSubmit,
+        height: ctaHeight ?? 52,
+        fontSize: ctaFontSize,
+      ),
+      SizedBox(height: sectionGap),
+      Row(
         children: <Widget>[
-          // KORIXA-SCREEN02-LOGIN-VISUAL-IMPLEMENTATION-20260907: branding
-          // Korixa — antes esta pantalla no tenía NINGÚN logo (auditoría
-          // KORIXA-SCREEN02-LOGIN-BASELINE-AUDIT-20260906, hallazgo P0).
-          // Mismos archivos ya aprobados que usa/usaba Welcome
-          // (`korixa_logo.png` mobile/landscape, `korixa_logo_desktop.png`
-          // desktop) — ningún logo nuevo.
-          // KORIXA-SCREEN02-LOGIN-DESKTOP-POLISH-LOGO-PANEL-20260907: en
-          // desktop el logo se decodificaba al tamaño lógico completo del
-          // asset (927px de alto) y se reducía a solo 56px vía el filtro
-          // de baja calidad por defecto de `Image` — visible como bordes
-          // dentados en el texto al hacer zoom sobre la captura. Decodificar
-          // directo al tamaño físico real (`cacheHeight` según
-          // devicePixelRatio) + `FilterQuality.high` da un resample nítido
-          // en vez de ese downscale en vivo. Solo aplica en desktop
-          // (`highQualityLogo`) — portrait/landscape quedan bit-a-bit
-          // iguales a como estaban (mismo asset, mismo tamaño, sin cambio).
-          Image.asset(
-            logoAsset,
-            height: logoHeight,
-            fit: BoxFit.contain,
-            filterQuality: highQualityLogo ? FilterQuality.high : FilterQuality.low,
-            cacheHeight: highQualityLogo
-                ? (logoHeight * MediaQuery.of(context).devicePixelRatio).round()
-                : null,
-            semanticLabel: 'Korixa',
+          const Expanded(child: Divider()),
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: AppSpacing.md),
+            child: Text(l10n.orDividerText, style: textTheme.bodySmall),
           ),
-          SizedBox(height: compact ? AppSpacing.sm : AppSpacing.lg),
-          Text(
-            l10n.loginTitle,
-            style: textTheme.headlineMedium?.copyWith(fontSize: compact ? 22 : null, shadows: legibilityShadow),
-          ),
-          const SizedBox(height: AppSpacing.sm),
-          Text(
-            l10n.loginSubtitle,
-            style: textTheme.bodyMedium?.copyWith(color: DarkTech.textSecondary, shadows: legibilityShadow),
-          ),
-          SizedBox(height: sectionGap),
-          TextFormField(
-            controller: _emailController,
-            keyboardType: TextInputType.emailAddress,
-            textInputAction: TextInputAction.next,
-            autofillHints: const <String>[AutofillHints.email],
-            decoration: InputDecoration(labelText: l10n.emailLabel),
-            validator: (String? value) => Validators.email(value).message(l10n),
-          ),
-          SizedBox(height: compact ? AppSpacing.sm : AppSpacing.base),
-          TextFormField(
-            controller: _passwordController,
-            obscureText: _obscurePassword,
-            textInputAction: TextInputAction.done,
-            autofillHints: const <String>[AutofillHints.password],
-            decoration: InputDecoration(
-              labelText: l10n.passwordLabel,
-              suffixIcon: Semantics(
-                // `toggled` anuncia al lector de pantalla el estado
-                // actual (mostrando/ocultando), no solo "botón" — sin
-                // esto, VoiceOver/TalkBack solo dirían "botón, doble
-                // toque para activar", sin que la persona sepa qué hace
-                // ni en qué estado está.
-                key: const Key('login-password-visibility-semantics'),
-                label: _obscurePassword ? l10n.showPasswordAction : l10n.hidePasswordAction,
-                toggled: !_obscurePassword,
-                child: IconButton(
-                  tooltip: _obscurePassword ? l10n.showPasswordAction : l10n.hidePasswordAction,
-                  icon: Icon(_obscurePassword ? Icons.visibility_outlined : Icons.visibility_off_outlined),
-                  onPressed: () => setState(() => _obscurePassword = !_obscurePassword),
+          const Expanded(child: Divider()),
+        ],
+      ),
+      SizedBox(height: dividerGap),
+      GoogleSignInButton(
+        label: l10n.continueWithGoogle,
+        isLoading: socialState.isLoading,
+        onPressed: anyLoading
+            ? null
+            : () => _handleSocialSignIn(
+                  ref.read(socialAuthControllerProvider.notifier).signInWithGoogle,
                 ),
-              ),
-            ),
-            onFieldSubmitted: (_) => _handleSubmit(),
-            // En login (a diferencia de registro) solo se exige que no
-            // esté vacío — no se re-valida la política de complejidad de
-            // una contraseña ya creada.
-            validator: (String? value) {
-              if (value == null || value.isEmpty) {
-                return ValidationError.passwordRequired.message(l10n);
-              }
-              return null;
-            },
-          ),
-          Align(
-            alignment: Alignment.centerRight,
-            child: TextButton(
-              onPressed: () => context.push(AppRoute.forgotPassword),
-              child: Text(l10n.forgotPasswordLink),
-            ),
-          ),
-          const SizedBox(height: AppSpacing.xs),
-          PrimaryGradientButton(
-            label: l10n.loginButton,
-            isLoading: loginState.isLoading,
-            onPressed: anyLoading ? null : _handleSubmit,
-          ),
-          SizedBox(height: sectionGap),
-          Row(
-            children: <Widget>[
-              const Expanded(child: Divider()),
-              Padding(
-                padding: const EdgeInsets.symmetric(horizontal: AppSpacing.md),
-                child: Text(l10n.orDividerText, style: textTheme.bodySmall),
-              ),
-              const Expanded(child: Divider()),
-            ],
-          ),
-          SizedBox(height: dividerGap),
-          GoogleSignInButton(
-            label: l10n.continueWithGoogle,
-            isLoading: socialState.isLoading,
-            onPressed: anyLoading
-                ? null
-                : () => _handleSocialSignIn(
-                      ref.read(socialAuthControllerProvider.notifier).signInWithGoogle,
-                    ),
-          ),
-          if (_isApplePlatform) ...<Widget>[
-            const SizedBox(height: AppSpacing.md),
-            AppleSignInButton(
-              label: l10n.continueWithApple,
-              isLoading: socialState.isLoading,
-              onPressed: anyLoading
-                  ? null
-                  : () => _handleSocialSignIn(
-                        ref.read(socialAuthControllerProvider.notifier).signInWithApple,
-                      ),
-            ),
-          ],
-          SizedBox(height: sectionGap),
-          Wrap(
-            alignment: WrapAlignment.center,
-            crossAxisAlignment: WrapCrossAlignment.center,
-            children: <Widget>[
-              Text(l10n.noAccountText, style: TextStyle(shadows: legibilityShadow)),
-              TextButton(
-                onPressed: () => context.go(AppRoute.register),
-                child: Text(l10n.createAccountLink),
-              ),
-            ],
+      ),
+      if (_isApplePlatform) ...<Widget>[
+        const SizedBox(height: AppSpacing.md),
+        AppleSignInButton(
+          label: l10n.continueWithApple,
+          isLoading: socialState.isLoading,
+          onPressed: anyLoading
+              ? null
+              : () => _handleSocialSignIn(
+                    ref.read(socialAuthControllerProvider.notifier).signInWithApple,
+                  ),
+        ),
+      ],
+      SizedBox(height: sectionGap),
+      Wrap(
+        alignment: WrapAlignment.center,
+        crossAxisAlignment: WrapCrossAlignment.center,
+        children: <Widget>[
+          Text(l10n.noAccountText, style: TextStyle(shadows: legibilityShadow)),
+          TextButton(
+            onPressed: () => context.go(AppRoute.register),
+            child: Text(l10n.createAccountLink),
           ),
         ],
       ),
-    );
+    ];
+
+    final Widget content = controlWidth != null
+        ? Column(
+            key: const Key('login-desktop-content-group'),
+            crossAxisAlignment: CrossAxisAlignment.end,
+            mainAxisSize: MainAxisSize.min,
+            children: <Widget>[
+              logoWidget,
+              SizedBox(height: compact ? AppSpacing.sm : AppSpacing.lg),
+              titleWidget,
+              const SizedBox(height: AppSpacing.sm),
+              subtitleWidget,
+              SizedBox(height: sectionGap),
+              SizedBox(
+                key: const Key('login-desktop-control-width'),
+                width: controlWidth,
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  mainAxisSize: MainAxisSize.min,
+                  children: controlChildren,
+                ),
+              ),
+            ],
+          )
+        : Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            mainAxisSize: MainAxisSize.min,
+            children: <Widget>[
+              logoWidget,
+              SizedBox(height: compact ? AppSpacing.sm : AppSpacing.lg),
+              titleWidget,
+              const SizedBox(height: AppSpacing.sm),
+              subtitleWidget,
+              SizedBox(height: sectionGap),
+              ...controlChildren,
+            ],
+          );
+
+    return Form(key: _formKey, child: content);
   }
 }
 

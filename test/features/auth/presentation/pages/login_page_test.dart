@@ -8,6 +8,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:mocktail/mocktail.dart';
 
+import 'package:rouvy_pro/app/theme/app_spacing.dart';
 import 'package:rouvy_pro/core/design_system/dark_tech_buttons.dart';
 import 'package:rouvy_pro/core/error/failures.dart';
 import 'package:rouvy_pro/features/auth/domain/entities/user_entity.dart';
@@ -74,6 +75,12 @@ void main() {
       (WidgetTester tester) async {
     await pumpLoginPage(tester, repository);
 
+    // KORIXA-SCREEN02-LOGIN-MATCH-SCREEN01-DESKTOP-SCALE-20260910: al
+    // igualar la escala visual de SCREEN_01 (logo/título/subtítulo más
+    // grandes), el CTA ya no entra en los 600px de alto por defecto del
+    // binding de test sin scroll — mismo patrón ya usado para el botón
+    // de Google (ver comentario más abajo).
+    await tester.ensureVisible(find.text('Iniciar sesión'));
     await tester.tap(find.text('Iniciar sesión'));
     await tester.pumpAndSettle();
 
@@ -94,6 +101,7 @@ void main() {
 
     await tester.enterText(find.byType(TextFormField).at(0), 'rider@ridepro.com');
     await tester.enterText(find.byType(TextFormField).at(1), 'securePass123');
+    await tester.ensureVisible(find.text('Iniciar sesión'));
     await tester.tap(find.text('Iniciar sesión'));
     await tester.pump();
 
@@ -119,6 +127,7 @@ void main() {
 
     await tester.enterText(find.byType(TextFormField).at(0), 'rider@ridepro.com');
     await tester.enterText(find.byType(TextFormField).at(1), 'securePass123');
+    await tester.ensureVisible(find.text('Iniciar sesión'));
     await tester.tap(find.text('Iniciar sesión'));
     await tester.pumpAndSettle();
 
@@ -135,6 +144,7 @@ void main() {
 
     await tester.enterText(find.byType(TextFormField).at(0), 'rider@ridepro.com');
     await tester.enterText(find.byType(TextFormField).at(1), 'wrongPass1');
+    await tester.ensureVisible(find.text('Iniciar sesión'));
     await tester.tap(find.text('Iniciar sesión'));
     await tester.pumpAndSettle();
 
@@ -213,6 +223,7 @@ void main() {
   testWidgets('Olvidé mi contraseña sigue navegando a ForgotPassword', (WidgetTester tester) async {
     await pumpLoginPage(tester, repository);
 
+    await tester.ensureVisible(find.text('¿Olvidaste tu contraseña?'));
     await tester.tap(find.text('¿Olvidaste tu contraseña?'));
     await tester.pumpAndSettle();
 
@@ -532,6 +543,95 @@ void main() {
       find.byType(BackdropFilter),
       findsNothing,
       reason: 'el formulario ya no debe vivir dentro de ningún panel de vidrio/tarjeta — el dueño pidió ver todo el paisaje sin caja contenedora',
+    );
+  });
+
+  // ---------------------------------------------------------------------
+  // KORIXA-SCREEN02-LOGIN-MATCH-SCREEN01-DESKTOP-SCALE-20260910 — el
+  // dueño pidió que el bloque completo de contenido de Login en desktop
+  // tenga la MISMA escala visual ya aprobada en SCREEN_01 Welcome
+  // (`_contentMaxWidth = 680`, `_ctaWidth = 550`, altura de CTA `64`,
+  // logo `188`). Estos tests miden geometría real (`tester.getSize`),
+  // no solo presencia de widgets — una regresión que redujera el ancho
+  // de vuelta a un valor chico debe fallar aquí incluso si el widget
+  // sigue existiendo.
+  // ---------------------------------------------------------------------
+
+  testWidgets('LOGIN_DESKTOP_CONTENT_REGION_MATCHES_SCREEN01 = PASS', (WidgetTester tester) async {
+    await pumpLoginPage(tester, repository, surfaceSize: const Size(1440, 900));
+    expect(tester.takeException(), isNull, reason: 'no debe haber overflow a 1440x900');
+
+    final Size contentSize = tester.getSize(find.byKey(const Key('login-desktop-content-max-width')));
+    expect(
+      contentSize.width,
+      closeTo(680, 0.5),
+      reason: 'la región de contenido de Login debe igualar el ancho de contenido ya aprobado de SCREEN_01 (680), no un valor chico inventado',
+    );
+  });
+
+  testWidgets('LOGIN_DESKTOP_PRIMARY_CONTROL_WIDTH_MATCHES_SCREEN01 = PASS', (WidgetTester tester) async {
+    await pumpLoginPage(tester, repository, surfaceSize: const Size(1440, 900));
+
+    final Size controlSize = tester.getSize(find.byKey(const Key('login-desktop-control-width')));
+    expect(
+      controlSize.width,
+      closeTo(550, 0.5),
+      reason: 'campos/CTA/divisor/Google deben compartir el ancho de control ya aprobado de SCREEN_01 (550 — el mismo `_ctaWidth` de Welcome)',
+    );
+
+    // Los controles individuales (email, password, CTA, Google) deben
+    // realmente COMPARTIR ese ancho — no solo el `SizedBox` contenedor.
+    final Size emailFieldSize = tester.getSize(find.byType(TextFormField).first);
+    final Size ctaSize = tester.getSize(find.byType(PrimaryGradientButton));
+    final Size googleSize = tester.getSize(find.byType(GoogleSignInButton));
+    expect(emailFieldSize.width, closeTo(550, 0.5), reason: 'el campo de correo debe ocupar el ancho de control de 550');
+    expect(ctaSize.width, closeTo(550, 0.5), reason: 'el CTA debe ocupar el ancho de control de 550, igual que en Welcome');
+    expect(googleSize.width, closeTo(550, 0.5), reason: 'el botón de Google debe ocupar el ancho de control de 550');
+  });
+
+  testWidgets('LOGIN_DESKTOP_CTA_HEIGHT_MATCHES_SCREEN01 = PASS', (WidgetTester tester) async {
+    await pumpLoginPage(tester, repository, surfaceSize: const Size(1440, 900));
+
+    final Size ctaSize = tester.getSize(find.byType(PrimaryGradientButton));
+    expect(
+      ctaSize.height,
+      closeTo(64, 0.5),
+      reason: 'el alto del CTA de Login debe igualar el ya aprobado en SCREEN_01 Welcome (64), no el default de 52',
+    );
+  });
+
+  testWidgets('LOGIN_DESKTOP_LOGO_HEIGHT_MATCHES_SCREEN01 = PASS', (WidgetTester tester) async {
+    await pumpLoginPage(tester, repository, surfaceSize: const Size(1440, 900));
+
+    final Iterable<Image> images = tester.widgetList<Image>(find.byType(Image));
+    final Image desktopLogo = images.firstWhere(
+      (Image image) => resolvedAssetName(image.image) == 'assets/icons/korixa_logo_desktop.png',
+    );
+    expect(
+      desktopLogo.height,
+      188,
+      reason: 'el logo de Login en desktop debe igualar el alto ya aprobado en SCREEN_01 Welcome (188)',
+    );
+  });
+
+  testWidgets('LOGIN_DESKTOP_CONTENT_DOES_NOT_INVADE_CYCLIST_EXCESSIVELY = PASS', (WidgetTester tester) async {
+    const Size desktopSize = Size(1440, 900);
+    await pumpLoginPage(tester, repository, surfaceSize: desktopSize);
+
+    // El grupo de contenido sigue anclado a la derecha (`Align.centerRight`
+    // + `Padding` uniforme) — su borde derecho debe quedar cerca del
+    // borde derecho del viewport (inset intencional, `AppSpacing.xxxl`),
+    // no en el centro de la pantalla ni invadiendo al ciclista.
+    final Rect contentRect = tester.getRect(find.byKey(const Key('login-desktop-content-max-width')));
+    expect(
+      contentRect.right,
+      greaterThan(desktopSize.width * 0.6),
+      reason: 'el bloque de contenido debe quedar claramente en la mitad derecha del viewport, no centrado',
+    );
+    expect(
+      contentRect.right,
+      closeTo(desktopSize.width - AppSpacing.xxxl, 1.0),
+      reason: 'el borde derecho del bloque debe quedar a un inset intencional del borde derecho real del viewport, ni pegado ni desplazado hacia el centro',
     );
   });
 
