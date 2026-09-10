@@ -426,7 +426,7 @@ BLE → standard adapter → existing parser → TelemetrySnapshot → Telemetry
 Esto mejora la arquitectura de compatibilidad estándar sin sobreafirmar
 soporte físico universal: `DISCOVERY_BROADENED = YES`,
 `VENDOR_ADAPTERS = NOT_IMPLEMENTED`, `H9_ADAPTER = NOT_IMPLEMENTED`,
-`H9_RUNTIME_HR = UNPROVEN`, `PHYSICAL_BROAD_DISCOVERY = UNPROVEN` y
+`H9_RUNTIME_HR = UNPROVEN`, `PHYSICAL_BROAD_DISCOVERY = PROVEN` (`T-NEW.5`, Android 15: H9 visible en el scan como `discovered`, sin Connect/GATT) y
 `PHYSICAL_COMPATIBILITY_BY_BRAND_MODEL = NOT_GENERALLY_PROVEN`. Hay
 compatibilidad prevista con dispositivos que implementen correctamente esos
 estándares — incluidas marcas habituales del mercado — pero la validación
