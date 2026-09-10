@@ -39,9 +39,14 @@ sistema.
 **Nota sobre `neverForLocation`:** solo se puede declarar si la app
 realmente no usa el escaneo BLE para inferir ubicación (que es el caso
 aquí — solo se usa para conectar sensores). Con este flag, Android 12+ NO
-exige `ACCESS_FINE_LOCATION` en absoluto, así que `BlePermissionHandler`
-solicitándolo igualmente (ver comentario en el propio archivo) es
-inofensivo: el sistema simplemente no lo necesita en SDK 31+.
+exige `ACCESS_FINE_LOCATION` en absoluto y el SO lo deniega
+automáticamente (no declarado para ese SDK). `BlePermissionHandler` lo
+sigue *solicitando* en el mismo flujo para cubrir Android ≤30, pero la
+política (`ble_permission_policy.dart`, T-NEW.5) lo *ignora* en SDK 31+:
+exigirlo con `every` en todas las versiones fue el bug que impedía
+escanear en Android 12+ — un permiso irrelevante nunca debe bloquear el
+gate. Validado físicamente en Android 15 (API 35): scan amplio con
+resultados reales tras la corrección.
 
 ## iOS — `ios/Runner/Info.plist`
 
