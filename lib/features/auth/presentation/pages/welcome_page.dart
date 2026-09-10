@@ -12,14 +12,20 @@ import '../../../../core/responsive/korixa_viewport.dart';
 import '../../../../l10n/generated/app_localizations.dart';
 
 /// Pantalla de bienvenida (marketing/onboarding previo al login). No tiene
-/// lógica de negocio: solo dirige a Registro o Login.
+/// lógica de negocio: solo dirige a Login.
+///
+/// KORIXA-WELCOME-SINGLE-CTA-NAVIGATION-PR127-20260910: única acción de
+/// entrada a autenticación — el CTA primario "Comenzar" navega
+/// directamente a `AppRoute.login` (antes iba a `AppRoute.register`). La
+/// acción secundaria "Iniciar sesión" arriba a la derecha se elimina por
+/// completo (dueño la consideró redundante con un único CTA de entrada):
+/// Registro sigue disponible, pero solo alcanzable desde Login
+/// ("Crear cuenta"), nunca directamente desde Welcome.
 ///
 /// KORIXA-UI-SCREEN-01-APPROVED-WELCOME — implementa el diseño hero
 /// aprobado por el dueño: foto de ciclista a pantalla completa,
-/// "Iniciar sesión" (KORIXA-SCREEN01-WELCOME-LOGIN-ACTION-COPY-
-/// PR127-20260907: antes "Saltar" — mismo destino, `AppRoute.login`,
-/// copy más explícita) arriba a la derecha, marca/título/subtítulo/
-/// indicadores/CTA anclados abajo con degradado de lectura.
+/// marca/título/subtítulo/indicadores/CTA anclados abajo con degradado
+/// de lectura.
 ///
 /// Deliberadamente NO reusa `DarkTechAuthShell` (compartido con Login/
 /// Register): ese shell está construido para un formulario centrado y
@@ -112,11 +118,11 @@ class WelcomePage extends StatelessWidget {
   }
 }
 
-/// Composición mobile (hero vertical + degradado + acción secundaria
-/// "Iniciar sesión" + marca/título/subtítulo/indicador/CTA anclados
-/// abajo). Sin cambios respecto a la versión aprobada — la corrección
-/// de esta tarea es exclusivamente de escritorio (ver
-/// [_DesktopWelcomeContent]).
+/// Composición mobile (hero vertical + degradado + marca/título/
+/// subtítulo/indicador/CTA anclados abajo). KORIXA-WELCOME-SINGLE-CTA-
+/// NAVIGATION-PR127-20260910: la acción secundaria "Iniciar sesión" que
+/// vivía arriba a la derecha se elimina — único CTA de entrada
+/// ("Comenzar" → Login).
 class _MobileWelcomeContent extends StatelessWidget {
   const _MobileWelcomeContent({required this.l10n});
 
@@ -144,27 +150,6 @@ class _MobileWelcomeContent extends StatelessWidget {
         // (`DarkTechRouteImage`), nunca un gradiente ad hoc.
         const Positioned.fill(
           child: DecoratedBox(decoration: BoxDecoration(gradient: AppGradients.imageScrimBottom)),
-        ),
-        SafeArea(
-          child: Align(
-            alignment: Alignment.topRight,
-            child: Padding(
-              padding: const EdgeInsets.all(AppSpacing.md),
-              child: _SecondaryActionButton(
-                label: l10n.welcomeLoginAction,
-                // KORIXA-SCREEN01-WELCOME-LOGIN-ACTION-COPY-PR127-
-                // 20260907: antes decía "Saltar" — el dueño lo aprobó
-                // como ambiguo ("saltar" no dice a dónde), así que la
-                // copy ahora nombra el destino real. El destino en sí no
-                // cambia: reusa exactamente el mismo `AppRoute.login`
-                // que ya tenía el botón secundario original ("Ya tengo
-                // cuenta" → login), no inventa un flujo nuevo ni evade
-                // el guard de autenticación (Login sigue siendo una
-                // auth route legítima).
-                onTap: () => context.go(AppRoute.login),
-              ),
-            ),
-          ),
         ),
         SafeArea(
           child: Align(
@@ -226,12 +211,13 @@ class _MobileWelcomeContent extends StatelessWidget {
                     const SizedBox(height: AppSpacing.lg),
                     PrimaryGradientButton(
                       label: l10n.welcomeGetStarted,
-                      // "Comenzar" = mismo destino que antes tenía el CTA
-                      // primario ("Crear cuenta" → register) — el punto
-                      // de entrada real para alguien nuevo, no inventa un
-                      // flujo de negocio nuevo, solo relabela el mismo
-                      // botón/destino.
-                      onPressed: () => context.go(AppRoute.register),
+                      // KORIXA-WELCOME-SINGLE-CTA-NAVIGATION-PR127-
+                      // 20260910: "Comenzar" ahora navega a
+                      // `AppRoute.login`, no a `AppRoute.register` — este
+                      // es el único punto de entrada de autenticación de
+                      // Welcome; Registro sigue disponible, pero solo
+                      // desde Login ("Crear cuenta").
+                      onPressed: () => context.go(AppRoute.login),
                     ),
                   ],
                 ),
@@ -249,9 +235,9 @@ class _MobileWelcomeContent extends StatelessWidget {
 /// hero panorámico real a pantalla completa (`StackFit.expand`, sin
 /// ningún `SizedBox`/`ClipRect` que lo acote), con el contenido anclado
 /// a la izquierda/centro-izquierda para no tapar al ciclista (visible a
-/// la derecha del encuadre) y "Iniciar sesión" arriba a la derecha
-/// (KORIXA-SCREEN01-WELCOME-LOGIN-ACTION-COPY-PR127-20260907: antes
-/// "Saltar") — misma esquina que en mobile, mismo destino.
+/// la derecha del encuadre). KORIXA-WELCOME-SINGLE-CTA-NAVIGATION-PR127-
+/// 20260910: la acción secundaria "Iniciar sesión" que vivía arriba a la
+/// derecha se elimina — único CTA de entrada ("Comenzar" → Login).
 class _DesktopWelcomeContent extends StatelessWidget {
   const _DesktopWelcomeContent({required this.l10n, required this.viewport});
 
@@ -313,18 +299,6 @@ class _DesktopWelcomeContent extends StatelessWidget {
         // borde inferior, incluido el ciclista): acá el objetivo es
         // contraste de texto sin oscurecer globalmente la foto aprobada.
         const Positioned.fill(child: _HorizontalContentScrim()),
-        SafeArea(
-          child: Align(
-            alignment: Alignment.topRight,
-            child: Padding(
-              padding: const EdgeInsets.all(AppSpacing.lg),
-              child: _SecondaryActionButton(
-                label: l10n.welcomeLoginAction,
-                onTap: () => context.go(AppRoute.login),
-              ),
-            ),
-          ),
-        ),
         SafeArea(
           child: Align(
             alignment: Alignment.centerLeft,
@@ -465,7 +439,11 @@ class _DesktopWelcomeContent extends StatelessWidget {
                       width: 550,
                       child: PrimaryGradientButton(
                         label: l10n.welcomeGetStarted,
-                        onPressed: () => context.go(AppRoute.register),
+                        // KORIXA-WELCOME-SINGLE-CTA-NAVIGATION-PR127-
+                        // 20260910: navega a `AppRoute.login`, no a
+                        // `AppRoute.register` — ver docblock de
+                        // [WelcomePage].
+                        onPressed: () => context.go(AppRoute.login),
                         height: 64,
                         fontSize: 20,
                       ),
@@ -542,18 +520,6 @@ class _PhoneLandscapeWelcomeContent extends StatelessWidget {
             const Positioned.fill(child: _HorizontalContentScrim()),
             SafeArea(
               child: Align(
-                alignment: Alignment.topRight,
-                child: Padding(
-                  padding: const EdgeInsets.all(AppSpacing.sm),
-                  child: _SecondaryActionButton(
-                    label: l10n.welcomeLoginAction,
-                    onTap: () => context.go(AppRoute.login),
-                  ),
-                ),
-              ),
-            ),
-            SafeArea(
-              child: Align(
                 alignment: Alignment.centerLeft,
                 child: ConstrainedBox(
                   key: const Key('welcome-content-max-width'),
@@ -626,7 +592,11 @@ class _PhoneLandscapeWelcomeContent extends StatelessWidget {
                             child: PrimaryGradientButton(
                               key: const Key('welcome-landscape-cta'),
                               label: l10n.welcomeGetStarted,
-                              onPressed: () => context.go(AppRoute.register),
+                              // KORIXA-WELCOME-SINGLE-CTA-NAVIGATION-
+                              // PR127-20260910: navega a
+                              // `AppRoute.login` — ver docblock de
+                              // [WelcomePage].
+                              onPressed: () => context.go(AppRoute.login),
                               height: 56,
                               fontSize: 16,
                             ),
@@ -851,58 +821,3 @@ class _Bar extends StatelessWidget {
   }
 }
 
-/// Acción secundaria de Welcome ("Iniciar sesión" — KORIXA-SCREEN01-
-/// WELCOME-LOGIN-ACTION-COPY-PR127-20260907: antes se llamaba
-/// `_SkipButton`/"Saltar", renombrado junto con la copy para no dejar
-/// un identificador engañoso). Vive SOBRE la foto de hero, no sobre una
-/// superficie Dark Tech plana, así que lleva su propia píldora
-/// translúcida (`DarkTech.overlayScrim`, el mismo scrim ya usado para
-/// diálogos/overlays de foto) para garantizar contraste sin importar
-/// qué tan clara sea la región de la foto detrás (Sección 9:
-/// "accessible contrast" sobre imagen).
-class _SecondaryActionButton extends StatelessWidget {
-  const _SecondaryActionButton({required this.label, required this.onTap});
-
-  final String label;
-  final VoidCallback onTap;
-
-  @override
-  Widget build(BuildContext context) {
-    return Semantics(
-      button: true,
-      label: label,
-      child: Material(
-        color: Colors.transparent,
-        child: InkWell(
-          onTap: onTap,
-          borderRadius: AppRadius.pillRadius,
-          child: Container(
-            // ⚠️ Deliberadamente SIN `alignment:` — un `Container` con
-            // `alignment` fijado y restricciones LAXAS entrantes (como
-            // las que da un `Align` ancestro, acá `Align(topRight)` en
-            // el `SafeArea` de arriba) se agranda para OCUPAR TODO el
-            // espacio disponible en vez de ajustarse al contenido — bug
-            // real encontrado en una iteración anterior: el texto
-            // terminaba centrado en la pantalla completa en vez de en la
-            // píldora. El padding simétrico ya centra visualmente el
-            // texto sin necesitar `alignment`; el padding vertical
-            // (`AppSpacing.md` × 2) más el alto de línea del texto ya
-            // cubre el mínimo de 44dp por sí solo en la práctica, así
-            // que `minHeight`/`minWidth` quedan como piso de
-            // accesibilidad, no como el mecanismo real de tamaño.
-            constraints: const BoxConstraints(minHeight: 44, minWidth: 44),
-            padding: const EdgeInsets.symmetric(horizontal: AppSpacing.md, vertical: AppSpacing.md),
-            decoration: const BoxDecoration(
-              color: DarkTech.overlayScrim,
-              borderRadius: AppRadius.pillRadius,
-            ),
-            child: Text(
-              label,
-              style: const TextStyle(color: Colors.white, fontWeight: FontWeight.w600, fontSize: 14),
-            ),
-          ),
-        ),
-      ),
-    );
-  }
-}

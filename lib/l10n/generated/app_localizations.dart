@@ -122,12 +122,6 @@ abstract class AppLocalizations {
   /// **'Comenzar'**
   String get welcomeGetStarted;
 
-  /// No description provided for @welcomeLoginAction.
-  ///
-  /// In es, this message translates to:
-  /// **'Iniciar sesión'**
-  String get welcomeLoginAction;
-
   /// No description provided for @loginTitle.
   ///
   /// In es, this message translates to:

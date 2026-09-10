@@ -37,10 +37,8 @@ Widget authPageHarness({
   // resolviendo Dark Tech incluso cuando el modo global de la app es
   // claro. `null` deja el valor por defecto de `MaterialApp`.
   ThemeData? theme,
-  // KORIXA-SCREEN01-WELCOME-LOGIN-ACTION-COPY-PR127-20260907: permite
-  // probar la copy en inglés (p. ej. "Sign in" / ausencia de "Skip")
-  // sin afectar ningún test existente — por defecto sigue siendo
-  // español, igual que antes de este parámetro.
+  // Permite probar la copy localizada (p. ej. inglés) sin afectar
+  // ningún test existente — por defecto sigue siendo español.
   Locale locale = const Locale('es'),
 }) {
   final GoRouter router = GoRouter(

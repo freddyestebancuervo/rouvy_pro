@@ -41,15 +41,14 @@ void main() {
       // `null` (sin sesión) — ver el fix de `FakeAuthRepository` para que
       // esto no se quede colgado.
       await tester.pumpAndSettle();
-      expect(find.text('Iniciar sesión'), findsOneWidget);
+      expect(find.text('Comenzar'), findsOneWidget);
 
       // --- Welcome → Login ---
-      // "Iniciar sesión" es el destino que reemplazó al antiguo "Ya tengo
-      // cuenta" — ver KORIXA-UI-SCREEN-01-APPROVED-WELCOME-IMPLEMENTATION-20260904
-      // y, más recientemente, KORIXA-SCREEN01-WELCOME-LOGIN-ACTION-COPY-
-      // PR127-20260907 (antes decía "Saltar"): mismo destino (Login) en
-      // ambos casos, solo relabelado.
-      await tester.tap(find.text('Iniciar sesión'));
+      // KORIXA-WELCOME-SINGLE-CTA-NAVIGATION-PR127-20260910: "Comenzar"
+      // es ahora el único CTA de entrada a autenticación de Welcome y
+      // navega directo a Login (la acción secundaria "Iniciar sesión"
+      // que vivía arriba a la derecha se eliminó por completo).
+      await tester.tap(find.text('Comenzar'));
       await tester.pumpAndSettle();
       expect(find.text('Bienvenido de nuevo'), findsOneWidget); // loginTitle
 
