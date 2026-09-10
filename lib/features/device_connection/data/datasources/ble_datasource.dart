@@ -15,6 +15,7 @@ import '../adapters/ble_device_adapter_resolver.dart';
 import '../classification/ble_device_compatibility_classifier.dart';
 import '../models/ble_device_model.dart';
 import '../parsers/battery_level_parser.dart';
+import '../scanning/ble_device_evidence_merger.dart';
 import '../scanning/ble_scan_result_collector.dart';
 import 'known_devices_local_datasource.dart';
 
@@ -126,9 +127,15 @@ class BleDataSourceImpl implements BleDataSource {
     late final StreamSubscription<List<ScanResult>> resultsSub;
     resultsSub = FlutterBluePlus.scanResults.listen(
       (List<ScanResult> results) {
-        controller.add(
-          found.addAll(results.map(BleDeviceModel.fromScanResult)),
-        );
+        final Iterable<BleDeviceModel> merged = results
+            .map(BleDeviceModel.fromScanResult)
+            .map(
+              (BleDeviceModel scan) => mergeScanWithSessionEvidence(
+                scan: scan,
+                sessionEvidence: _sessions[scan.id]?.model,
+              ),
+            );
+        controller.add(found.addAll(merged));
       },
       onError: controller.addError,
     );

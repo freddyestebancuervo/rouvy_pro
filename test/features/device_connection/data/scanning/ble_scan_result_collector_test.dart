@@ -66,6 +66,51 @@ void main() {
         BleDeviceCompatibilityStatus.standardCompatible,
       );
     });
+
+    test('repeated scan preserves proven type with stronger compatibility',
+        () {
+      final BleScanResultCollector collector = BleScanResultCollector();
+
+      collector.addAll(<BleDeviceModel>[
+        _device(
+          'hr-1',
+          type: SportDeviceType.heartRateMonitor,
+          compatibilityStatus: BleDeviceCompatibilityStatus.standardCompatible,
+        ),
+      ]);
+      final List<BleDeviceModel> devices = collector.addAll(<BleDeviceModel>[
+        _device('hr-1', type: SportDeviceType.unknown),
+      ]);
+
+      expect(
+        devices.single.compatibilityStatus,
+        BleDeviceCompatibilityStatus.standardCompatible,
+      );
+      expect(devices.single.type, SportDeviceType.heartRateMonitor);
+    });
+
+    test('repeated scan refreshes RSSI while preserving proven evidence', () {
+      final BleScanResultCollector collector = BleScanResultCollector();
+
+      collector.addAll(<BleDeviceModel>[
+        _device(
+          'hr-2',
+          type: SportDeviceType.heartRateMonitor,
+          rssi: -80,
+          compatibilityStatus: BleDeviceCompatibilityStatus.standardCompatible,
+        ),
+      ]);
+      final List<BleDeviceModel> devices = collector.addAll(<BleDeviceModel>[
+        _device('hr-2', type: SportDeviceType.unknown, rssi: -42),
+      ]);
+
+      expect(
+        devices.single.compatibilityStatus,
+        BleDeviceCompatibilityStatus.standardCompatible,
+      );
+      expect(devices.single.type, SportDeviceType.heartRateMonitor);
+      expect(devices.single.rssi, -42);
+    });
   });
 }
 
