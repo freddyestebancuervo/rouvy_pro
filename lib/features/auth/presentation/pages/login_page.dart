@@ -1,5 +1,3 @@
-import 'dart:ui' show ImageFilter;
-
 import 'package:flutter/foundation.dart' show defaultTargetPlatform, kIsWeb, TargetPlatform;
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -8,7 +6,6 @@ import 'package:go_router/go_router.dart';
 import '../../../../app/router/app_router.dart';
 import '../../../../app/theme/app_colors.dart';
 import '../../../../app/theme/app_gradients.dart';
-import '../../../../app/theme/app_radius.dart';
 import '../../../../app/theme/app_spacing.dart';
 import '../../../../app/theme/app_theme.dart';
 import '../../../../core/design_system/dark_tech_buttons.dart';
@@ -216,16 +213,20 @@ class _LoginPageState extends ConsumerState<LoginPage> {
   }
 
   // -------------------------------------------------------------------
-  // PHONE LANDSCAPE — KORIXA-SCREEN02-LOGIN-FULL-LANDSCAPE-VISUAL-
-  // 20260910: mismo tratamiento que desktop (ver [_buildDesktop] más
-  // abajo para el porqué completo). Antes un `Row` 44/56 con un
-  // `ColoredBox(color: DarkTech.background)` totalmente opaco ocupando
-  // el 56% derecho — el mismo "bloque negro" reportado por el dueño,
-  // solo que sin degradado. Ahora el hero cubre la pantalla completa y
-  // el formulario compacto flota en el mismo panel de vidrio
-  // (`_GlassFormPanel`) anclado a la derecha; su ancho es un porcentaje
-  // real del viewport (mismo criterio ya usado por `WelcomePage` en su
-  // propio landscape) en vez del flex fijo anterior.
+  // PHONE LANDSCAPE — KORIXA-SCREEN02-LOGIN-NO-OUTER-CARD-20260910: el
+  // dueño pidió eliminar por completo el panel de vidrio que envolvía el
+  // formulario (`_GlassFormPanel`, KORIXA-SCREEN02-LOGIN-FULL-LANDSCAPE-
+  // VISUAL-20260910) — "que se vea todo el paisaje... sin caja
+  // contenedora visible". El formulario ahora vive directamente sobre el
+  // hero, sin ningún `DecoratedBox`/`ClipRRect`/`BackdropFilter`
+  // envolvente; el ancho sigue siendo un porcentaje real del viewport
+  // (mismo criterio ya usado por `WelcomePage` en su propio landscape)
+  // solo para acotar el largo de línea del texto, no para dibujar un
+  // panel. Legibilidad vía `_LoginHeroContentScrim` (scrim general, sin
+  // bordes duros) + sombra de texto en título/subtítulo
+  // (`floatingOverPhoto: true` en [_buildFormColumn]) — cada campo/botón
+  // conserva su propio estilo (relleno, borde, gradiente), tal como
+  // pidió el encargo.
   // -------------------------------------------------------------------
 
   Widget _buildPhoneLandscape(
@@ -250,24 +251,20 @@ class _LoginPageState extends ConsumerState<LoginPage> {
           child: Align(
             alignment: Alignment.centerRight,
             child: Padding(
-              padding: const EdgeInsets.all(AppSpacing.sm),
+              padding: const EdgeInsets.symmetric(horizontal: AppSpacing.md, vertical: AppSpacing.sm),
               child: ConstrainedBox(
                 constraints: BoxConstraints(maxWidth: panelWidth),
-                child: _GlassFormPanel(
-                  child: Padding(
-                    padding: const EdgeInsets.symmetric(horizontal: AppSpacing.md, vertical: AppSpacing.sm),
-                    child: SingleChildScrollView(
-                      child: _buildFormColumn(
-                        context: context,
-                        l10n: l10n,
-                        loginState: loginState,
-                        socialState: socialState,
-                        anyLoading: anyLoading,
-                        logoAsset: 'assets/icons/korixa_logo.png',
-                        logoHeight: 32,
-                        compact: true,
-                      ),
-                    ),
+                child: SingleChildScrollView(
+                  child: _buildFormColumn(
+                    context: context,
+                    l10n: l10n,
+                    loginState: loginState,
+                    socialState: socialState,
+                    anyLoading: anyLoading,
+                    logoAsset: 'assets/icons/korixa_logo.png',
+                    logoHeight: 32,
+                    compact: true,
+                    floatingOverPhoto: true,
                   ),
                 ),
               ),
@@ -279,19 +276,22 @@ class _LoginPageState extends ConsumerState<LoginPage> {
   }
 
   // -------------------------------------------------------------------
-  // DESKTOP — KORIXA-SCREEN02-LOGIN-FULL-LANDSCAPE-VISUAL-20260910: el
-  // dueño reportó el panel derecho anterior (`Expanded(flex: 43)` con un
-  // `DecoratedBox(gradient: AppGradients.loginDesktopPanel)` —  un
-  // degradado SIN alfa, por lo tanto totalmente opaco) como "un bloque
-  // negro grande" tapando casi la mitad del paisaje de Guatapé: "que se
-  // vea todo el paisaje". El hero ahora cubre la pantalla COMPLETA
-  // (antes solo el 57% izquierdo) y el formulario flota sobre él dentro
-  // de un panel de vidrio esmerilado (`_GlassFormPanel` — blur real vía
-  // `BackdropFilter` + superficie translúcida, no un color sólido)
-  // anclado a la derecha, con un ancho acotado (420) en vez de ocupar el
-  // 43% del viewport como un rectángulo fijo. El paisaje se sigue
-  // viendo, difuminado, alrededor y detrás del panel — nunca queda
-  // oculto tras un bloque opaco.
+  // DESKTOP — KORIXA-SCREEN02-LOGIN-NO-OUTER-CARD-20260910: el dueño
+  // pidió eliminar por completo el panel de vidrio que envolvía el
+  // formulario (`_GlassFormPanel`, KORIXA-SCREEN02-LOGIN-FULL-LANDSCAPE-
+  // VISUAL-20260910 — blur + superficie translúcida + borde, todavía
+  // leído como "una tarjeta grande envolviendo todo") — "que se vea
+  // todo el paisaje... sin caja contenedora visible". El formulario
+  // ahora vive DIRECTAMENTE sobre el hero: sin `ClipRRect`, sin
+  // `BackdropFilter`, sin `DecoratedBox`/`ColoredBox` envolvente, sin
+  // fondo rectangular translúcido de ningún tipo. El `ConstrainedBox`
+  // que queda solo acota el ancho de línea del texto (420) — no dibuja
+  // nada, es puramente de layout. Legibilidad vía `_LoginHeroContentScrim`
+  // (overlay general, sin bordes duros) + sombra de texto en
+  // título/subtítulo (`floatingOverPhoto: true` en [_buildFormColumn]);
+  // cada campo/botón (email, contraseña, CTA, Google) conserva su propio
+  // relleno/borde/gradiente ya existente en el sistema de diseño, tal
+  // como pidió el encargo — eso NO es la "caja envolvente" que se quitó.
   // -------------------------------------------------------------------
 
   Widget _buildDesktop(
@@ -309,12 +309,11 @@ class _LoginPageState extends ConsumerState<LoginPage> {
           key: Key('login-hero-image'),
           child: _LoginHeroImage(alignment: Alignment(0.15, 0)),
         ),
-        // Degradado sutil CON alfa (a diferencia del panel opaco
-        // anterior): transparente en el centro/izquierda, donde el
-        // paisaje debe verse sin ningún velo, oscureciendo solo
-        // gradualmente hacia el borde derecho, detrás de donde vive el
-        // panel de vidrio — refuerza el contraste del panel sin tapar
-        // el resto de la foto.
+        // Overlay general y sutil (sin bordes duros, sin forma de
+        // rectángulo aislado) — transparente en el centro/izquierda,
+        // donde el paisaje debe verse sin ningún velo, oscureciendo solo
+        // gradualmente hacia el borde derecho para reforzar el contraste
+        // del texto que flota ahí. Nunca tapa el resto de la foto.
         const Positioned.fill(child: _LoginHeroContentScrim()),
         SafeArea(
           child: Align(
@@ -323,22 +322,18 @@ class _LoginPageState extends ConsumerState<LoginPage> {
               padding: const EdgeInsets.all(AppSpacing.xxxl),
               child: ConstrainedBox(
                 constraints: const BoxConstraints(maxWidth: 420),
-                child: _GlassFormPanel(
-                  child: Padding(
-                    padding: const EdgeInsets.symmetric(horizontal: AppSpacing.xl, vertical: AppSpacing.xl),
-                    child: SingleChildScrollView(
-                      child: _buildFormColumn(
-                        context: context,
-                        l10n: l10n,
-                        loginState: loginState,
-                        socialState: socialState,
-                        anyLoading: anyLoading,
-                        logoAsset: 'assets/icons/korixa_logo_desktop.png',
-                        logoHeight: 56,
-                        compact: false,
-                        highQualityLogo: true,
-                      ),
-                    ),
+                child: SingleChildScrollView(
+                  child: _buildFormColumn(
+                    context: context,
+                    l10n: l10n,
+                    loginState: loginState,
+                    socialState: socialState,
+                    anyLoading: anyLoading,
+                    logoAsset: 'assets/icons/korixa_logo_desktop.png',
+                    logoHeight: 56,
+                    compact: false,
+                    highQualityLogo: true,
+                    floatingOverPhoto: true,
                   ),
                 ),
               ),
@@ -366,10 +361,22 @@ class _LoginPageState extends ConsumerState<LoginPage> {
     required double logoHeight,
     required bool compact,
     bool highQualityLogo = false,
+    // KORIXA-SCREEN02-LOGIN-NO-OUTER-CARD-20260910: `true` en desktop y
+    // phone landscape, donde el formulario ya no vive dentro de ningún
+    // panel/tarjeta — el título/subtítulo quedan directamente sobre la
+    // foto, así que reciben una sombra de texto suave para legibilidad
+    // (permitida explícitamente por el encargo: "sombras suaves ... si
+    // hace falta"). `false` en mobile portrait (sin cambios): ahí el
+    // formulario sigue sobre un fondo Dark Tech sólido, donde una sombra
+    // no tendría ningún efecto visible ni sentido.
+    bool floatingOverPhoto = false,
   }) {
     final TextTheme textTheme = Theme.of(context).textTheme;
     final double sectionGap = compact ? AppSpacing.sm : AppSpacing.xl;
     final double dividerGap = compact ? AppSpacing.sm : AppSpacing.lg;
+    final List<Shadow>? legibilityShadow = floatingOverPhoto
+        ? <Shadow>[Shadow(color: Colors.black.withValues(alpha: 0.65), blurRadius: 10)]
+        : null;
 
     return Form(
       key: _formKey,
@@ -404,11 +411,14 @@ class _LoginPageState extends ConsumerState<LoginPage> {
             semanticLabel: 'Korixa',
           ),
           SizedBox(height: compact ? AppSpacing.sm : AppSpacing.lg),
-          Text(l10n.loginTitle, style: textTheme.headlineMedium?.copyWith(fontSize: compact ? 22 : null)),
+          Text(
+            l10n.loginTitle,
+            style: textTheme.headlineMedium?.copyWith(fontSize: compact ? 22 : null, shadows: legibilityShadow),
+          ),
           const SizedBox(height: AppSpacing.sm),
           Text(
             l10n.loginSubtitle,
-            style: textTheme.bodyMedium?.copyWith(color: DarkTech.textSecondary),
+            style: textTheme.bodyMedium?.copyWith(color: DarkTech.textSecondary, shadows: legibilityShadow),
           ),
           SizedBox(height: sectionGap),
           TextFormField(
@@ -505,7 +515,7 @@ class _LoginPageState extends ConsumerState<LoginPage> {
             alignment: WrapAlignment.center,
             crossAxisAlignment: WrapCrossAlignment.center,
             children: <Widget>[
-              Text(l10n.noAccountText),
+              Text(l10n.noAccountText, style: TextStyle(shadows: legibilityShadow)),
               TextButton(
                 onPressed: () => context.go(AppRoute.register),
                 child: Text(l10n.createAccountLink),
@@ -568,36 +578,3 @@ class _LoginHeroContentScrim extends StatelessWidget {
   }
 }
 
-/// Panel de vidrio esmerilado — KORIXA-SCREEN02-LOGIN-FULL-LANDSCAPE-
-/// VISUAL-20260910. Reemplaza el bloque opaco sólido anterior (un
-/// `DecoratedBox`/`ColoredBox` de ancho fijo tapando por completo el
-/// hero detrás): el formulario ahora flota sobre el hero a pantalla
-/// completa dentro de esta tarjeta translúcida con blur real
-/// (`BackdropFilter`) — el paisaje se sigue viendo, difuminado,
-/// alrededor y detrás del panel, nunca oculto tras un rectángulo negro
-/// sólido. Colores/radio ya existentes en el sistema de diseño
-/// (`DarkTech.surface`/`DarkTech.border`, `AppRadius.xlRadius`) — solo
-/// se les agrega alfa, ningún token nuevo.
-class _GlassFormPanel extends StatelessWidget {
-  const _GlassFormPanel({required this.child});
-
-  final Widget child;
-
-  @override
-  Widget build(BuildContext context) {
-    return ClipRRect(
-      borderRadius: AppRadius.xlRadius,
-      child: BackdropFilter(
-        filter: ImageFilter.blur(sigmaX: 24, sigmaY: 24),
-        child: DecoratedBox(
-          decoration: BoxDecoration(
-            color: DarkTech.surface.withValues(alpha: 0.55),
-            borderRadius: AppRadius.xlRadius,
-            border: Border.all(color: DarkTech.border.withValues(alpha: 0.6)),
-          ),
-          child: child,
-        ),
-      ),
-    );
-  }
-}

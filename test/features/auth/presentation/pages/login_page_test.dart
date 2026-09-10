@@ -500,14 +500,17 @@ void main() {
   });
 
   // ---------------------------------------------------------------------
-  // KORIXA-SCREEN02-LOGIN-FULL-LANDSCAPE-VISUAL-20260910 — el dueño
-  // reportó el panel derecho anterior (bloque opaco de ancho fijo,
-  // 43% en desktop / 56% en phone landscape) como "un bloque negro
-  // grande" tapando el paisaje. Estos tests prueban el resultado
-  // concreto: el hero cubre el ancho COMPLETO del viewport (ya no un
-  // `Expanded` recortado) y el formulario flota en un panel de vidrio
-  // (`BackdropFilter`) acotado, no un rectángulo opaco de medio
-  // viewport.
+  // KORIXA-SCREEN02-LOGIN-FULL-LANDSCAPE-VISUAL-20260910 — el hero cubre
+  // el ancho COMPLETO del viewport en desktop/phone landscape (ya no un
+  // `Expanded` recortado al 57%/44%).
+  //
+  // KORIXA-SCREEN02-LOGIN-NO-OUTER-CARD-20260910 — el panel de vidrio
+  // introducido por la tarea anterior (`BackdropFilter` + superficie
+  // translúcida) todavía se leía como "una tarjeta grande envolviendo
+  // todo". El dueño pidió quitarlo por completo: el formulario ahora
+  // vive directamente sobre la foto, sin ningún contenedor
+  // decorado/recortado envolviéndolo. Estos tests prueban ambos hechos:
+  // hero a ancho completo Y cero `BackdropFilter` en las 3 composiciones.
   // ---------------------------------------------------------------------
 
   testWidgets('DESKTOP_HERO_FULL_BLEED_WIDTH = PASS', (WidgetTester tester) async {
@@ -522,21 +525,13 @@ void main() {
     );
   });
 
-  testWidgets('DESKTOP_FORM_FLOATS_IN_GLASS_PANEL_NOT_OPAQUE_BLOCK = PASS', (WidgetTester tester) async {
-    const Size desktopSize = Size(1440, 900);
-    await pumpLoginPage(tester, repository, surfaceSize: desktopSize);
+  testWidgets('DESKTOP_NO_OUTER_CARD_AROUND_FORM = PASS', (WidgetTester tester) async {
+    await pumpLoginPage(tester, repository, surfaceSize: const Size(1440, 900));
 
     expect(
       find.byType(BackdropFilter),
-      findsOneWidget,
-      reason: 'el formulario debe flotar sobre un panel de vidrio con blur real, no un DecoratedBox opaco',
-    );
-
-    final Size panelSize = tester.getSize(find.byType(BackdropFilter));
-    expect(
-      panelSize.width,
-      lessThan(desktopSize.width * 0.5),
-      reason: 'el panel debe ser una tarjeta acotada (ancho máximo 420 + padding), no ocupar la mitad del viewport como el bloque opaco anterior',
+      findsNothing,
+      reason: 'el formulario ya no debe vivir dentro de ningún panel de vidrio/tarjeta — el dueño pidió ver todo el paisaje sin caja contenedora',
     );
   });
 
@@ -552,24 +547,24 @@ void main() {
     );
   });
 
-  testWidgets('PHONE_LANDSCAPE_FORM_FLOATS_IN_GLASS_PANEL = PASS', (WidgetTester tester) async {
+  testWidgets('PHONE_LANDSCAPE_NO_OUTER_CARD_AROUND_FORM = PASS', (WidgetTester tester) async {
     await pumpLoginPage(tester, repository, surfaceSize: const Size(932, 430));
 
     expect(
       find.byType(BackdropFilter),
-      findsOneWidget,
-      reason: 'el formulario debe flotar sobre un panel de vidrio con blur real, no un ColoredBox opaco',
+      findsNothing,
+      reason: 'el formulario ya no debe vivir dentro de ningún panel de vidrio/tarjeta, igual que en desktop',
     );
   });
 
-  testWidgets('PORTRAIT_HAS_NO_GLASS_PANEL = PASS (composición sin cambios, sin panel flotante)',
+  testWidgets('PORTRAIT_NO_OUTER_CARD_AROUND_FORM = PASS (composición sin cambios)',
       (WidgetTester tester) async {
     await pumpLoginPage(tester, repository, surfaceSize: const Size(390, 844));
 
     expect(
       find.byType(BackdropFilter),
       findsNothing,
-      reason: 'mobile portrait no tiene panel flotante — el hero y el formulario ya estaban apilados verticalmente sin bloque opaco',
+      reason: 'mobile portrait nunca tuvo panel flotante — el hero y el formulario ya estaban apilados verticalmente sin bloque opaco',
     );
   });
 }
