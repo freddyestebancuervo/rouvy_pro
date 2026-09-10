@@ -8,15 +8,12 @@ import '../../../../core/ble/ble_uuids.dart';
 import '../../../../core/error/exceptions.dart';
 import '../../domain/entities/device_connection_status.dart';
 import '../../domain/entities/sport_device_type.dart';
-import '../../domain/entities/telemetry_source.dart';
 import '../../domain/entities/telemetry_snapshot.dart';
+import '../adapters/ble_device_adapter.dart';
+import '../adapters/ble_device_adapter_resolver.dart';
 import 'known_devices_local_datasource.dart';
 import '../models/ble_device_model.dart';
 import '../parsers/battery_level_parser.dart';
-import '../parsers/csc_parser.dart';
-import '../parsers/cycling_power_parser.dart';
-import '../parsers/ftms_parser.dart';
-import '../parsers/heart_rate_parser.dart';
 
 /// Estado interno que el datasource mantiene por cada dispositivo con el
 /// que ha interactuado (visto en escaneo, conectado, o conocido de una
@@ -27,14 +24,14 @@ class _DeviceSession {
 
   BleDeviceModel model;
   BluetoothDevice? bluetoothDevice;
-  final List<StreamSubscription<dynamic>> subscriptions = <StreamSubscription<dynamic>>[];
+  final List<StreamSubscription<dynamic>> subscriptions =
+      <StreamSubscription<dynamic>>[];
   final StreamController<TelemetrySnapshot> telemetryController =
       StreamController<TelemetrySnapshot>.broadcast();
 
-  // Parsers con estado — una instancia por dispositivo, no globales,
-  // porque cada uno lleva su propio histórico de contadores acumulados.
-  final CyclingPowerParser cyclingPowerParser = CyclingPowerParser();
-  final CscParser cscParser = CscParser();
+  // Adapters con parsers con estado — una lista por dispositivo, nunca
+  // global, para aislar contadores acumulados y deltas entre sesiones BLE.
+  List<BleDeviceAdapter> adapters = <BleDeviceAdapter>[];
 
   int reconnectAttempts = 0;
   Timer? reconnectTimer;
@@ -80,11 +77,15 @@ class BleDataSourceImpl implements BleDataSource {
   BleDataSourceImpl({
     required KnownDevicesLocalDataSource knownDevicesLocalDataSource,
     required BlePermissionHandler permissionHandler,
+    BleDeviceAdapterResolver adapterResolver =
+        const StandardBleDeviceAdapterResolver(),
   })  : _knownDevicesLocalDataSource = knownDevicesLocalDataSource,
-        _permissionHandler = permissionHandler;
+        _permissionHandler = permissionHandler,
+        _adapterResolver = adapterResolver;
 
   final KnownDevicesLocalDataSource _knownDevicesLocalDataSource;
   final BlePermissionHandler _permissionHandler;
+  final BleDeviceAdapterResolver _adapterResolver;
 
   /// Única fuente de verdad de todos los dispositivos con los que la app
   /// ha interactuado en esta sesión de proceso — tanto los vistos en
@@ -156,15 +157,18 @@ class BleDataSourceImpl implements BleDataSource {
   @override
   Future<void> connect(String deviceId) async {
     final _DeviceSession session = _sessionFor(deviceId);
-    session.cyclingPowerParser.reset();
-    session.cscParser.reset();
+    _resetAdapters(session);
     _updateStatus(deviceId, DeviceConnectionStatus.connecting);
 
-    final BluetoothDevice device = session.bluetoothDevice ?? BluetoothDevice.fromId(deviceId);
+    final BluetoothDevice device =
+        session.bluetoothDevice ?? BluetoothDevice.fromId(deviceId);
     session.bluetoothDevice = device;
 
     try {
-      await device.connect(timeout: const Duration(seconds: 10), autoConnect: false);
+      await device.connect(
+        timeout: const Duration(seconds: 10),
+        autoConnect: false,
+      );
     } catch (e) {
       _updateStatus(deviceId, DeviceConnectionStatus.connectionFailed);
       throw const ServerException('No se pudo conectar con el dispositivo.');
@@ -192,13 +196,17 @@ class BleDataSourceImpl implements BleDataSource {
     // indicador de calidad de señal en la pantalla de gestión.
     Timer.periodic(const Duration(seconds: 4), (Timer timer) async {
       final _DeviceSession? current = _sessions[deviceId];
-      if (current == null || current.model.status != DeviceConnectionStatus.connected) {
+      if (current == null ||
+          current.model.status != DeviceConnectionStatus.connected) {
         timer.cancel();
         return;
       }
       try {
         final int rssi = await device.readRssi();
-        _updateModel(deviceId, (BleDeviceModel m) => m.copyWithModel(rssi: rssi));
+        _updateModel(
+          deviceId,
+          (BleDeviceModel m) => m.copyWithModel(rssi: rssi),
+        );
       } catch (_) {
         // Lectura de RSSI falló puntualmente — no es motivo de desconexión.
       }
@@ -212,73 +220,55 @@ class BleDataSourceImpl implements BleDataSource {
   ) async {
     final List<BluetoothService> services = await device.discoverServices();
 
+    session.adapters = _adapterResolver.resolve(
+      _capabilitiesFromServices(services),
+    );
+
+    for (final BleDeviceAdapter adapter in session.adapters) {
+      final BluetoothService? service = _findServiceWithCharacteristic(
+        services,
+        serviceUuid: adapter.serviceUuid,
+        characteristicUuid: adapter.telemetryCharacteristicUuid,
+      );
+      if (service == null) continue;
+      await _subscribeCharacteristic(
+        session,
+        service,
+        adapter.telemetryCharacteristicUuid,
+        (List<int> bytes) {
+          final TelemetrySnapshot? snapshot = adapter.parseNotification(
+            deviceId: deviceId,
+            characteristicUuid: adapter.telemetryCharacteristicUuid,
+            value: _asUint8List(bytes),
+            timestamp: DateTime.now(),
+          );
+          if (snapshot != null) {
+            session.telemetryController.add(snapshot);
+          }
+        },
+      );
+    }
+
     for (final BluetoothService service in services) {
       final String serviceUuid = service.uuid.str.toLowerCase();
 
-      if (serviceUuid == BleUuids.fitnessMachine) {
-        await _subscribeCharacteristic(session, service, BleUuids.indoorBikeData, (List<int> bytes) {
-          final FtmsIndoorBikeData data = FtmsParser.parseIndoorBikeData(_asUint8List(bytes));
-          _emitTelemetry(
-            session,
-            deviceId,
-            source: TelemetrySourceKind.ftms,
-            speedKmh: data.speedKmh,
-            powerWatts: data.powerWatts,
-            cadenceRpm: data.cadenceRpm,
-            heartRateBpm: data.heartRateBpm,
-          );
-        });
-      }
-
-      if (serviceUuid == BleUuids.cyclingPower) {
-        await _subscribeCharacteristic(session, service, BleUuids.cyclingPowerMeasurement, (List<int> bytes) {
-          final CyclingPowerReading? reading = session.cyclingPowerParser.parse(_asUint8List(bytes));
-          if (reading != null) {
-            _emitTelemetry(
-              session,
-              deviceId,
-              source: TelemetrySourceKind.cyclingPower,
-              powerWatts: reading.powerWatts,
-              cadenceRpm: reading.cadenceRpm,
-            );
-          }
-        });
-      }
-
-      if (serviceUuid == BleUuids.cyclingSpeedCadence) {
-        await _subscribeCharacteristic(session, service, BleUuids.cscMeasurement, (List<int> bytes) {
-          final CscReading reading = session.cscParser.parse(_asUint8List(bytes));
-          _emitTelemetry(
-            session,
-            deviceId,
-            source: TelemetrySourceKind.csc,
-            speedKmh: reading.speedKmh,
-            cadenceRpm: reading.cadenceRpm,
-          );
-        });
-      }
-
-      if (serviceUuid == BleUuids.heartRate) {
-        await _subscribeCharacteristic(session, service, BleUuids.heartRateMeasurement, (List<int> bytes) {
-          final int? bpm = HeartRateParser.parseHeartRateMeasurement(_asUint8List(bytes));
-          if (bpm != null) {
-            _emitTelemetry(
-              session,
-              deviceId,
-              source: TelemetrySourceKind.heartRate,
-              heartRateBpm: bpm,
-            );
-          }
-        });
-      }
-
       if (serviceUuid == BleUuids.battery) {
-        await _subscribeCharacteristic(session, service, BleUuids.batteryLevel, (List<int> bytes) {
-          final int? level = BatteryLevelParser.parseBatteryLevel(_asUint8List(bytes));
-          if (level != null) {
-            _updateModel(deviceId, (BleDeviceModel m) => m.copyWithModel(batteryLevel: level));
-          }
-        });
+        await _subscribeCharacteristic(
+          session,
+          service,
+          BleUuids.batteryLevel,
+          (List<int> bytes) {
+            final int? level = BatteryLevelParser.parseBatteryLevel(
+              _asUint8List(bytes),
+            );
+            if (level != null) {
+              _updateModel(
+                deviceId,
+                (BleDeviceModel m) => m.copyWithModel(batteryLevel: level),
+              );
+            }
+          },
+        );
       }
     }
   }
@@ -303,30 +293,9 @@ class BleDataSourceImpl implements BleDataSource {
     if (characteristic == null) return;
 
     await characteristic.setNotifyValue(true);
-    final StreamSubscription<List<int>> sub = characteristic.lastValueStream.listen(onData);
+    final StreamSubscription<List<int>> sub =
+        characteristic.lastValueStream.listen(onData);
     session.subscriptions.add(sub);
-  }
-
-  void _emitTelemetry(
-    _DeviceSession session,
-    String deviceId, {
-    required TelemetrySourceKind source,
-    double? speedKmh,
-    int? powerWatts,
-    int? cadenceRpm,
-    int? heartRateBpm,
-  }) {
-    session.telemetryController.add(
-      TelemetrySnapshot(
-        deviceId: deviceId,
-        source: source,
-        timestamp: DateTime.now(),
-        speedKmh: speedKmh,
-        powerWatts: powerWatts,
-        cadenceRpm: cadenceRpm,
-        heartRateBpm: heartRateBpm,
-      ),
-    );
   }
 
   // -------------------------------------------------------------------
@@ -343,12 +312,13 @@ class BleDataSourceImpl implements BleDataSource {
     // Desconexión SOLICITADA por el usuario: se marca para que
     // `_handleUnexpectedDisconnect` no la confunda con una caída de señal
     // y dispare una reconexión no deseada.
-    session.model = session.model.copyWithModel(status: DeviceConnectionStatus.disconnected);
+    session.model = session.model.copyWithModel(
+      status: DeviceConnectionStatus.disconnected,
+    );
     _emitConnectedDevices();
 
     await session.bluetoothDevice?.disconnect();
-    session.cyclingPowerParser.reset();
-    session.cscParser.reset();
+    _resetAdapters(session);
     session.disposeSubscriptions();
   }
 
@@ -384,7 +354,8 @@ class BleDataSourceImpl implements BleDataSource {
     // mide desde el inicio real del problema, no desde el último intento.
     session.firstDisconnectAt ??= DateTime.now();
 
-    if (DateTime.now().difference(session.firstDisconnectAt!) >= _maxTotalReconnectDuration) {
+    if (DateTime.now().difference(session.firstDisconnectAt!) >=
+        _maxTotalReconnectDuration) {
       // Tarea B2: límite de TIEMPO total alcanzado, independientemente de
       // cuántos intentos lleve — se detiene y notifica en vez de seguir
       // en silencio potencialmente más allá de los 6 intentos si el
@@ -418,7 +389,8 @@ class BleDataSourceImpl implements BleDataSource {
 
   @override
   Future<void> restoreKnownDevices() async {
-    final List<String> knownIds = await _knownDevicesLocalDataSource.getKnownDeviceIds();
+    final List<String> knownIds =
+        await _knownDevicesLocalDataSource.getKnownDeviceIds();
     for (final String id in knownIds) {
       // Se crea la sesión en estado `reconnecting` para que la pantalla de
       // dispositivos muestre inmediatamente "Reconectando..." en vez de
@@ -441,7 +413,8 @@ class BleDataSourceImpl implements BleDataSource {
   // -------------------------------------------------------------------
 
   @override
-  Stream<List<BleDeviceModel>> get connectedDevicesStream => _connectedDevicesController.stream;
+  Stream<List<BleDeviceModel>> get connectedDevicesStream =>
+      _connectedDevicesController.stream;
 
   @override
   Stream<TelemetrySnapshot> telemetryStreamFor(String deviceId) {
@@ -453,13 +426,16 @@ class BleDataSourceImpl implements BleDataSource {
 
   @override
   Future<bool> requestBlePermissions() async {
-    final BlePermissionStatus status = await _permissionHandler.requestBlePermissions();
+    final BlePermissionStatus status =
+        await _permissionHandler.requestBlePermissions();
     return status == BlePermissionStatus.granted;
   }
 
   @override
   Stream<bool> get isBluetoothEnabled {
-    return FlutterBluePlus.adapterState.map((BluetoothAdapterState s) => s == BluetoothAdapterState.on);
+    return FlutterBluePlus.adapterState.map(
+      (BluetoothAdapterState s) => s == BluetoothAdapterState.on,
+    );
   }
 
   // -------------------------------------------------------------------
@@ -481,10 +457,16 @@ class BleDataSourceImpl implements BleDataSource {
   }
 
   void _updateStatus(String deviceId, DeviceConnectionStatus status) {
-    _updateModel(deviceId, (BleDeviceModel m) => m.copyWithModel(status: status));
+    _updateModel(
+      deviceId,
+      (BleDeviceModel m) => m.copyWithModel(status: status),
+    );
   }
 
-  void _updateModel(String deviceId, BleDeviceModel Function(BleDeviceModel current) update) {
+  void _updateModel(
+    String deviceId,
+    BleDeviceModel Function(BleDeviceModel current) update,
+  ) {
     final _DeviceSession session = _sessionFor(deviceId);
     session.model = update(session.model);
     _emitConnectedDevices();
@@ -492,8 +474,52 @@ class BleDataSourceImpl implements BleDataSource {
 
   void _emitConnectedDevices() {
     _connectedDevicesController.add(
-      _sessions.values.map((_DeviceSession s) => s.model).toList(growable: false),
+      _sessions.values
+          .map((_DeviceSession s) => s.model)
+          .toList(growable: false),
     );
+  }
+
+  List<BleDeviceCapability> _capabilitiesFromServices(
+    List<BluetoothService> services,
+  ) {
+    return services
+        .map(
+          (BluetoothService service) => BleDeviceCapability(
+            serviceUuid: service.uuid.str.toLowerCase(),
+            characteristicUuids: service.characteristics
+                .map((BluetoothCharacteristic c) => c.uuid.str.toLowerCase())
+                .toSet(),
+          ),
+        )
+        .toList(growable: false);
+  }
+
+  BluetoothService? _findServiceWithCharacteristic(
+    List<BluetoothService> services, {
+    required String serviceUuid,
+    required String characteristicUuid,
+  }) {
+    for (final BluetoothService service in services) {
+      if (service.uuid.str.toLowerCase() != serviceUuid.toLowerCase()) {
+        continue;
+      }
+      final bool exposesCharacteristic = service.characteristics.any(
+        (BluetoothCharacteristic characteristic) =>
+            characteristic.uuid.str.toLowerCase() ==
+            characteristicUuid.toLowerCase(),
+      );
+      if (exposesCharacteristic) {
+        return service;
+      }
+    }
+    return null;
+  }
+
+  void _resetAdapters(_DeviceSession session) {
+    for (final BleDeviceAdapter adapter in session.adapters) {
+      adapter.reset();
+    }
   }
 
   Uint8List _asUint8List(List<int> raw) => Uint8List.fromList(raw);
