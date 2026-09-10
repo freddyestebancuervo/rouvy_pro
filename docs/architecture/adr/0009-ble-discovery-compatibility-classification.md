@@ -1,7 +1,7 @@
 # ADR-0009: BLE Discovery And Compatibility Classification
 
 - **Fecha:** 2026-09-10
-- **Estado:** Propuesto en `T-NEW.4` para revisión humana
+- **Estado:** Aceptado y fusionado en `main` por PR #140 (`5827f10c2a47f49cadbae45d7d0cbc93e9269445`)
 - **Tarea:** `T-NEW.4` — Device Adapter Phase B, broad discovery + compatibility classification
 
 ## Contexto
