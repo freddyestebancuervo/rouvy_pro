@@ -398,11 +398,15 @@ app.
 
 Escaneo, emparejamiento, reconexión automática y lectura en tiempo real de
 rodillos inteligentes, medidores de potencia, sensores de cadencia/velocidad
-y pulsómetros, implementado contra los **estándares BLE**. PR #138 fusionó
-la Fase A de Device Adapter en `main`: `BleDataSourceImpl` sigue siendo dueño de
-discovery, conexión/desconexión, service discovery, suscripciones,
-reconexión, batería y orquestación de sesiones; `StandardBleDeviceAdapterResolver`
-resuelve de forma determinista los adapters estándar compatibles.
+y pulsómetros. El escaneo BLE es amplio: un dispositivo puede aparecer aunque
+no anuncie FTMS, Cycling Power, CSC ni Heart Rate. Ver un dispositivo no
+significa que esté soportado; la compatibilidad se clasifica después de
+conectar y completar GATT service discovery.
+
+`BleDataSourceImpl` sigue siendo dueño de discovery, conexión/desconexión,
+service discovery, suscripciones, reconexión, batería y orquestación de
+sesiones; `StandardBleDeviceAdapterResolver` resuelve de forma determinista los
+adapters estándar compatibles.
 
 Adapters estándar actuales:
 
@@ -420,14 +424,21 @@ BLE → standard adapter → existing parser → TelemetrySnapshot → Telemetry
 ```
 
 Esto mejora la arquitectura de compatibilidad estándar sin sobreafirmar
-soporte físico universal: `DISCOVERY_BROADENED = NO`,
+soporte físico universal: `DISCOVERY_BROADENED = YES`,
 `VENDOR_ADAPTERS = NOT_IMPLEMENTED`, `H9_ADAPTER = NOT_IMPLEMENTED`,
-`H9_RUNTIME_HR = UNPROVEN` y
+`H9_RUNTIME_HR = UNPROVEN`, `PHYSICAL_BROAD_DISCOVERY = UNPROVEN` y
 `PHYSICAL_COMPATIBILITY_BY_BRAND_MODEL = NOT_GENERALLY_PROVEN`. Hay
 compatibilidad prevista con dispositivos que implementen correctamente esos
 estándares — incluidas marcas habituales del mercado — pero la validación
 física de cada marca/modelo real sigue pendiente antes de afirmar
 compatibilidad confirmada dispositivo por dispositivo.
+
+`BleDevice.compatibilityStatus` expone el estado probado: `discovered` tras el
+scan; `standardCompatible` solo si GATT demuestra un servicio+característica que
+un adapter estándar actual soporta; `unsupported` si GATT terminó y ningún
+adapter del build actual coincide. `korixaCompatible` y `korixaVerified` quedan
+reservados para futuras tareas con adapter vendor/protocol-family real y
+evidencia física explícita.
 
 - `core/ble/` — UUIDs GATT estándar del Bluetooth SIG y el wrapper de
   permisos (Android 12+ vs ≤11 vs iOS difieren bastante, ver `BLE_PERMISSIONS.md`).

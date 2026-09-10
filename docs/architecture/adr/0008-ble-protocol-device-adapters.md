@@ -74,6 +74,9 @@ implemente.
 
 ## Consecuencias
 
+Esta sección registra el resultado exacto de Phase A. Phase B cambia solo la
+política de discovery y clasificación de compatibilidad; ver ADR-0009.
+
 - `BleDataSourceImpl` queda menos acoplado a cada parser sin perder ownership de
   sesión BLE.
 - La compatibilidad estándar mejora a nivel arquitectónico, pero no prueba por sí

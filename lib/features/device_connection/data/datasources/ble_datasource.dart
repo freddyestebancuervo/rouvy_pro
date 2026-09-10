@@ -6,14 +6,18 @@ import 'package:flutter_blue_plus/flutter_blue_plus.dart';
 import '../../../../core/ble/ble_permission_handler.dart';
 import '../../../../core/ble/ble_uuids.dart';
 import '../../../../core/error/exceptions.dart';
+import '../../domain/entities/ble_device_compatibility_status.dart';
 import '../../domain/entities/device_connection_status.dart';
 import '../../domain/entities/sport_device_type.dart';
 import '../../domain/entities/telemetry_snapshot.dart';
 import '../adapters/ble_device_adapter.dart';
 import '../adapters/ble_device_adapter_resolver.dart';
-import 'known_devices_local_datasource.dart';
+import '../classification/ble_device_compatibility_classifier.dart';
 import '../models/ble_device_model.dart';
 import '../parsers/battery_level_parser.dart';
+import '../scanning/ble_device_evidence_merger.dart';
+import '../scanning/ble_scan_result_collector.dart';
+import 'known_devices_local_datasource.dart';
 
 /// Estado interno que el datasource mantiene por cada dispositivo con el
 /// que ha interactuado (visto en escaneo, conectado, o conocido de una
@@ -81,11 +85,15 @@ class BleDataSourceImpl implements BleDataSource {
         const StandardBleDeviceAdapterResolver(),
   })  : _knownDevicesLocalDataSource = knownDevicesLocalDataSource,
         _permissionHandler = permissionHandler,
-        _adapterResolver = adapterResolver;
+        _adapterResolver = adapterResolver,
+        _compatibilityClassifier = BleDeviceCompatibilityClassifier(
+          resolver: adapterResolver,
+        );
 
   final KnownDevicesLocalDataSource _knownDevicesLocalDataSource;
   final BlePermissionHandler _permissionHandler;
   final BleDeviceAdapterResolver _adapterResolver;
+  final BleDeviceCompatibilityClassifier _compatibilityClassifier;
 
   /// Única fuente de verdad de todos los dispositivos con los que la app
   /// ha interactuado en esta sesión de proceso — tanto los vistos en
@@ -114,30 +122,25 @@ class BleDataSourceImpl implements BleDataSource {
   Stream<List<BleDeviceModel>> scanForDevices() {
     final StreamController<List<BleDeviceModel>> controller =
         StreamController<List<BleDeviceModel>>.broadcast();
-    final Map<String, BleDeviceModel> found = <String, BleDeviceModel>{};
+    final BleScanResultCollector found = BleScanResultCollector();
 
     late final StreamSubscription<List<ScanResult>> resultsSub;
     resultsSub = FlutterBluePlus.scanResults.listen(
       (List<ScanResult> results) {
-        for (final ScanResult result in results) {
-          final BleDeviceModel model = BleDeviceModel.fromScanResult(result);
-          // Se descartan dispositivos sin ningún servicio deportivo
-          // reconocido — el filtro de UUIDs en `startScan` ya debería
-          // encargarse de esto, pero se revalida aquí por si el sistema
-          // operativo devuelve advertising adicional sin filtrar (ocurre
-          // en algunas versiones de Android con el filtro por hardware).
-          if (model.type == SportDeviceType.unknown) continue;
-          found[model.id] = model;
-        }
-        controller.add(found.values.toList(growable: false));
+        final Iterable<BleDeviceModel> merged = results
+            .map(BleDeviceModel.fromScanResult)
+            .map(
+              (BleDeviceModel scan) => mergeScanWithSessionEvidence(
+                scan: scan,
+                sessionEvidence: _sessions[scan.id]?.model,
+              ),
+            );
+        controller.add(found.addAll(merged));
       },
       onError: controller.addError,
     );
 
-    FlutterBluePlus.startScan(
-      withServices: BleUuids.scannableServices.map(Guid.new).toList(),
-      timeout: _scanTimeout,
-    );
+    FlutterBluePlus.startScan(timeout: _scanTimeout);
 
     controller.onCancel = () {
       resultsSub.cancel();
@@ -185,12 +188,21 @@ class BleDataSourceImpl implements BleDataSource {
     });
     session.subscriptions.add(connectionSub);
 
-    await _discoverAndSubscribe(deviceId, device, session);
+    try {
+      await _discoverAndSubscribe(deviceId, device, session);
+    } catch (e) {
+      _updateStatus(deviceId, DeviceConnectionStatus.connectionFailed);
+      _resetAdapters(session);
+      throw const ServerException('No se pudo configurar el dispositivo BLE.');
+    }
 
     session.reconnectAttempts = 0; // conexión exitosa: resetea el backoff
     session.firstDisconnectAt = null; // y el reloj del límite total (B2)
     _updateStatus(deviceId, DeviceConnectionStatus.connected);
-    await _knownDevicesLocalDataSource.addKnownDevice(deviceId);
+    if (session.model.compatibilityStatus !=
+        BleDeviceCompatibilityStatus.unsupported) {
+      await _knownDevicesLocalDataSource.addKnownDevice(deviceId);
+    }
 
     // Refresco periódico de RSSI mientras esté conectado — alimenta el
     // indicador de calidad de señal en la pantalla de gestión.
@@ -220,8 +232,17 @@ class BleDataSourceImpl implements BleDataSource {
   ) async {
     final List<BluetoothService> services = await device.discoverServices();
 
-    session.adapters = _adapterResolver.resolve(
-      _capabilitiesFromServices(services),
+    final List<BleDeviceCapability> capabilities =
+        _capabilitiesFromServices(services);
+    session.adapters = _adapterResolver.resolve(capabilities);
+    final BleDeviceGattClassification classification =
+        _compatibilityClassifier.classify(capabilities);
+    _updateModel(
+      deviceId,
+      (BleDeviceModel m) => m.copyWithModel(
+        type: classification.type,
+        compatibilityStatus: classification.status,
+      ),
     );
 
     for (final BleDeviceAdapter adapter in session.adapters) {
