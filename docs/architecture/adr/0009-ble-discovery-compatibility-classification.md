@@ -68,5 +68,6 @@ La compatibilidad se expone en dominio con `BleDeviceCompatibilityStatus`:
 - `GENERIC_NORDIC_UART_ADAPTER = NO`.
 - `H9_ADAPTER_IMPLEMENTED = NO`.
 - `H9_RUNTIME_HR = UNPROVEN`.
-- `PHYSICAL_BROAD_DISCOVERY = UNPROVEN`.
+- `PHYSICAL_BROAD_DISCOVERY = PROVEN` (2026-09-10, `T-NEW.5`, Android 15/API 35, runtime físico: control nRF con H9 visible; scan de Korixa con 2 scans LowLatency y 563 resultados a nivel OS; H9 visible en la UI como `discovered`, sin Connect/GATT/writes).
 - `PHYSICAL_COMPATIBILITY_BY_BRAND_MODEL = NOT_GENERALLY_PROVEN`.
+- Hallazgo operativo registrado en `T-NEW.5` (no es parte del diseño Phase B): el gate compartido de permisos exigía ubicación también en Android 12+, donde el SO la deniega siempre — el scan nunca arrancaba. Corregido con política por plataforma/versión (`ble_permission_policy.dart`) + `SDK_INT` nativo mínimo, cero dependencias nuevas.
