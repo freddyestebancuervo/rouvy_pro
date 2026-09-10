@@ -166,6 +166,23 @@ void main() {
     expect(inactiveCount, 2, reason: 'las otras 2 líneas deben quedar en gris inactivo');
   });
 
+  // KORIXA-SCREEN01-CENTER-PAGE-INDICATORS-20260910: en mobile portrait
+  // la columna ya usa `crossAxisAlignment.stretch` (mismo ancho para el
+  // indicador envuelto en `Center` y el CTA sin ancho propio), así que
+  // ya deberían compartir centro — este test lo prueba explícitamente
+  // en vez de asumirlo por la estructura.
+  testWidgets('MOBILE_INDICATOR_CENTERED_OVER_CTA = PASS', (WidgetTester tester) async {
+    await pumpWelcomePage(tester, surfaceSize: const Size(390, 844));
+
+    final Offset ctaCenter = tester.getCenter(find.byType(PrimaryGradientButton));
+    final Offset indicatorCenter = tester.getCenter(find.byKey(const Key('welcome-indicator-row')));
+    expect(
+      indicatorCenter.dx,
+      closeTo(ctaCenter.dx, 0.5),
+      reason: 'el indicador debe compartir el centro horizontal exacto del CTA en mobile portrait',
+    );
+  });
+
   // KORIXA-SCREEN01-MOBILE-LANDSCAPE-FIX-20260906: clasificar el layout
   // solo por `maxWidth` hacía que un teléfono rotado a horizontal (ancho
   // > 700 tan fácilmente como un monitor) recibiera la composición de
@@ -239,6 +256,17 @@ void main() {
       expect(ctaSize.width, greaterThanOrEqualTo(280), reason: '$label: el CTA debe acercarse al rango 300-380 pedido');
       expect(ctaSize.width, lessThanOrEqualTo(380), reason: '$label: el CTA no debe exceder el rango 300-380 pedido');
       expect(ctaSize.height, greaterThanOrEqualTo(48), reason: '$label: el CTA debe seguir siendo táctil (>=48dp)');
+
+      // KORIXA-SCREEN01-CENTER-PAGE-INDICATORS-20260910: el indicador
+      // debe compartir el centro horizontal exacto del CTA, no quedar
+      // estirado/alineado a la izquierda del ancho completo de columna.
+      final Offset ctaCenter = tester.getCenter(find.byKey(const Key('welcome-landscape-cta')));
+      final Offset indicatorCenter = tester.getCenter(find.byKey(const Key('welcome-indicator-row')));
+      expect(
+        indicatorCenter.dx,
+        closeTo(ctaCenter.dx, 0.5),
+        reason: '$label: el indicador debe compartir el centro horizontal exacto del CTA',
+      );
 
       // El bloque de contenido debe quedar en el rango 34-40% del
       // viewport pedido (acotado 280-380) — con el hero nuevo, el
@@ -365,6 +393,22 @@ void main() {
     final Size ctaSize = tester.getSize(find.byKey(const Key('welcome-desktop-cta')));
     expect(ctaSize.width, lessThan(1440));
     expect(ctaSize.width, greaterThan(200));
+  });
+
+  // KORIXA-SCREEN01-CENTER-PAGE-INDICATORS-20260910: el dueño reportó el
+  // indicador de 3 barras pegado al borde izquierdo de la columna en vez
+  // de centrado sobre el CTA "Comenzar" — este test prueba el centro
+  // horizontal real (no solo que ambos existan).
+  testWidgets('DESKTOP_INDICATOR_CENTERED_OVER_CTA = PASS', (WidgetTester tester) async {
+    await pumpWelcomePage(tester, surfaceSize: const Size(1440, 900));
+
+    final Offset ctaCenter = tester.getCenter(find.byKey(const Key('welcome-desktop-cta')));
+    final Offset indicatorCenter = tester.getCenter(find.byKey(const Key('welcome-indicator-row')));
+    expect(
+      indicatorCenter.dx,
+      closeTo(ctaCenter.dx, 0.5),
+      reason: 'el indicador debe compartir el centro horizontal exacto del CTA, no quedar alineado a la izquierda',
+    );
   });
 
   testWidgets('DESKTOP_SECONDARY_LOGIN_ACTION_ABSENT = PASS', (WidgetTester tester) async {
