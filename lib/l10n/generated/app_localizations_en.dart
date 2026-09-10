@@ -22,13 +22,10 @@ class AppLocalizationsEn extends AppLocalizations {
   String get welcomeGetStarted => 'Get started';
 
   @override
-  String get welcomeSkipAction => 'Skip';
-
-  @override
   String get loginTitle => 'Welcome back';
 
   @override
-  String get loginSubtitle => 'Sign in to keep training';
+  String get loginSubtitle => 'Sign in to continue your route';
 
   @override
   String get emailLabel => 'Email';

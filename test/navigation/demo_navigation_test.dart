@@ -41,13 +41,14 @@ void main() {
       // `null` (sin sesión) — ver el fix de `FakeAuthRepository` para que
       // esto no se quede colgado.
       await tester.pumpAndSettle();
-      expect(find.text('Saltar'), findsOneWidget);
+      expect(find.text('Comenzar'), findsOneWidget);
 
       // --- Welcome → Login ---
-      // "Saltar" (Skip) es el destino que reemplazó al antiguo "Ya tengo
-      // cuenta" — ver KORIXA-UI-SCREEN-01-APPROVED-WELCOME-IMPLEMENTATION-20260904:
-      // mismo destino (Login), solo relabelado según el diseño aprobado.
-      await tester.tap(find.text('Saltar'));
+      // KORIXA-WELCOME-SINGLE-CTA-NAVIGATION-PR127-20260910: "Comenzar"
+      // es ahora el único CTA de entrada a autenticación de Welcome y
+      // navega directo a Login (la acción secundaria "Iniciar sesión"
+      // que vivía arriba a la derecha se eliminó por completo).
+      await tester.tap(find.text('Comenzar'));
       await tester.pumpAndSettle();
       expect(find.text('Bienvenido de nuevo'), findsOneWidget); // loginTitle
 
@@ -63,7 +64,7 @@ void main() {
       await tester.pumpAndSettle();
 
       // --- Debe aterrizar en Home ---
-      expect(find.text('Saltar'), findsNothing); // ya no está en Welcome/Login
+      expect(find.text('Iniciar sesión'), findsNothing); // ya no está en Welcome/Login
       expect(find.textContaining('Ciclista Demo'), findsWidgets); // displayName del fixture
 
       // --- Home → Catálogo de rutas ---

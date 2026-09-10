@@ -37,6 +37,9 @@ Widget authPageHarness({
   // resolviendo Dark Tech incluso cuando el modo global de la app es
   // claro. `null` deja el valor por defecto de `MaterialApp`.
   ThemeData? theme,
+  // Permite probar la copy localizada (p. ej. inglés) sin afectar
+  // ningún test existente — por defecto sigue siendo español.
+  Locale locale = const Locale('es'),
 }) {
   final GoRouter router = GoRouter(
     initialLocation: initialLocation,
@@ -64,7 +67,7 @@ Widget authPageHarness({
     child: MaterialApp.router(
       routerConfig: router,
       theme: theme,
-      locale: const Locale('es'),
+      locale: locale,
       localizationsDelegates: AppLocalizations.localizationsDelegates,
       supportedLocales: AppLocalizations.supportedLocales,
     ),

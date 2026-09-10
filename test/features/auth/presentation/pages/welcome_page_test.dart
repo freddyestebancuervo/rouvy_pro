@@ -14,13 +14,19 @@ void main() {
     WidgetTester tester, {
     Size surfaceSize = const Size(390, 844),
     ThemeData? theme,
+    Locale locale = const Locale('es'),
   }) async {
     tester.view.physicalSize = surfaceSize;
     tester.view.devicePixelRatio = 1.0;
     addTearDown(tester.view.reset);
 
     await tester.pumpWidget(
-      authPageHarness(initialLocation: '/welcome', welcomePage: const WelcomePage(), theme: theme),
+      authPageHarness(
+        initialLocation: '/welcome',
+        welcomePage: const WelcomePage(),
+        theme: theme,
+        locale: locale,
+      ),
     );
     await tester.pumpAndSettle();
   }
@@ -41,9 +47,24 @@ void main() {
     expect(find.byType(PrimaryGradientButton), findsOneWidget);
   });
 
-  testWidgets('SKIP_ACTION_PRESENT = PASS', (WidgetTester tester) async {
+  testWidgets('SKIP_TEXT_NOT_PRESENT = PASS ("Saltar" ya no debe existir)', (WidgetTester tester) async {
     await pumpWelcomePage(tester);
-    expect(find.text('Saltar'), findsOneWidget);
+    expect(find.text('Saltar'), findsNothing);
+  });
+
+  // KORIXA-WELCOME-SINGLE-CTA-NAVIGATION-PR127-20260910: el dueño pidió
+  // un único CTA de entrada a autenticación en Welcome — la acción
+  // secundaria "Iniciar sesión"/"Sign in" que vivía arriba a la derecha
+  // se elimina por completo (no solo se oculta).
+  testWidgets('SECONDARY_LOGIN_ACTION_ABSENT = PASS', (WidgetTester tester) async {
+    await pumpWelcomePage(tester);
+    expect(find.text('Iniciar sesión'), findsNothing);
+  });
+
+  testWidgets('EN_SECONDARY_LOGIN_ACTION_ABSENT = PASS', (WidgetTester tester) async {
+    await pumpWelcomePage(tester, locale: const Locale('en'));
+    expect(find.text('Sign in'), findsNothing);
+    expect(find.text('Skip'), findsNothing);
   });
 
   testWidgets('HERO_ASSET_PRESENT = PASS', (WidgetTester tester) async {
@@ -179,11 +200,12 @@ void main() {
       );
       expect(hasDesktopLogo, isFalse, reason: '$label no debe mostrar el logo de escritorio');
 
-      // Contenido mobile mínimo viable: Saltar, título, subtítulo, CTA —
-      // todos deben seguir existiendo en el árbol (alcanzables vía el
-      // scroll ya existente si el alto es angosto), nunca reemplazados
-      // por el layout de escritorio.
-      expect(find.text('Saltar'), findsOneWidget);
+      // Contenido mobile mínimo viable: título, subtítulo, CTA — deben
+      // seguir existiendo en el árbol (alcanzables vía el scroll ya
+      // existente si el alto es angosto), nunca reemplazados por el
+      // layout de escritorio. "Iniciar sesión" ya no existe (KORIXA-
+      // WELCOME-SINGLE-CTA-NAVIGATION-PR127-20260910).
+      expect(find.text('Iniciar sesión'), findsNothing);
       expect(find.text('Conecta tu energía.'), findsOneWidget);
       expect(find.text('Entrena, compite y vive rutas increíbles en indoor y outdoor.'), findsOneWidget);
       expect(find.text('Comenzar'), findsOneWidget);
@@ -257,23 +279,27 @@ void main() {
     expect(heroAssetImage(tester)?.assetName, 'assets/images/korixa_welcome_hero_desktop.webp');
   });
 
-  testWidgets('CTA_NAVIGATION = PASS (Comenzar -> Register, mismo destino que el CTA anterior)',
-      (WidgetTester tester) async {
+  // KORIXA-WELCOME-SINGLE-CTA-NAVIGATION-PR127-20260910: "Comenzar" es
+  // ahora el único CTA de entrada a autenticación y navega a Login (no
+  // a Register) — ver docblock de `WelcomePage`.
+  testWidgets('CTA_NAVIGATION = PASS (Comenzar -> Login)', (WidgetTester tester) async {
     await pumpWelcomePage(tester);
 
     await tester.tap(find.text('Comenzar'));
     await tester.pumpAndSettle();
 
-    expect(find.text('REGISTER'), findsOneWidget);
+    expect(find.text('LOGIN'), findsOneWidget);
   });
 
-  testWidgets('SKIP_NAVIGATION = PASS (Saltar -> Login, mismo destino que el botón secundario anterior)',
-      (WidgetTester tester) async {
+  testWidgets('REGISTER_NOT_DIRECTLY_REACHABLE_FROM_WELCOME = PASS', (WidgetTester tester) async {
     await pumpWelcomePage(tester);
 
-    await tester.tap(find.text('Saltar'));
+    // Único CTA de la pantalla; ya se prueba arriba que navega a Login,
+    // nunca a Register directamente.
+    await tester.tap(find.text('Comenzar'));
     await tester.pumpAndSettle();
 
+    expect(find.text('REGISTER'), findsNothing);
     expect(find.text('LOGIN'), findsOneWidget);
   });
 
@@ -341,19 +367,11 @@ void main() {
     expect(ctaSize.width, greaterThan(200));
   });
 
-  testWidgets('DESKTOP_SKIP_TOP_RIGHT = PASS', (WidgetTester tester) async {
+  testWidgets('DESKTOP_SECONDARY_LOGIN_ACTION_ABSENT = PASS', (WidgetTester tester) async {
     const Size desktopSize = Size(1440, 900);
     await pumpWelcomePage(tester, surfaceSize: desktopSize);
 
-    expect(find.text('Saltar'), findsOneWidget);
-
-    final Offset skipTopLeft = tester.getTopLeft(find.text('Saltar'));
-    // Arriba: bien por encima de la mitad vertical del viewport.
-    expect(skipTopLeft.dy, lessThan(desktopSize.height / 2));
-    // A la derecha: bien a la derecha de la mitad horizontal del
-    // viewport (y, por construcción del layout, del bloque de contenido
-    // anclado a la izquierda).
-    expect(skipTopLeft.dx, greaterThan(desktopSize.width / 2));
+    expect(find.text('Iniciar sesión'), findsNothing);
   });
 
   testWidgets('OUTER_LIGHT_THEME_DARK_TECH = PASS', (WidgetTester tester) async {
@@ -402,7 +420,7 @@ void main() {
       expect(find.byType(PrimaryGradientButton), findsOneWidget, reason: '$label: el CTA de escritorio debe existir');
       expect(find.byKey(const Key('welcome-desktop-cta')), findsOneWidget, reason: '$label: debe ser el CTA de escritorio, no el de teléfono en horizontal');
       expect(find.text('Conecta tu energía.'), findsOneWidget, reason: '$label: el título debe seguir visible');
-      expect(find.text('Saltar'), findsOneWidget, reason: '$label: Saltar debe seguir siendo alcanzable');
+      expect(find.text('Iniciar sesión'), findsNothing, reason: '$label: la acción secundaria ya no existe');
     });
   }
 
@@ -463,7 +481,7 @@ void main() {
     expect(heroAssetImage(tester)?.assetName, 'assets/images/korixa_welcome_hero.webp', reason: 'tablet portrait reusa el hero/composición portrait ya aprobada');
     expect(hasDesktopLogo(tester), isFalse, reason: 'portrait nunca debe mostrar el logo de escritorio');
     expect(find.text('Comenzar'), findsOneWidget, reason: 'el CTA debe seguir siendo alcanzable');
-    expect(find.text('Saltar'), findsOneWidget);
+    expect(find.text('Iniciar sesión'), findsNothing);
   });
 
   // Barrido de no-overflow adicional a los ya existentes (320x568,

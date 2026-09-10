@@ -122,12 +122,6 @@ abstract class AppLocalizations {
   /// **'Comenzar'**
   String get welcomeGetStarted;
 
-  /// No description provided for @welcomeSkipAction.
-  ///
-  /// In es, this message translates to:
-  /// **'Saltar'**
-  String get welcomeSkipAction;
-
   /// No description provided for @loginTitle.
   ///
   /// In es, this message translates to:
@@ -137,7 +131,7 @@ abstract class AppLocalizations {
   /// No description provided for @loginSubtitle.
   ///
   /// In es, this message translates to:
-  /// **'Inicia sesión para continuar entrenando'**
+  /// **'Inicia sesión para continuar tu ruta'**
   String get loginSubtitle;
 
   /// No description provided for @emailLabel.
