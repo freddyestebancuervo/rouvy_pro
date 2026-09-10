@@ -25,10 +25,11 @@ propio para Equipment/Workouts, en paralelo a Firebase — ver
 `backend/README.md` y `docs/TECHNICAL_SPECIFICATION_M0_M1.md` sección 0
 para el porqué de dos fuentes de datos).
 
-> **Estado operativo vigente:** para el corte documental reconciliado hasta
-> PR #95, leer primero `PROJECT_STATUS_CURRENT.md`. `PROJECT_STATUS.md`
-> conserva el historial append-only y puede contener afirmaciones válidas
-> para una fecha anterior que hayan sido superadas por evidencia posterior.
+> **Estado operativo vigente:** `PROJECT_STATUS.md` es la fuente única de
+> verdad del estado actual del proyecto. `PROJECT_STATUS_CURRENT.md` y
+> `PROJECT_STATUS_POST*.md` son snapshots históricos con cortes específicos
+> (por ejemplo PR #95, PR #98, PR #106); se conservan intactos para
+> trazabilidad, pero no sustituyen al estado vigente de `PROJECT_STATUS.md`.
 
 > **Especificación técnica de producción:** antes de seguir extendiendo
 > M0/M1, revisar `docs/TECHNICAL_SPECIFICATION_M0_M1.md` (contratos de
@@ -224,11 +225,12 @@ Este scaffold cubre la base transversal (M0) + **Auth completo** (M1):
 bienvenida, registro/login con correo, Google, Apple, recuperación de
 contraseña, verificación de correo, perfil editable, logout y protección de
 rutas. Pendiente dentro del propio M1: subida de foto de perfil (Storage +
-`image_picker`) y eliminación de cuenta. Los siguientes módulos (conexión
-BLE, catálogo de rutas, HUD de entrenamiento, multijugador, retos,
-wearables, IA, panel admin) se construyen como nuevas carpetas bajo
-`features/`, replicando exactamente la estructura `domain/data/presentation`
-de `features/auth`.
+`image_picker`) y eliminación de cuenta. BLE, HUD de entrenamiento,
+wearables, estadísticas, logros e historial ya existen con distintos grados
+de validación; el estado vigente de cada módulo se consulta en
+`PROJECT_STATUS.md`. Los módulos futuros (catálogo real de rutas,
+multijugador, retos, IA, panel admin) se construyen como nuevas carpetas bajo
+`features/`, replicando el patrón `domain/data/presentation` de `features/auth`.
 
 Antes de compilar en un dispositivo real, revisar **`SETUP_SOCIAL_LOGIN.md`**
 (guía completa y checklist de credenciales de Google/Apple Sign-In),
@@ -256,18 +258,17 @@ previa, switch explícito de tráfico, health check y rollback automático
 condicionado — primer deploy real completado con éxito.
 
 Para **Production**, `T-F1.1` está **CERRADA** con Google Cloud Run
-seleccionado como plataforma y `T-F1.2` permanece **EN PROGRESO**. Al corte
-PR #95 no se había ejecutado un deploy real del backend de Production ni se
+seleccionado como plataforma y `T-F1.2` permanece **EN PROGRESO**. El corte
+histórico PR #95 quedó preservado en `PROJECT_STATUS_CURRENT.md`: en ese
+momento no se había ejecutado un deploy real del backend de Production ni se
 había probado la precondición de migraciones (`MIGRATION_PRECONDITION_PROVEN=NO`).
 PR #95 sí dejó implementado y protegido el workflow manual-only
 `.github/workflows/production-readonly-preflight.yml`: verifica metadatos de
 Cloud SQL, service account runtime, versiones ENABLED del secreto sin leer
 payload, Artifact Registry y existencia del inspector Job usando solo
-operaciones read/describe/list. El propio PR #95 no despachó ese preflight;
-el siguiente paso al corte #95 era su ejecución live read-only con Human
-Gate separado y, únicamente después, otro gate independiente para la
-inspección DB. Ver `PROJECT_STATUS_CURRENT.md` para la evidencia exacta del
-corte 1→95.
+operaciones read/describe/list. Los hechos posteriores al corte PR #95 se
+consultan primero en `PROJECT_STATUS.md`; `PROJECT_STATUS_CURRENT.md` queda
+como evidencia histórica exacta del corte 1→95.
 
 Después de ese corte (PR #96→#102, ver `PROJECT_STATUS_POST95.md` y
 `PROJECT_STATUS_POST98.md` para la evidencia exacta), el preflight live de
@@ -397,30 +398,55 @@ app.
 
 Escaneo, emparejamiento, reconexión automática y lectura en tiempo real de
 rodillos inteligentes, medidores de potencia, sensores de cadencia/velocidad
-y pulsómetros, implementado contra los **estándares BLE** (FTMS Indoor Bike
-Data, Cycling Power Measurement, CSC Measurement, Heart Rate Measurement),
-sin SDK propietario por fabricante. Esto da **compatibilidad prevista** con
-cualquier dispositivo que implemente correctamente estos estándares —
-incluyendo marcas habituales del mercado como Wahoo, Tacx, Elite, Zwift Hub,
-JetBlack o ThinkRider — pero el código y los tests actuales verifican los
-**protocolos y parsers** (con datos simulados/mockeados), no la validación
-física de cada marca/modelo real. **Validación con hardware real: pendiente**
-antes de afirmar compatibilidad confirmada dispositivo por dispositivo.
+y pulsómetros, implementado contra los **estándares BLE**. PR #138 introduce
+la Fase A de Device Adapter: `BleDataSourceImpl` sigue siendo dueño de
+discovery, conexión/desconexión, service discovery, suscripciones,
+reconexión, batería y orquestación de sesiones; `StandardBleDeviceAdapterResolver`
+resuelve de forma determinista los adapters estándar compatibles.
+
+Adapters estándar actuales:
+
+- FTMS (`Fitness Machine Service` / `Indoor Bike Data`).
+- Cycling Power (`Cycling Power Measurement`).
+- CSC (`Cycling Speed and Cadence Measurement`).
+- Heart Rate (`Heart Rate Measurement`).
+
+Los parsers existentes se reutilizan detrás de esos adapters. Las instancias
+de adapters/parsers con estado son por dispositivo/sesión para preservar el
+aislamiento de contadores acumulados. La ruta vigente de telemetría es:
+
+```text
+BLE → standard adapter → existing parser → TelemetrySnapshot → TelemetryAggregator → RideSessionController
+```
+
+Esto mejora la arquitectura de compatibilidad estándar sin sobreafirmar
+soporte físico universal: `DISCOVERY_BROADENED = NO`,
+`VENDOR_ADAPTERS = NOT_IMPLEMENTED`, `H9_ADAPTER = NOT_IMPLEMENTED`,
+`H9_RUNTIME_HR = UNPROVEN` y
+`PHYSICAL_COMPATIBILITY_BY_BRAND_MODEL = NOT_GENERALLY_PROVEN`. Hay
+compatibilidad prevista con dispositivos que implementen correctamente esos
+estándares — incluidas marcas habituales del mercado — pero la validación
+física de cada marca/modelo real sigue pendiente antes de afirmar
+compatibilidad confirmada dispositivo por dispositivo.
 
 - `core/ble/` — UUIDs GATT estándar del Bluetooth SIG y el wrapper de
   permisos (Android 12+ vs ≤11 vs iOS difieren bastante, ver `BLE_PERMISSIONS.md`).
 - `data/parsers/` — un parser puro (o con estado mínimo) por protocolo:
   FTMS Indoor Bike Data, Cycling Power Measurement, CSC Measurement, Heart
-  Rate Measurement, Battery Level. Los tres primeros están cubiertos por
-  tests en `test/features/device_connection/data/parsers/`.
+  Rate Measurement, Battery Level. Los parsers existentes siguen siendo la
+  implementación de interpretación de protocolo y están cubiertos por tests
+  en `test/features/device_connection/data/parsers/`.
+- `data/adapters/` — contrato `BleDeviceAdapter`, resolver estándar
+  capability-based y adapters FTMS/Cycling Power/CSC/Heart Rate. No incluye
+  adapters vendor, H9 ni fallback propietario.
 - `data/datasources/ble_datasource.dart` — única capa que importa
   `flutter_blue_plus`. Mantiene una `_DeviceSession` por dispositivo
-  (suscripciones activas, parsers con estado, intentos de reconexión) y
+  (suscripciones activas, adapters/parsers con estado, intentos de reconexión) y
   aplica backoff exponencial (2s→30s, hasta 6 intentos) ante una caída de
   señal inesperada.
 - `domain/services/telemetry_aggregator.dart` — fusiona snapshots de
-  varios dispositivos en una sola vista para el futuro HUD de
-  entrenamiento (M2). La implementación actual ya normaliza `source`
+  varios dispositivos en una sola vista consumida por el HUD de
+  entrenamiento. La implementación actual ya normaliza `source`
   por lectura, conserva metadata de origen/frescura por métrica y aplica
   arbitraje determinista con expiración y fallback al integrar distancia
   y calorías en el tiempo.
