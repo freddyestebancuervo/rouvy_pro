@@ -1,5 +1,6 @@
 import 'package:equatable/equatable.dart';
 
+import 'ble_device_compatibility_status.dart';
 import 'device_connection_status.dart';
 import 'sport_device_type.dart';
 
@@ -16,6 +17,7 @@ class BleDevice extends Equatable {
     this.batteryLevel,
     this.manufacturer,
     this.isAutoReconnectEnabled = true,
+    this.compatibilityStatus = BleDeviceCompatibilityStatus.discovered,
   });
 
   /// Identificador único de la plataforma (MAC en Android, UUID en iOS —
@@ -43,7 +45,13 @@ class BleDevice extends Equatable {
   /// pulsómetro prestado que no es suyo.
   final bool isAutoReconnectEnabled;
 
-  SignalQuality? get signalQuality => rssi == null ? null : SignalQuality.fromRssi(rssi!);
+  /// Evidence-based Korixa support status. Scan results default to
+  /// [BleDeviceCompatibilityStatus.discovered]; stronger compatibility is
+  /// assigned only after GATT service discovery evaluates real capabilities.
+  final BleDeviceCompatibilityStatus compatibilityStatus;
+
+  SignalQuality? get signalQuality =>
+      rssi == null ? null : SignalQuality.fromRssi(rssi!);
 
   bool get isConnected => status == DeviceConnectionStatus.connected;
 
@@ -55,6 +63,7 @@ class BleDevice extends Equatable {
     int? batteryLevel,
     String? manufacturer,
     bool? isAutoReconnectEnabled,
+    BleDeviceCompatibilityStatus? compatibilityStatus,
   }) {
     return BleDevice(
       id: id,
@@ -64,11 +73,22 @@ class BleDevice extends Equatable {
       rssi: rssi ?? this.rssi,
       batteryLevel: batteryLevel ?? this.batteryLevel,
       manufacturer: manufacturer ?? this.manufacturer,
-      isAutoReconnectEnabled: isAutoReconnectEnabled ?? this.isAutoReconnectEnabled,
+      isAutoReconnectEnabled:
+          isAutoReconnectEnabled ?? this.isAutoReconnectEnabled,
+      compatibilityStatus: compatibilityStatus ?? this.compatibilityStatus,
     );
   }
 
   @override
-  List<Object?> get props =>
-      [id, name, type, status, rssi, batteryLevel, manufacturer, isAutoReconnectEnabled];
+  List<Object?> get props => [
+        id,
+        name,
+        type,
+        status,
+        rssi,
+        batteryLevel,
+        manufacturer,
+        isAutoReconnectEnabled,
+        compatibilityStatus,
+      ];
 }
