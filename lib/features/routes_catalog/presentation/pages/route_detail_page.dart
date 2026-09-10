@@ -107,20 +107,23 @@ class RouteDetailPage extends ConsumerWidget {
                       // navegación hacia `/training` para un contenido que
                       // no existe.
                       if (route.isRunnable) ...<Widget>[
-                        FilledButton.icon(
-                          // KORIXA-MVP-VERTICAL-SLICE-01 — antes navegaba a
-                          // `/training` sin ningún argumento (defecto
-                          // conocido: la ruta seleccionada nunca llegaba a
-                          // la sesión, que arrancaba como libre). Ahora
-                          // lleva el id como query param — sobrevive un
-                          // refresh en Web y GoRoute lo resuelve del lado de
-                          // `TrainingHudPage`.
-                          onPressed: () => context.push(
-                            Uri(path: AppRoute.training, queryParameters: <String, String>{'routeId': route.id})
-                                .toString(),
+                        SizedBox(
+                          width: double.infinity,
+                          child: FilledButton.icon(
+                            // KORIXA-MVP-VERTICAL-SLICE-01 — antes navegaba a
+                            // `/training` sin ningún argumento (defecto
+                            // conocido: la ruta seleccionada nunca llegaba a
+                            // la sesión, que arrancaba como libre). Ahora
+                            // lleva el id como query param — sobrevive un
+                            // refresh en Web y GoRoute lo resuelve del lado de
+                            // `TrainingHudPage`.
+                            onPressed: () => context.push(
+                              Uri(path: AppRoute.training, queryParameters: <String, String>{'routeId': route.id})
+                                  .toString(),
+                            ),
+                            icon: const Icon(Icons.play_arrow),
+                            label: Text(l10n.startTrainingOnRouteAction),
                           ),
-                          icon: const Icon(Icons.play_arrow),
-                          label: Text(l10n.startTrainingOnRouteAction),
                         ),
                         const SizedBox(height: 8),
                         Text(

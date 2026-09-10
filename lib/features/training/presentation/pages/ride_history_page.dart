@@ -2,6 +2,8 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../../../core/utils/duration_formatter.dart';
+import '../../../../core/widgets/empty_state_view.dart';
+import '../../../../core/widgets/error_state_view.dart';
 import '../../../../l10n/generated/app_localizations.dart';
 import '../../domain/entities/ride_session_record.dart';
 import '../providers/ride_history_providers.dart';
@@ -19,18 +21,15 @@ class RideHistoryPage extends ConsumerWidget {
       body: SafeArea(
         child: sessions.when(
           loading: () => const Center(child: CircularProgressIndicator()),
-          error: (Object error, StackTrace stackTrace) => Center(child: Text(l10n.genericErrorMessage)),
+          error: (Object error, StackTrace stackTrace) => ErrorStateView(
+            message: l10n.genericErrorMessage,
+            onRetry: () => ref.invalidate(rideSessionsProvider),
+          ),
           data: (List<RideSessionRecord> records) {
             if (records.isEmpty) {
-              return Center(
-                child: Padding(
-                  padding: const EdgeInsets.all(24),
-                  child: Text(
-                    l10n.noSessionsYetMessage,
-                    textAlign: TextAlign.center,
-                    style: TextStyle(color: Theme.of(context).colorScheme.outline),
-                  ),
-                ),
+              return EmptyStateView(
+                message: l10n.noSessionsYetMessage,
+                icon: Icons.directions_bike_outlined,
               );
             }
             return ListView.separated(
