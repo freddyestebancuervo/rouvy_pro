@@ -498,4 +498,78 @@ void main() {
     );
     expect(hasOfficialLogo, isTrue, reason: 'el botón de Google debe usar el asset oficial local, no un ícono aproximado');
   });
+
+  // ---------------------------------------------------------------------
+  // KORIXA-SCREEN02-LOGIN-FULL-LANDSCAPE-VISUAL-20260910 — el dueño
+  // reportó el panel derecho anterior (bloque opaco de ancho fijo,
+  // 43% en desktop / 56% en phone landscape) como "un bloque negro
+  // grande" tapando el paisaje. Estos tests prueban el resultado
+  // concreto: el hero cubre el ancho COMPLETO del viewport (ya no un
+  // `Expanded` recortado) y el formulario flota en un panel de vidrio
+  // (`BackdropFilter`) acotado, no un rectángulo opaco de medio
+  // viewport.
+  // ---------------------------------------------------------------------
+
+  testWidgets('DESKTOP_HERO_FULL_BLEED_WIDTH = PASS', (WidgetTester tester) async {
+    const Size desktopSize = Size(1440, 900);
+    await pumpLoginPage(tester, repository, surfaceSize: desktopSize);
+
+    final Size heroSize = tester.getSize(find.byKey(const Key('login-hero-image')));
+    expect(
+      heroSize.width,
+      desktopSize.width,
+      reason: 'el hero debe cubrir el ancho completo del viewport en desktop, no solo el 57% que ocupaba antes',
+    );
+  });
+
+  testWidgets('DESKTOP_FORM_FLOATS_IN_GLASS_PANEL_NOT_OPAQUE_BLOCK = PASS', (WidgetTester tester) async {
+    const Size desktopSize = Size(1440, 900);
+    await pumpLoginPage(tester, repository, surfaceSize: desktopSize);
+
+    expect(
+      find.byType(BackdropFilter),
+      findsOneWidget,
+      reason: 'el formulario debe flotar sobre un panel de vidrio con blur real, no un DecoratedBox opaco',
+    );
+
+    final Size panelSize = tester.getSize(find.byType(BackdropFilter));
+    expect(
+      panelSize.width,
+      lessThan(desktopSize.width * 0.5),
+      reason: 'el panel debe ser una tarjeta acotada (ancho máximo 420 + padding), no ocupar la mitad del viewport como el bloque opaco anterior',
+    );
+  });
+
+  testWidgets('PHONE_LANDSCAPE_HERO_FULL_BLEED_WIDTH = PASS', (WidgetTester tester) async {
+    const Size landscapeSize = Size(932, 430);
+    await pumpLoginPage(tester, repository, surfaceSize: landscapeSize);
+
+    final Size heroSize = tester.getSize(find.byKey(const Key('login-hero-image')));
+    expect(
+      heroSize.width,
+      landscapeSize.width,
+      reason: 'el hero debe cubrir el ancho completo del viewport en phone landscape, no solo el 44% que ocupaba antes',
+    );
+  });
+
+  testWidgets('PHONE_LANDSCAPE_FORM_FLOATS_IN_GLASS_PANEL = PASS', (WidgetTester tester) async {
+    await pumpLoginPage(tester, repository, surfaceSize: const Size(932, 430));
+
+    expect(
+      find.byType(BackdropFilter),
+      findsOneWidget,
+      reason: 'el formulario debe flotar sobre un panel de vidrio con blur real, no un ColoredBox opaco',
+    );
+  });
+
+  testWidgets('PORTRAIT_HAS_NO_GLASS_PANEL = PASS (composición sin cambios, sin panel flotante)',
+      (WidgetTester tester) async {
+    await pumpLoginPage(tester, repository, surfaceSize: const Size(390, 844));
+
+    expect(
+      find.byType(BackdropFilter),
+      findsNothing,
+      reason: 'mobile portrait no tiene panel flotante — el hero y el formulario ya estaban apilados verticalmente sin bloque opaco',
+    );
+  });
 }

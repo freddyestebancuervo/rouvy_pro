@@ -1,3 +1,5 @@
+import 'dart:ui' show ImageFilter;
+
 import 'package:flutter/foundation.dart' show defaultTargetPlatform, kIsWeb, TargetPlatform;
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -6,6 +8,7 @@ import 'package:go_router/go_router.dart';
 import '../../../../app/router/app_router.dart';
 import '../../../../app/theme/app_colors.dart';
 import '../../../../app/theme/app_gradients.dart';
+import '../../../../app/theme/app_radius.dart';
 import '../../../../app/theme/app_spacing.dart';
 import '../../../../app/theme/app_theme.dart';
 import '../../../../core/design_system/dark_tech_buttons.dart';
@@ -213,11 +216,16 @@ class _LoginPageState extends ConsumerState<LoginPage> {
   }
 
   // -------------------------------------------------------------------
-  // PHONE LANDSCAPE — hero a la izquierda (~44%), formulario compacto y
-  // desplazable a la derecha (~56%). El problema de la base (Google/
-  // Crear cuenta fuera de vista sin scroll) se resuelve acá con el mismo
-  // patrón que ya usa `WelcomePage` para su propio landscape: scroll SOLO
-  // del lado del formulario, nunca un layout de escritorio forzado.
+  // PHONE LANDSCAPE — KORIXA-SCREEN02-LOGIN-FULL-LANDSCAPE-VISUAL-
+  // 20260910: mismo tratamiento que desktop (ver [_buildDesktop] más
+  // abajo para el porqué completo). Antes un `Row` 44/56 con un
+  // `ColoredBox(color: DarkTech.background)` totalmente opaco ocupando
+  // el 56% derecho — el mismo "bloque negro" reportado por el dueño,
+  // solo que sin degradado. Ahora el hero cubre la pantalla completa y
+  // el formulario compacto flota en el mismo panel de vidrio
+  // (`_GlassFormPanel`) anclado a la derecha; su ancho es un porcentaje
+  // real del viewport (mismo criterio ya usado por `WelcomePage` en su
+  // propio landscape) en vez del flex fijo anterior.
   // -------------------------------------------------------------------
 
   Widget _buildPhoneLandscape(
@@ -227,33 +235,40 @@ class _LoginPageState extends ConsumerState<LoginPage> {
     AsyncValue<void> socialState,
     bool anyLoading,
   ) {
-    return Row(
+    final double panelWidth = (MediaQuery.of(context).size.width * 0.56).clamp(260.0, 380.0);
+
+    return Stack(
       key: const Key('login-landscape-layout'),
-      crossAxisAlignment: CrossAxisAlignment.stretch,
+      fit: StackFit.expand,
       children: <Widget>[
-        const Expanded(
-          flex: 44,
-          child: ExcludeSemantics(
-            key: Key('login-hero-image'),
-            child: _LoginHeroImage(alignment: Alignment(0.35, 0)),
-          ),
+        const ExcludeSemantics(
+          key: Key('login-hero-image'),
+          child: _LoginHeroImage(alignment: Alignment(0.35, 0)),
         ),
-        Expanded(
-          flex: 56,
-          child: ColoredBox(
-            color: DarkTech.background,
-            child: SafeArea(
-              child: SingleChildScrollView(
-                padding: const EdgeInsets.symmetric(horizontal: AppSpacing.lg, vertical: AppSpacing.sm),
-                child: _buildFormColumn(
-                  context: context,
-                  l10n: l10n,
-                  loginState: loginState,
-                  socialState: socialState,
-                  anyLoading: anyLoading,
-                  logoAsset: 'assets/icons/korixa_logo.png',
-                  logoHeight: 32,
-                  compact: true,
+        const Positioned.fill(child: _LoginHeroContentScrim()),
+        SafeArea(
+          child: Align(
+            alignment: Alignment.centerRight,
+            child: Padding(
+              padding: const EdgeInsets.all(AppSpacing.sm),
+              child: ConstrainedBox(
+                constraints: BoxConstraints(maxWidth: panelWidth),
+                child: _GlassFormPanel(
+                  child: Padding(
+                    padding: const EdgeInsets.symmetric(horizontal: AppSpacing.md, vertical: AppSpacing.sm),
+                    child: SingleChildScrollView(
+                      child: _buildFormColumn(
+                        context: context,
+                        l10n: l10n,
+                        loginState: loginState,
+                        socialState: socialState,
+                        anyLoading: anyLoading,
+                        logoAsset: 'assets/icons/korixa_logo.png',
+                        logoHeight: 32,
+                        compact: true,
+                      ),
+                    ),
+                  ),
                 ),
               ),
             ),
@@ -264,12 +279,19 @@ class _LoginPageState extends ConsumerState<LoginPage> {
   }
 
   // -------------------------------------------------------------------
-  // DESKTOP — hero inmersivo a la izquierda (~57%), panel Dark Tech
-  // calmo a la derecha (~43%) con el formulario centrado. Sin logo
-  // flotante sobre la foto (a diferencia de Welcome, que SÍ superpone
-  // contenido sobre el hero): acá el hero es puramente visual, todo el
-  // contenido real vive en el panel oscuro — "premium pero calmo", no
-  // una tarjeta flotante con glow excesivo.
+  // DESKTOP — KORIXA-SCREEN02-LOGIN-FULL-LANDSCAPE-VISUAL-20260910: el
+  // dueño reportó el panel derecho anterior (`Expanded(flex: 43)` con un
+  // `DecoratedBox(gradient: AppGradients.loginDesktopPanel)` —  un
+  // degradado SIN alfa, por lo tanto totalmente opaco) como "un bloque
+  // negro grande" tapando casi la mitad del paisaje de Guatapé: "que se
+  // vea todo el paisaje". El hero ahora cubre la pantalla COMPLETA
+  // (antes solo el 57% izquierdo) y el formulario flota sobre él dentro
+  // de un panel de vidrio esmerilado (`_GlassFormPanel` — blur real vía
+  // `BackdropFilter` + superficie translúcida, no un color sólido)
+  // anclado a la derecha, con un ancho acotado (420) en vez de ocupar el
+  // 43% del viewport como un rectángulo fijo. El paisaje se sigue
+  // viendo, difuminado, alrededor y detrás del panel — nunca queda
+  // oculto tras un bloque opaco.
   // -------------------------------------------------------------------
 
   Widget _buildDesktop(
@@ -279,52 +301,44 @@ class _LoginPageState extends ConsumerState<LoginPage> {
     AsyncValue<void> socialState,
     bool anyLoading,
   ) {
-    return Row(
+    return Stack(
       key: const Key('login-desktop-layout'),
-      crossAxisAlignment: CrossAxisAlignment.stretch,
+      fit: StackFit.expand,
       children: <Widget>[
-        const Expanded(
-          flex: 57,
-          child: Stack(
-            fit: StackFit.expand,
-            children: <Widget>[
-              ExcludeSemantics(
-                key: Key('login-hero-image'),
-                child: _LoginHeroImage(alignment: Alignment(0.3, 0)),
-              ),
-              // Transición sutil hacia el panel oscuro — solo el borde
-              // derecho del hero, nunca oscurece la foto completa.
-              Positioned.fill(child: _LoginHeroEdgeScrim()),
-            ],
-          ),
+        const ExcludeSemantics(
+          key: Key('login-hero-image'),
+          child: _LoginHeroImage(alignment: Alignment(0.15, 0)),
         ),
-        Expanded(
-          flex: 43,
-          child: DecoratedBox(
-            // KORIXA-SCREEN02-LOGIN-DESKTOP-POLISH-LOGO-PANEL-20260907:
-            // antes era un `ColoredBox(color: DarkTech.background)` plano
-            // — ahora usa la propia escala de elevación Dark Tech como
-            // degradado horizontal (más claro junto al hero, oscureciendo
-            // progresivamente), para que el panel se sienta como una
-            // superficie de vidrio integrada con la foto en vez de un
-            // bloque negro sólido pegado a ella. Composición/flex/hero
-            // sin cambios.
-            decoration: const BoxDecoration(gradient: AppGradients.loginDesktopPanel),
-            child: Center(
-              child: SingleChildScrollView(
-                padding: const EdgeInsets.symmetric(horizontal: AppSpacing.xxxl, vertical: AppSpacing.xl),
-                child: ConstrainedBox(
-                  constraints: const BoxConstraints(maxWidth: 400),
-                  child: _buildFormColumn(
-                    context: context,
-                    l10n: l10n,
-                    loginState: loginState,
-                    socialState: socialState,
-                    anyLoading: anyLoading,
-                    logoAsset: 'assets/icons/korixa_logo_desktop.png',
-                    logoHeight: 56,
-                    compact: false,
-                    highQualityLogo: true,
+        // Degradado sutil CON alfa (a diferencia del panel opaco
+        // anterior): transparente en el centro/izquierda, donde el
+        // paisaje debe verse sin ningún velo, oscureciendo solo
+        // gradualmente hacia el borde derecho, detrás de donde vive el
+        // panel de vidrio — refuerza el contraste del panel sin tapar
+        // el resto de la foto.
+        const Positioned.fill(child: _LoginHeroContentScrim()),
+        SafeArea(
+          child: Align(
+            alignment: Alignment.centerRight,
+            child: Padding(
+              padding: const EdgeInsets.all(AppSpacing.xxxl),
+              child: ConstrainedBox(
+                constraints: const BoxConstraints(maxWidth: 420),
+                child: _GlassFormPanel(
+                  child: Padding(
+                    padding: const EdgeInsets.symmetric(horizontal: AppSpacing.xl, vertical: AppSpacing.xl),
+                    child: SingleChildScrollView(
+                      child: _buildFormColumn(
+                        context: context,
+                        l10n: l10n,
+                        loginState: loginState,
+                        socialState: socialState,
+                        anyLoading: anyLoading,
+                        logoAsset: 'assets/icons/korixa_logo_desktop.png',
+                        logoHeight: 56,
+                        compact: false,
+                        highQualityLogo: true,
+                      ),
+                    ),
                   ),
                 ),
               ),
@@ -525,25 +539,63 @@ class _LoginHeroImage extends StatelessWidget {
   }
 }
 
-/// Transición sutil entre el hero de escritorio y el panel oscuro de la
-/// derecha — un degradado horizontal angosto pegado al borde derecho del
-/// hero (colores ya existentes: `DarkTech.background` a transparente,
-/// no un color nuevo), para que el corte entre foto y panel no se sienta
-/// como un borde duro. Nunca oscurece el resto de la foto.
-class _LoginHeroEdgeScrim extends StatelessWidget {
-  const _LoginHeroEdgeScrim();
+/// Scrim horizontal detrás del panel de vidrio — KORIXA-SCREEN02-LOGIN-
+/// FULL-LANDSCAPE-VISUAL-20260910. A diferencia del panel opaco anterior
+/// (`AppGradients.loginDesktopPanel`, un degradado SIN alfa que cubría
+/// el 43%/56% derecho como un bloque sólido), este degradado SÍ lleva
+/// alfa: transparente en el centro/izquierda —  donde el paisaje debe
+/// verse sin ningún velo — y oscurece solo gradualmente hacia el borde
+/// derecho, reforzando el contraste detrás del `_GlassFormPanel` sin
+/// tapar el resto de la foto. Mismos colores ya existentes
+/// (`DarkTech.background`), solo con alfa — ningún color nuevo.
+class _LoginHeroContentScrim extends StatelessWidget {
+  const _LoginHeroContentScrim();
 
   @override
   Widget build(BuildContext context) {
-    return const IgnorePointer(
+    return IgnorePointer(
       child: DecoratedBox(
         decoration: BoxDecoration(
           gradient: LinearGradient(
-            begin: Alignment.centerRight,
-            end: Alignment.centerLeft,
-            colors: <Color>[DarkTech.background, Colors.transparent],
-            stops: <double>[0.0, 0.18],
+            begin: Alignment.centerLeft,
+            end: Alignment.centerRight,
+            colors: <Color>[Colors.transparent, DarkTech.background.withValues(alpha: 0.55)],
+            stops: const <double>[0.45, 1.0],
           ),
+        ),
+      ),
+    );
+  }
+}
+
+/// Panel de vidrio esmerilado — KORIXA-SCREEN02-LOGIN-FULL-LANDSCAPE-
+/// VISUAL-20260910. Reemplaza el bloque opaco sólido anterior (un
+/// `DecoratedBox`/`ColoredBox` de ancho fijo tapando por completo el
+/// hero detrás): el formulario ahora flota sobre el hero a pantalla
+/// completa dentro de esta tarjeta translúcida con blur real
+/// (`BackdropFilter`) — el paisaje se sigue viendo, difuminado,
+/// alrededor y detrás del panel, nunca oculto tras un rectángulo negro
+/// sólido. Colores/radio ya existentes en el sistema de diseño
+/// (`DarkTech.surface`/`DarkTech.border`, `AppRadius.xlRadius`) — solo
+/// se les agrega alfa, ningún token nuevo.
+class _GlassFormPanel extends StatelessWidget {
+  const _GlassFormPanel({required this.child});
+
+  final Widget child;
+
+  @override
+  Widget build(BuildContext context) {
+    return ClipRRect(
+      borderRadius: AppRadius.xlRadius,
+      child: BackdropFilter(
+        filter: ImageFilter.blur(sigmaX: 24, sigmaY: 24),
+        child: DecoratedBox(
+          decoration: BoxDecoration(
+            color: DarkTech.surface.withValues(alpha: 0.55),
+            borderRadius: AppRadius.xlRadius,
+            border: Border.all(color: DarkTech.border.withValues(alpha: 0.6)),
+          ),
+          child: child,
         ),
       ),
     );
