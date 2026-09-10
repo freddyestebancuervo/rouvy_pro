@@ -9,6 +9,14 @@ import 'package:rouvy_pro/features/auth/presentation/widgets/social_sign_in_butt
 /// `AuthRemoteDataSourceImpl.signInWithGoogle`, que ahora usa
 /// `FirebaseAuth.signInWithPopup` en Web sin necesitar ningún botón
 /// oficial incrustado en la página).
+///
+/// KORIXA-SCREEN02-LOGIN-VISUAL-IMPLEMENTATION-20260907 (reconciliado al
+/// integrar main en esta rama): el ícono placeholder `Icons.g_mobiledata`
+/// fue reemplazado por el logo oficial de Google
+/// (`assets/icons/google_logo.png`, vía `Image.asset`) — estas
+/// aserciones se actualizan para reflejar ese asset real en vez del
+/// glifo de Material ya retirado (mismo criterio que
+/// `login_page_test.dart`'s `GOOGLE_OFFICIAL_LOGO_USED`).
 void main() {
   Widget wrap(Widget child) => MaterialApp(home: Scaffold(body: child));
 
@@ -25,7 +33,8 @@ void main() {
       );
       await tester.pumpAndSettle();
 
-      expect(find.byIcon(Icons.g_mobiledata), findsOneWidget);
+      final Image logo = tester.widget<Image>(find.byType(Image));
+      expect((logo.image as AssetImage).assetName, 'assets/icons/google_logo.png');
 
       await tester.tap(find.byType(GoogleSignInButton));
       expect(pressed, isTrue);
@@ -46,7 +55,7 @@ void main() {
       await tester.pump();
 
       expect(find.byType(CircularProgressIndicator), findsOneWidget);
-      expect(find.byIcon(Icons.g_mobiledata), findsNothing);
+      expect(find.byType(Image), findsNothing);
 
       await tester.tap(find.byType(GoogleSignInButton));
       expect(pressed, isFalse, reason: 'debe estar deshabilitado mientras carga');
