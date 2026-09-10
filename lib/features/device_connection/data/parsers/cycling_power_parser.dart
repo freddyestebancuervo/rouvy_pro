@@ -28,6 +28,11 @@ class CyclingPowerParser {
   int? _lastCrankRevolutions;
   int? _lastCrankEventTime; // unidades de 1/1024 s, uint16 con wraparound
 
+  void reset() {
+    _lastCrankRevolutions = null;
+    _lastCrankEventTime = null;
+  }
+
   CyclingPowerReading? parse(Uint8List data) {
     if (data.length < 4) return null;
 

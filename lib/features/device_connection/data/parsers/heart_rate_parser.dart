@@ -8,6 +8,8 @@ import 'dart:typed_data';
 /// viene en 1 byte (uint8, 0-255) o 2 bytes (uint16) — casi todos los
 /// pulsómetros usan el formato de 1 byte, pero la spec permite ambos.
 abstract class HeartRateParser {
+  static void reset() {}
+
   static int? parseHeartRateMeasurement(Uint8List data) {
     if (data.isEmpty) return null;
 

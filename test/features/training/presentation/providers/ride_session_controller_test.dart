@@ -8,6 +8,7 @@ import 'package:rouvy_pro/features/device_connection/domain/entities/ble_device.
 import 'package:rouvy_pro/features/device_connection/domain/entities/device_connection_status.dart';
 import 'package:rouvy_pro/features/device_connection/domain/entities/sport_device_type.dart';
 import 'package:rouvy_pro/features/device_connection/domain/entities/telemetry_snapshot.dart';
+import 'package:rouvy_pro/features/device_connection/domain/entities/telemetry_source.dart';
 import 'package:rouvy_pro/features/device_connection/domain/repositories/device_repository.dart';
 import 'package:rouvy_pro/features/device_connection/domain/usecases/observe_connected_devices_usecase.dart';
 import 'package:rouvy_pro/features/device_connection/domain/usecases/observe_telemetry_usecase.dart';
@@ -92,7 +93,13 @@ void main() {
       await Future<void>.delayed(Duration.zero);
 
       telemetryController.add(
-        TelemetrySnapshot(deviceId: trainerId, timestamp: DateTime.now(), speedKmh: 32, powerWatts: 210),
+        TelemetrySnapshot(
+          deviceId: trainerId,
+          source: TelemetrySourceKind.ftms,
+          timestamp: DateTime.now(),
+          speedKmh: 32,
+          powerWatts: 210,
+        ),
       );
       await Future<void>.delayed(Duration.zero);
 
@@ -108,7 +115,13 @@ void main() {
     devicesController.add(<BleDevice>[connectedTrainer]);
     await Future<void>.delayed(Duration.zero);
     telemetryController.add(
-      TelemetrySnapshot(deviceId: trainerId, timestamp: DateTime.now(), speedKmh: 25, powerWatts: 150),
+      TelemetrySnapshot(
+        deviceId: trainerId,
+        source: TelemetrySourceKind.ftms,
+        timestamp: DateTime.now(),
+        speedKmh: 25,
+        powerWatts: 150,
+      ),
     );
     await Future<void>.delayed(Duration.zero);
 
@@ -124,7 +137,13 @@ void main() {
     devicesController.add(<BleDevice>[connectedTrainer]);
     await Future<void>.delayed(Duration.zero);
     telemetryController.add(
-      TelemetrySnapshot(deviceId: trainerId, timestamp: DateTime.now(), speedKmh: 30, powerWatts: 200),
+      TelemetrySnapshot(
+        deviceId: trainerId,
+        source: TelemetrySourceKind.ftms,
+        timestamp: DateTime.now(),
+        speedKmh: 30,
+        powerWatts: 200,
+      ),
     );
     await Future<void>.delayed(Duration.zero);
 
@@ -133,6 +152,30 @@ void main() {
     expect(summary.finalTelemetry.powerWatts, 200);
     expect(summary.connectedDeviceCount, 1);
     expect(container.read(rideSessionControllerProvider).phase, RideSessionPhase.finished);
+  });
+
+  test('al desconectar una fuente se limpia su telemetría de la sesión', () async {
+    container.read(rideSessionControllerProvider.notifier).start();
+    devicesController.add(<BleDevice>[connectedTrainer]);
+    await Future<void>.delayed(Duration.zero);
+    telemetryController.add(
+      TelemetrySnapshot(
+        deviceId: trainerId,
+        source: TelemetrySourceKind.ftms,
+        timestamp: DateTime.now(),
+        speedKmh: 31,
+        powerWatts: 205,
+      ),
+    );
+    await Future<void>.delayed(Duration.zero);
+
+    devicesController.add(const <BleDevice>[]);
+    await Future<void>.delayed(Duration.zero);
+
+    final RideSessionState state = container.read(rideSessionControllerProvider);
+    expect(state.connectedDeviceCount, 0);
+    expect(state.telemetry.speedKmh, 0);
+    expect(state.telemetry.powerWatts, 0);
   });
 
   test('reset() vuelve la sesión a idle', () async {
@@ -233,7 +276,7 @@ void main() {
     /// del archivo: `Future<void>.delayed(Duration.zero)`).
     Future<void> feed(DateTime timestamp, {required double speedKmh}) async {
       telemetryController.add(
-        TelemetrySnapshot(deviceId: trainerId, timestamp: timestamp, speedKmh: speedKmh, powerWatts: 150),
+        TelemetrySnapshot(deviceId: trainerId, source: TelemetrySourceKind.ftms, timestamp: timestamp, speedKmh: speedKmh, powerWatts: 150),
       );
       await Future<void>.delayed(Duration.zero);
     }
@@ -544,7 +587,7 @@ void main() {
 
     Future<void> feed(DateTime timestamp, {required double speedKmh}) async {
       telemetryController.add(
-        TelemetrySnapshot(deviceId: trainerId, timestamp: timestamp, speedKmh: speedKmh, powerWatts: 150),
+        TelemetrySnapshot(deviceId: trainerId, source: TelemetrySourceKind.ftms, timestamp: timestamp, speedKmh: speedKmh, powerWatts: 150),
       );
       await Future<void>.delayed(Duration.zero);
     }

@@ -139,6 +139,13 @@ class AppErrorHandler {
         return 'Demasiados intentos. Intenta más tarde.';
       case 'network-request-failed':
         return 'Sin conexión a internet.';
+      case 'popup-closed-by-user':
+      case 'cancelled-popup-request':
+        return 'Inicio de sesión cancelado.';
+      case 'popup-blocked':
+        return 'El navegador bloqueó la ventana de Google. Habilita las ventanas emergentes e intenta de nuevo.';
+      case 'unauthorized-domain':
+        return 'Este sitio no está autorizado para iniciar sesión con Google.';
       default:
         return 'No se pudo completar la operación. Intenta de nuevo.';
     }

@@ -190,9 +190,13 @@ Future<void> initDependencyInjection(AppEnvironment environment) async {
     ),
   );
 
-  sl.registerLazySingleton<AuthRepository>(
+  // `AuthRepositoryImpl` se registra PRIMERO bajo su propio tipo
+  // concreto, y luego bajo `AuthRepository` (el contrato de dominio que
+  // consume el resto de la app) — nunca más de una instancia.
+  sl.registerLazySingleton<AuthRepositoryImpl>(
     () => AuthRepositoryImpl(remoteDataSource: sl(), networkInfo: sl()),
   );
+  sl.registerLazySingleton<AuthRepository>(() => sl<AuthRepositoryImpl>());
 
   sl.registerFactory(() => LoginUseCase(sl()));
   sl.registerFactory(() => RegisterUseCase(sl()));

@@ -219,6 +219,28 @@ void main() {
     expect(find.text('FORGOT_PASSWORD'), findsOneWidget);
   });
 
+  testWidgets('Crear cuenta sigue navegando a Register', (WidgetTester tester) async {
+    await pumpLoginPage(tester, repository);
+
+    await tester.ensureVisible(find.text('Crear cuenta'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Crear cuenta'));
+    await tester.pumpAndSettle();
+
+    expect(find.text('REGISTER'), findsOneWidget);
+  });
+
+  testWidgets('390x844_NO_OVERFLOW = PASS', (WidgetTester tester) async {
+    tester.view.physicalSize = const Size(390, 844);
+    tester.view.devicePixelRatio = 1.0;
+    addTearDown(tester.view.reset);
+
+    await pumpLoginPage(tester, repository);
+
+    expect(tester.takeException(), isNull);
+    expect(find.text('Crear cuenta'), findsOneWidget);
+  });
+
   testWidgets('el botón de Apple solo aparece en la plataforma Apple soportada', (WidgetTester tester) async {
     await pumpLoginPage(tester, repository);
     expect(find.byType(AppleSignInButton), findsNothing);

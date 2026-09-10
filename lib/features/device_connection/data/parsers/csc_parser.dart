@@ -32,6 +32,13 @@ class CscParser {
   int? _lastCrankRevolutions;
   int? _lastCrankEventTime;
 
+  void reset() {
+    _lastWheelRevolutions = null;
+    _lastWheelEventTime = null;
+    _lastCrankRevolutions = null;
+    _lastCrankEventTime = null;
+  }
+
   CscReading parse(Uint8List data) {
     if (data.isEmpty) return const CscReading();
 

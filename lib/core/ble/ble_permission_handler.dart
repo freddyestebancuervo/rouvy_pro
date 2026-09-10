@@ -1,8 +1,10 @@
+import 'package:flutter/foundation.dart';
 import 'package:permission_handler/permission_handler.dart';
 
-/// Resultado agregado de la solicitud de permisos, para que la UI muestre
-/// un único estado en vez de inspeccionar cada `Permission` por separado.
-enum BlePermissionStatus { granted, denied, permanentlyDenied }
+import '../platform/android_sdk_provider.dart';
+import 'ble_permission_policy.dart';
+
+export 'ble_permission_policy.dart' show BlePermissionStatus;
 
 /// Centraliza la solicitud de permisos BLE. Las plataformas difieren
 /// bastante aquí:
@@ -20,28 +22,47 @@ enum BlePermissionStatus { granted, denied, permanentlyDenied }
 /// Ver también `BLE_PERMISSIONS.md` en la raíz del proyecto para los
 /// permisos que deben declararse en `AndroidManifest.xml` e `Info.plist`.
 class BlePermissionHandler {
-  const BlePermissionHandler();
+  const BlePermissionHandler({AndroidSdkProvider? androidSdkProvider})
+    : _androidSdkProvider =
+          androidSdkProvider ?? const MethodChannelAndroidSdkProvider();
+
+  final AndroidSdkProvider _androidSdkProvider;
 
   Future<BlePermissionStatus> requestBlePermissions() async {
     final Map<Permission, PermissionStatus> results = await <Permission>[
       Permission.bluetoothScan,
       Permission.bluetoothConnect,
-      // Se solicita igualmente en Android 12+ (donde no es estrictamente
-      // necesario) porque `permission_handler` la ignora si el manifest no
-      // la declara como "necesaria para BLE" (ver flag
-      // `neverForLocation` en BLE_PERMISSIONS.md) — pedirla de más no
-      // rompe nada y cubre Android ≤11 sin duplicar lógica por versión de SDK.
+      // Se sigue solicitando en todas las versiones para cubrir Android
+      // ≤30 con el mismo flujo (ahí la ubicación SÍ es requisito de BLE).
+      // En Android 12+ el SO la deniega automáticamente porque el manifest
+      // no la declara para ese SDK (`neverForLocation`) — eso es esperado
+      // y la política de abajo la ignora ahí. Exigirla con `every` en todas
+      // las versiones fue el bug que impedía escanear en Android 12+
+      // (T-NEW.5): un permiso irrelevante nunca debe bloquear el gate.
       Permission.locationWhenInUse,
       Permission.bluetooth, // no-op en Android, relevante en iOS
     ].request();
 
-    if (results.values.every((PermissionStatus s) => s.isGranted)) {
-      return BlePermissionStatus.granted;
-    }
-    if (results.values.any((PermissionStatus s) => s.isPermanentlyDenied)) {
-      return BlePermissionStatus.permanentlyDenied;
-    }
-    return BlePermissionStatus.denied;
+    final bool isAndroid =
+        !kIsWeb && defaultTargetPlatform == TargetPlatform.android;
+    final bool isIOS =
+        !kIsWeb && defaultTargetPlatform == TargetPlatform.iOS;
+    final int? sdkInt =
+        isAndroid ? await _androidSdkProvider.getAndroidSdkInt() : null;
+
+    return evaluateBlePermissionStatus(
+      isAndroid: isAndroid,
+      isIOS: isIOS,
+      androidSdkInt: sdkInt,
+      scanStatus:
+          results[Permission.bluetoothScan] ?? PermissionStatus.denied,
+      connectStatus:
+          results[Permission.bluetoothConnect] ?? PermissionStatus.denied,
+      locationStatus:
+          results[Permission.locationWhenInUse] ?? PermissionStatus.denied,
+      bluetoothStatus:
+          results[Permission.bluetooth] ?? PermissionStatus.denied,
+    );
   }
 
   /// Comprueba el estado actual sin disparar el diálogo del sistema — útil

@@ -1,8 +1,14 @@
 import 'package:equatable/equatable.dart';
 
+import 'telemetry_source.dart';
+
 /// Lectura cruda de UN dispositivo en un instante dado. Cada tipo de
 /// sensor solo llena los campos que le corresponden (un pulsómetro nunca
 /// llena `powerWatts`, por ejemplo) — el resto queda `null`.
+///
+/// `source` identifica el origen normalizado de la lectura (FTMS, CSC,
+/// Cycling Power, Heart Rate, demo...), mientras que `deviceId` identifica
+/// el dispositivo físico concreto que la produjo.
 ///
 /// Deliberadamente NO incluye `distanceMeters` ni `caloriesKcal`: esos son
 /// valores *acumulados* a lo largo de una sesión, no una lectura
@@ -13,6 +19,7 @@ import 'package:equatable/equatable.dart';
 class TelemetrySnapshot extends Equatable {
   const TelemetrySnapshot({
     required this.deviceId,
+    required this.source,
     required this.timestamp,
     this.speedKmh,
     this.powerWatts,
@@ -21,6 +28,7 @@ class TelemetrySnapshot extends Equatable {
   });
 
   final String deviceId;
+  final TelemetrySourceKind source;
   final DateTime timestamp;
 
   final double? speedKmh;
@@ -29,5 +37,5 @@ class TelemetrySnapshot extends Equatable {
   final int? heartRateBpm;
 
   @override
-  List<Object?> get props => [deviceId, timestamp, speedKmh, powerWatts, cadenceRpm, heartRateBpm];
+  List<Object?> get props => [deviceId, source, timestamp, speedKmh, powerWatts, cadenceRpm, heartRateBpm];
 }

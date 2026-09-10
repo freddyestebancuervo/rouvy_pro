@@ -7,6 +7,7 @@ import '../../../../core/error/failures.dart';
 import '../../../../core/utils/validation_l10n.dart';
 import '../../../../core/utils/validators.dart';
 import '../../../../core/widgets/app_primary_button.dart';
+import '../../../../core/widgets/error_state_view.dart';
 import '../../../../l10n/generated/app_localizations.dart';
 import '../../../auth/domain/entities/user_entity.dart';
 import '../../../auth/presentation/providers/auth_providers.dart';
@@ -25,7 +26,10 @@ class ProfilePage extends ConsumerWidget {
       appBar: AppBar(title: Text(l10n.profileTitle)),
       body: authState.when(
         loading: () => const Center(child: CircularProgressIndicator()),
-        error: (Object error, StackTrace stackTrace) => Center(child: Text(l10n.genericErrorMessage)),
+        error: (Object error, StackTrace stackTrace) => ErrorStateView(
+          message: l10n.genericErrorMessage,
+          onRetry: () => ref.invalidate(authStateProvider),
+        ),
         data: (UserEntity? user) {
           if (user == null) return const SizedBox.shrink();
           return _ProfileBody(user: user);
@@ -148,8 +152,14 @@ class _ProfileBodyState extends ConsumerState<_ProfileBody> {
                           : null,
                     ),
                     const SizedBox(height: 8),
+                    // Deshabilitado a propósito (onPressed: null, no
+                    // onPressed: () {}) — subir foto vía Firebase Storage +
+                    // image_picker todavía no está implementado; un botón
+                    // habilitado que no hace nada es una trampa de UX
+                    // silenciosa, uno visualmente atenuado es honesto sobre
+                    // que la función no está disponible todavía.
                     TextButton(
-                      onPressed: () {}, // TODO: subir foto vía Firebase Storage + image_picker
+                      onPressed: null,
                       child: Text(l10n.changePhotoAction),
                     ),
                   ],

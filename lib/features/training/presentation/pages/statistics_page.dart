@@ -2,8 +2,11 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../../../core/utils/duration_formatter.dart';
+import '../../../../core/widgets/empty_state_view.dart';
+import '../../../../core/widgets/error_state_view.dart';
 import '../../../../l10n/generated/app_localizations.dart';
 import '../../domain/entities/statistics_summary.dart';
+import '../providers/ride_history_providers.dart';
 import '../providers/statistics_providers.dart';
 import '../widgets/weekly_bar_chart.dart';
 
@@ -25,18 +28,15 @@ class StatisticsPage extends ConsumerWidget {
       body: SafeArea(
         child: summaryState.when(
           loading: () => const Center(child: CircularProgressIndicator()),
-          error: (Object error, StackTrace stackTrace) => Center(child: Text(l10n.genericErrorMessage)),
+          error: (Object error, StackTrace stackTrace) => ErrorStateView(
+            message: l10n.genericErrorMessage,
+            onRetry: () => ref.invalidate(rideSessionsProvider),
+          ),
           data: (StatisticsSummary summary) {
             if (summary.totalSessions == 0) {
-              return Center(
-                child: Padding(
-                  padding: const EdgeInsets.all(24),
-                  child: Text(
-                    l10n.noSessionsYetMessage,
-                    textAlign: TextAlign.center,
-                    style: TextStyle(color: Theme.of(context).colorScheme.outline),
-                  ),
-                ),
+              return EmptyStateView(
+                message: l10n.noSessionsYetMessage,
+                icon: Icons.bar_chart_outlined,
               );
             }
 
@@ -54,19 +54,25 @@ class StatisticsPage extends ConsumerWidget {
                         child: Padding(
                           padding: const EdgeInsets.all(20),
                           child: Row(
-                            mainAxisAlignment: MainAxisAlignment.spaceAround,
+                            crossAxisAlignment: CrossAxisAlignment.start,
                             children: <Widget>[
-                              _TotalStat(
-                                label: l10n.metricDistanceLabel,
-                                value: '${(summary.totalDistanceMeters / 1000).toStringAsFixed(0)} km',
+                              Expanded(
+                                child: _TotalStat(
+                                  label: l10n.metricDistanceLabel,
+                                  value: '${(summary.totalDistanceMeters / 1000).toStringAsFixed(0)} km',
+                                ),
                               ),
-                              _TotalStat(
-                                label: l10n.metricTimeLabel,
-                                value: DurationFormatter.format(Duration(seconds: summary.totalDurationSeconds)),
+                              Expanded(
+                                child: _TotalStat(
+                                  label: l10n.metricTimeLabel,
+                                  value: DurationFormatter.format(Duration(seconds: summary.totalDurationSeconds)),
+                                ),
                               ),
-                              _TotalStat(
-                                label: l10n.metricCaloriesLabel,
-                                value: '${summary.totalCaloriesKcal.round()}',
+                              Expanded(
+                                child: _TotalStat(
+                                  label: l10n.metricCaloriesLabel,
+                                  value: '${summary.totalCaloriesKcal.round()}',
+                                ),
                               ),
                             ],
                           ),
@@ -175,9 +181,21 @@ class _TotalStat extends StatelessWidget {
   Widget build(BuildContext context) {
     return Column(
       children: <Widget>[
-        Text(value, style: Theme.of(context).textTheme.headlineSmall?.copyWith(fontWeight: FontWeight.w700)),
+        Text(
+          value,
+          textAlign: TextAlign.center,
+          maxLines: 1,
+          overflow: TextOverflow.ellipsis,
+          style: Theme.of(context).textTheme.headlineSmall?.copyWith(fontWeight: FontWeight.w700),
+        ),
         const SizedBox(height: 4),
-        Text(label, style: Theme.of(context).textTheme.bodySmall),
+        Text(
+          label,
+          textAlign: TextAlign.center,
+          maxLines: 1,
+          overflow: TextOverflow.ellipsis,
+          style: Theme.of(context).textTheme.bodySmall,
+        ),
       ],
     );
   }

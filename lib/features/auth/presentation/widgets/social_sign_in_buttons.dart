@@ -4,6 +4,12 @@ import 'package:flutter/material.dart';
 /// marca) porque Google exige no alterar su logo ni forzarlo a los colores
 /// primarios de la app — mismo criterio aplicado al de Apple.
 ///
+/// Mismo widget en todas las plataformas: en Web, el flujo real es
+/// `FirebaseAuth.signInWithPopup` (ver `AuthRemoteDataSourceImpl`), que
+/// no necesita ningún botón/HtmlElementView oficial de Google incrustado
+/// en la página — el popup lo abre Firebase directamente al llamar
+/// `onPressed`.
+///
 /// KORIXA-SCREEN02-LOGIN-VISUAL-IMPLEMENTATION-20260907: el ícono
 /// placeholder (`Icons.g_mobiledata`, un glifo de Material sin relación
 /// real con la marca) se reemplaza por el logo oficial multicolor de
@@ -11,8 +17,15 @@ import 'package:flutter/material.dart';
 /// (#4285F4/#EA4335/#FBBC05/#34A853 vía las 4 franjas del path SVG
 /// estándar de Google, rasterizado localmente, sin fetch remoto), sin
 /// recolorear con la paleta Korixa ni aproximar con un ícono de Material.
+/// Cambio puramente visual — el contrato del widget (`label`/`onPressed`/
+/// `isLoading`) y el flujo `signInWithPopup` de arriba no cambian.
 class GoogleSignInButton extends StatelessWidget {
-  const GoogleSignInButton({required this.label, required this.onPressed, this.isLoading = false, super.key});
+  const GoogleSignInButton({
+    required this.label,
+    required this.onPressed,
+    this.isLoading = false,
+    super.key,
+  });
 
   final String label;
   final VoidCallback? onPressed;
