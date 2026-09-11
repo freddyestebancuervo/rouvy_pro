@@ -798,14 +798,13 @@ void main() {
     );
   });
 
-  testWidgets('PORTRAIT_NO_OUTER_CARD_AROUND_FORM = PASS (composición sin cambios)',
-      (WidgetTester tester) async {
+  testWidgets('PORTRAIT_NO_OUTER_CARD_AROUND_FORM = PASS', (WidgetTester tester) async {
     await pumpLoginPage(tester, repository, surfaceSize: const Size(390, 844));
 
     expect(
       find.byType(BackdropFilter),
       findsNothing,
-      reason: 'mobile portrait nunca tuvo panel flotante — el hero y el formulario ya estaban apilados verticalmente sin bloque opaco',
+      reason: 'mobile portrait nunca tuvo panel flotante, y desde KORIXA-SCREEN02-LOGIN-MOBILE-PORTRAIT-NO-LOGO-20260910 tampoco tiene un bloque opaco inferior — el formulario flota directamente sobre el hero full-bleed',
     );
   });
 
@@ -819,8 +818,166 @@ void main() {
     expect(find.byKey(const Key('login-desktop-indicator-row')), findsNothing);
   });
 
-  testWidgets('PORTRAIT_NO_SCREEN01_INDICATOR = PASS (sin cambio visual)', (WidgetTester tester) async {
+  // ---------------------------------------------------------------------
+  // KORIXA-SCREEN02-LOGIN-MOBILE-PORTRAIT-NO-LOGO-20260910 — el dueño
+  // pidió el mismo tratamiento full-bleed de desktop/phone landscape
+  // para mobile portrait, SIN el logo Korixa, con el indicador de
+  // SCREEN_01 (barra central activa) usando el tamaño MOBILE de Welcome
+  // (18/4/5), no el de desktop. Desktop y phone landscape quedan
+  // congelados — probado por regresión más abajo.
+  // ---------------------------------------------------------------------
+
+  testWidgets('MOBILE_LOGIN_LOGO_NOT_VISIBLE = PASS', (WidgetTester tester) async {
     await pumpLoginPage(tester, repository, surfaceSize: const Size(390, 844));
-    expect(find.byKey(const Key('login-desktop-indicator-row')), findsNothing);
+
+    expect(
+      find.byKey(const Key('login-logo')),
+      findsNothing,
+      reason: 'el dueño pidió explícitamente que mobile portrait NO muestre el logo Korixa',
+    );
+  });
+
+  testWidgets('MOBILE_HERO_FULL_BLEED = PASS', (WidgetTester tester) async {
+    const Size mobileSize = Size(390, 844);
+    await pumpLoginPage(tester, repository, surfaceSize: mobileSize);
+
+    final Size heroSize = tester.getSize(find.byKey(const Key('login-hero-image')));
+    expect(
+      heroSize,
+      mobileSize,
+      reason: 'el hero de Guatapé debe cubrir la pantalla COMPLETA en mobile portrait, no solo el 34% superior que ocupaba antes',
+    );
+  });
+
+  testWidgets('MOBILE_NO_OUTER_CARD_OR_SOLID_LOWER_PANEL = PASS', (WidgetTester tester) async {
+    await pumpLoginPage(tester, repository, surfaceSize: const Size(390, 844));
+
+    expect(find.byType(BackdropFilter), findsNothing, reason: 'sin panel de vidrio en mobile portrait');
+    // El bloque inferior opaco anterior era un `ColoredBox`/`DecoratedBox`
+    // con `DarkTech.background` sólido cubriendo ~66% de la pantalla, hijo
+    // directo de un `Expanded` dentro del `Column` de layout anterior —
+    // ese `Column`/`Expanded` ya no existen: la composición es un `Stack`
+    // con el hero a pantalla completa. No hay ningún `DecoratedBox`/
+    // `ColoredBox` de tamaño de pantalla completa con `DarkTech.background`
+    // sólido en el árbol.
+    final Iterable<DecoratedBox> solidBoxes = tester.widgetList<DecoratedBox>(find.byType(DecoratedBox)).where(
+          (DecoratedBox box) =>
+              box.decoration is BoxDecoration && (box.decoration as BoxDecoration).color == DarkTech.background,
+        );
+    expect(
+      solidBoxes,
+      isEmpty,
+      reason: 'no debe existir ningún bloque opaco sólido de fondo — el paisaje debe verse detrás de todo el formulario',
+    );
+  });
+
+  testWidgets('MOBILE_INDICATOR_MATCHES_SCREEN01_MOBILE_SIZE_AND_CENTER_ACTIVE = PASS', (WidgetTester tester) async {
+    await pumpLoginPage(tester, repository, surfaceSize: const Size(390, 844));
+
+    final Finder indicatorFinder = find.byKey(const Key('login-portrait-indicator-row'));
+    expect(indicatorFinder, findsOneWidget, reason: 'el indicador de SCREEN_01 debe existir en mobile portrait');
+
+    final List<Container> bars = tester
+        .widgetList<Container>(find.descendant(of: indicatorFinder, matching: find.byType(Container)))
+        .toList();
+    expect(bars.length, 3, reason: 'el indicador debe mostrar exactamente 3 líneas');
+
+    bool isActive(Container bar) => bar.decoration is BoxDecoration && (bar.decoration! as BoxDecoration).gradient != null;
+    bool isInactive(Container bar) =>
+        bar.decoration is BoxDecoration && (bar.decoration! as BoxDecoration).color == DarkTech.border;
+    expect(isActive(bars[0]), isFalse, reason: 'MOBILE_LEFT_BAR_ACTIVE debe ser NO');
+    expect(isInactive(bars[0]), isTrue);
+    expect(isActive(bars[1]), isTrue, reason: 'MOBILE_CENTER_BAR_ACTIVE debe ser YES — activeIndex: 1, igual que desktop');
+    expect(isActive(bars[2]), isFalse, reason: 'MOBILE_RIGHT_BAR_ACTIVE debe ser NO');
+    expect(isInactive(bars[2]), isTrue);
+
+    // Tamaño MOBILE ya aprobado de SCREEN_01 (18×4, separación 5 —
+    // `_OnboardingIndicator` de Welcome), NO el de desktop (24×4×6):
+    // ancho total = 3*18 + 2*5 = 64.
+    final Size indicatorSize = tester.getSize(indicatorFinder);
+    expect(indicatorSize.width, closeTo(64, 0.5), reason: 'el indicador debe usar el tamaño MOBILE de SCREEN_01 (18/4/5), no el de desktop');
+    expect(indicatorSize.height, closeTo(4, 0.5));
+  });
+
+  testWidgets('MOBILE_CONTENT_HIERARCHY_REACHABLE_NO_OVERFLOW = PASS', (WidgetTester tester) async {
+    for (final Size size in const <Size>[Size(390, 844), Size(375, 812), Size(360, 800)]) {
+      await pumpLoginPage(tester, repository, surfaceSize: size);
+      expect(tester.takeException(), isNull, reason: 'no debe haber overflow en ${size.width.toInt()}x${size.height.toInt()}');
+
+      expect(find.text('Bienvenido de nuevo'), findsOneWidget, reason: 'TITLE_VISIBLE');
+      expect(find.text('Inicia sesión para continuar tu ruta'), findsOneWidget, reason: 'SUBTITLE_VISIBLE');
+      expect(find.byType(TextFormField), findsNWidgets(2), reason: 'EMAIL_VISIBLE + PASSWORD_VISIBLE');
+      expect(find.text('¿Olvidaste tu contraseña?'), findsOneWidget, reason: 'FORGOT_PASSWORD_VISIBLE');
+      expect(find.byType(PrimaryGradientButton), findsOneWidget, reason: 'CTA_REACHABLE');
+      expect(find.byType(GoogleSignInButton), findsOneWidget, reason: 'GOOGLE_REACHABLE');
+      expect(find.text('Crear cuenta'), findsOneWidget, reason: 'CREATE_ACCOUNT_REACHABLE');
+    }
+  });
+
+  testWidgets('MOBILE_CTA_AND_GOOGLE_SHARE_SAME_WIDTH_NO_HORIZONTAL_OVERFLOW = PASS', (WidgetTester tester) async {
+    const Size mobileSize = Size(390, 844);
+    await pumpLoginPage(tester, repository, surfaceSize: mobileSize);
+
+    final Size ctaSize = tester.getSize(find.byType(PrimaryGradientButton));
+    final Size googleSize = tester.getSize(find.byType(GoogleSignInButton));
+    expect(
+      ctaSize.width,
+      closeTo(googleSize.width, 0.5),
+      reason: 'CTA y Google deben compartir el mismo ancho — coherencia visual pedida por el encargo',
+    );
+    expect(ctaSize.width, lessThan(mobileSize.width), reason: 'no debe haber overflow horizontal');
+  });
+
+  // KORIXA-SCREEN02-LOGIN-MOBILE-PORTRAIT-NO-LOGO-20260910: desktop y
+  // phone landscape quedan CONGELADOS por este encargo — regresión
+  // explícita de sus valores clave ya establecidos en tareas anteriores.
+  testWidgets('DESKTOP_FROZEN_NO_VISUAL_CHANGE = PASS', (WidgetTester tester) async {
+    const Size desktopSize = Size(1440, 900);
+    await pumpLoginPage(tester, repository, surfaceSize: desktopSize);
+
+    expect(find.byKey(const Key('login-logo')), findsOneWidget, reason: 'el logo de desktop NO debe removerse');
+    final Iterable<Image> images = tester.widgetList<Image>(find.byType(Image));
+    final Image desktopLogo = images.firstWhere(
+      (Image image) => resolvedAssetName(image.image) == 'assets/icons/korixa_logo_desktop.png',
+    );
+    expect(desktopLogo.height, 188, reason: 'LOGO_HEIGHT = 188 congelado');
+
+    final Size controlSize = tester.getSize(find.byKey(const Key('login-desktop-control-width')));
+    expect(controlSize.width, closeTo(550, 0.5), reason: 'CONTROL_WIDTH = 550 congelado');
+
+    final Size ctaSize = tester.getSize(find.byType(PrimaryGradientButton));
+    expect(ctaSize.width, closeTo(550, 0.5), reason: 'CTA width = 550 congelado');
+    expect(ctaSize.height, closeTo(64, 0.5), reason: 'CTA height = 64 congelado');
+
+    const double previousReferenceCenterX = 1060.0;
+    final double subtitleCenterX = tester.getCenter(find.byKey(const Key('login-subtitle'))).dx;
+    expect(subtitleCenterX, closeTo(previousReferenceCenterX, 1.0), reason: 'posición del subtítulo congelada');
+
+    final Finder indicatorFinder = find.byKey(const Key('login-desktop-indicator-row'));
+    final List<Container> bars = tester
+        .widgetList<Container>(find.descendant(of: indicatorFinder, matching: find.byType(Container)))
+        .toList();
+    final bool centerActive =
+        bars[1].decoration is BoxDecoration && (bars[1].decoration! as BoxDecoration).gradient != null;
+    expect(centerActive, isTrue, reason: 'indicador de desktop congelado — barra central activa');
+
+    expect(find.byType(BackdropFilter), findsNothing, reason: 'sin outer card en desktop, congelado');
+  });
+
+  testWidgets('PHONE_LANDSCAPE_FROZEN_NO_VISUAL_CHANGE = PASS', (WidgetTester tester) async {
+    await pumpLoginPage(tester, repository, surfaceSize: const Size(932, 430));
+
+    expect(find.byKey(const Key('login-logo')), findsOneWidget, reason: 'el logo de phone landscape NO debe removerse en esta tarea');
+    expect(
+      find.byKey(const Key('login-portrait-indicator-row')),
+      findsNothing,
+      reason: 'phone landscape sigue sin el indicador de SCREEN_01 — fuera de alcance de esta tarea',
+    );
+    expect(
+      find.byKey(const Key('login-desktop-indicator-row')),
+      findsNothing,
+      reason: 'phone landscape nunca tuvo el indicador de desktop',
+    );
+    expect(find.byType(BackdropFilter), findsNothing, reason: 'sin outer card en phone landscape, congelado');
   });
 }

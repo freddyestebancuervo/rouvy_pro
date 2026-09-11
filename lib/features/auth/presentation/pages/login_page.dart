@@ -177,7 +177,20 @@ class _LoginPageState extends ConsumerState<LoginPage> {
   }
 
   // -------------------------------------------------------------------
-  // MOBILE PORTRAIT — hero de Guatapé arriba, formulario compacto abajo.
+  // MOBILE PORTRAIT — KORIXA-SCREEN02-LOGIN-MOBILE-PORTRAIT-NO-LOGO-
+  // 20260910: el dueño pidió el mismo tratamiento full-bleed que ya
+  // tienen desktop/phone landscape — antes el hero solo ocupaba el 34%
+  // superior de la pantalla, con el formulario debajo sobre un bloque
+  // sólido `DarkTech.background` (no un panel/tarjeta, pero sí una
+  // franja opaca inferior grande). Ahora el hero de Guatapé cubre la
+  // pantalla COMPLETA, sin ningún bloque inferior opaco; el formulario
+  // flota directamente sobre la foto, anclado abajo (mismo patrón ya
+  // usado por `WelcomePage._MobileWelcomeContent`: `Align(bottomCenter)`
+  // + `SingleChildScrollView(reverse: true)`, así el CTA sigue visible
+  // primero si el contenido no entra completo en pantallas muy chicas).
+  // Sin logo Korixa en esta composición (`showLogo: false`, pedido
+  // explícito del dueño) — desktop y phone landscape SÍ lo conservan,
+  // sin tocar sus llamadores.
   // -------------------------------------------------------------------
 
   Widget _buildPortrait(
@@ -187,45 +200,47 @@ class _LoginPageState extends ConsumerState<LoginPage> {
     AsyncValue<void> socialState,
     bool anyLoading,
   ) {
-    return Column(
+    return Stack(
       key: const Key('login-portrait-layout'),
+      fit: StackFit.expand,
       children: <Widget>[
-        // Altura del hero como fracción de la pantalla (34%) — ni un
-        // header gigante que empuje el formulario fuera de vista, ni tan
-        // chico que la Piedra/el ciclista se vean irreconocibles.
-        SizedBox(
-          height: MediaQuery.of(context).size.height * 0.34,
-          width: double.infinity,
-          child: const Stack(
-            fit: StackFit.expand,
-            children: <Widget>[
-              ExcludeSemantics(
-                key: Key('login-hero-image'),
-                child: _LoginHeroImage(alignment: Alignment(0.15, -0.05)),
-              ),
-              // Mismo token que el scrim inferior de Welcome
-              // (`AppGradients.imageScrimBottom`) — transición limpia
-              // hacia el panel oscuro de abajo, no un gradiente ad hoc.
-              Positioned.fill(
-                child: DecoratedBox(decoration: BoxDecoration(gradient: AppGradients.imageScrimBottom)),
-              ),
-            ],
-          ),
+        const ExcludeSemantics(
+          key: Key('login-hero-image'),
+          child: _LoginHeroImage(alignment: Alignment(0.15, -0.05)),
         ),
-        Expanded(
-          child: SafeArea(
-            top: false,
-            child: SingleChildScrollView(
+        // Mismo scrim vertical ya aprobado en Welcome mobile
+        // (`AppGradients.imageScrimBottom`) — transparente arriba,
+        // oscurece progresivamente hacia abajo, donde vive todo el
+        // contenido ahora. Degradado general sin silueta de rectángulo
+        // — permitido explícitamente ("overlay general/sombra de texto
+        // sí, bloque opaco/tarjeta no").
+        const Positioned.fill(
+          child: DecoratedBox(decoration: BoxDecoration(gradient: AppGradients.imageScrimBottom)),
+        ),
+        SafeArea(
+          child: Align(
+            alignment: Alignment.bottomCenter,
+            child: Padding(
               padding: const EdgeInsets.fromLTRB(AppSpacing.xl, AppSpacing.lg, AppSpacing.xl, AppSpacing.lg),
-              child: _buildFormColumn(
-                context: context,
-                l10n: l10n,
-                loginState: loginState,
-                socialState: socialState,
-                anyLoading: anyLoading,
-                logoAsset: 'assets/icons/korixa_logo.png',
-                logoHeight: 40,
-                compact: false,
+              child: SingleChildScrollView(
+                reverse: true,
+                child: _buildFormColumn(
+                  context: context,
+                  l10n: l10n,
+                  loginState: loginState,
+                  socialState: socialState,
+                  anyLoading: anyLoading,
+                  logoAsset: 'assets/icons/korixa_logo.png',
+                  logoHeight: 40,
+                  compact: false,
+                  showLogo: false,
+                  floatingOverPhoto: true,
+                  showIndicator: true,
+                  indicatorKey: 'login-portrait-indicator-row',
+                  indicatorBarWidth: 18,
+                  indicatorBarHeight: 4,
+                  indicatorBarGap: 5,
+                ),
               ),
             ),
           ),
@@ -416,11 +431,23 @@ class _LoginPageState extends ConsumerState<LoginPage> {
     double? ctaHeight,
     double? ctaFontSize,
     // KORIXA-SCREEN02-LOGIN-ALIGNMENT-INDICATOR-POLISH-20260910: `true`
-    // solo en desktop — el dueño pidió agregar el mismo indicador de 3
-    // barras de SCREEN_01 debajo de "¿Olvidaste tu contraseña?", pero
-    // solo para la composición mostrada en su captura anotada. Phone
-    // landscape/mobile portrait no lo reciben (sin cambio visual).
+    // en desktop y (desde KORIXA-SCREEN02-LOGIN-MOBILE-PORTRAIT-NO-LOGO-
+    // 20260910) también en mobile portrait — el mismo indicador de 3
+    // barras de SCREEN_01, con su propio tamaño por composición vía
+    // [indicatorBarWidth]/[indicatorBarHeight]/[indicatorBarGap]. Phone
+    // landscape no lo recibe (sin cambio visual, fuera de alcance).
     bool showIndicator = false,
+    String indicatorKey = 'login-desktop-indicator-row',
+    double indicatorBarWidth = 24,
+    double indicatorBarHeight = 4,
+    double indicatorBarGap = 6,
+    // KORIXA-SCREEN02-LOGIN-MOBILE-PORTRAIT-NO-LOGO-20260910: el dueño
+    // pidió que mobile portrait NO muestre el logo Korixa — sin dejar el
+    // espacio en blanco donde iría (`showLogo: false` omite tanto el
+    // `Image.asset` como su `SizedBox` de separación siguiente, no solo
+    // lo oculta visualmente). Desktop y phone landscape conservan el
+    // logo (`showLogo` default `true`, sin tocar sus llamadores).
+    bool showLogo = true,
   }) {
     final TextTheme textTheme = Theme.of(context).textTheme;
     final double sectionGap = compact ? AppSpacing.sm : AppSpacing.xl;
@@ -572,12 +599,12 @@ class _LoginPageState extends ConsumerState<LoginPage> {
         // indicadores. Welcome sigue con el default (`activeIndex: 0`,
         // sin tocar su propio llamador) — sigue sin representar ningún
         // progreso de autenticación real en ninguna de las 2 pantallas.
-        const Center(
+        Center(
           child: ThreeBarIndicator(
-            key: Key('login-desktop-indicator-row'),
-            barWidth: 24,
-            barHeight: 4,
-            gap: 6,
+            key: Key(indicatorKey),
+            barWidth: indicatorBarWidth,
+            barHeight: indicatorBarHeight,
+            gap: indicatorBarGap,
             activeIndex: 1,
           ),
         ),
@@ -678,8 +705,10 @@ class _LoginPageState extends ConsumerState<LoginPage> {
                   crossAxisAlignment: CrossAxisAlignment.center,
                   mainAxisSize: MainAxisSize.min,
                   children: <Widget>[
-                    logoWidget,
-                    SizedBox(height: compact ? AppSpacing.sm : AppSpacing.lg),
+                    if (showLogo) ...<Widget>[
+                      logoWidget,
+                      SizedBox(height: compact ? AppSpacing.sm : AppSpacing.lg),
+                    ],
                     titleWidget,
                   ],
                 ),
@@ -702,8 +731,10 @@ class _LoginPageState extends ConsumerState<LoginPage> {
             crossAxisAlignment: CrossAxisAlignment.stretch,
             mainAxisSize: MainAxisSize.min,
             children: <Widget>[
-              logoWidget,
-              SizedBox(height: compact ? AppSpacing.sm : AppSpacing.lg),
+              if (showLogo) ...<Widget>[
+                logoWidget,
+                SizedBox(height: compact ? AppSpacing.sm : AppSpacing.lg),
+              ],
               titleWidget,
               const SizedBox(height: AppSpacing.sm),
               subtitleWidget,
