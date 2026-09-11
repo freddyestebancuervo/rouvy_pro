@@ -233,27 +233,27 @@ class _LoginPageState extends ConsumerState<LoginPage> {
               key: const Key('login-portrait-content-max-width'),
               constraints: const BoxConstraints(maxWidth: 480),
               child: Padding(
-                // KORIXA-SCREEN02-BOTTOM-ANCHORED-COMPOSITION-20260910: el
-                // inset SUPERIOR baja de `AppSpacing.xl` (24, el valor que
-                // KORIXA-SCREEN02-MATCH-SCREEN01-VISUAL-SYSTEM-20260910
-                // había igualado al de `_MobileWelcomeContent`) a
-                // `AppSpacing.xs` (4) — el dueño reportó que el grupo
-                // completo (título→crear cuenta) empezaba muy arriba,
-                // dejando poca foto de Guatapé visible. Como este bloque
-                // ya está anclado ABAJO (`Align(bottomCenter)`, sin
-                // cambios), este inset superior no protege overflow
-                // alguno mientras el contenido quepa sin scroll — solo
-                // agrega altura muerta arriba del título, empujando TODO
-                // el grupo hacia arriba en bloque. Bajarlo es la palanca
-                // más directa: reduce la altura total del grupo, y como
-                // sigue anclado al fondo, el borde SUPERIOR del grupo baja
-                // exactamente esa diferencia — más foto visible arriba,
-                // sin tocar el estilo de ningún elemento. El inset
-                // INFERIOR (32) no se toca — protege la distancia de
-                // "Crear cuenta" al borde/chrome del dispositivo, pedido
-                // explícito de esta tarea ("no empujar tan abajo que
-                // Crear cuenta/Google/CTA queden pegados al borde").
-                padding: const EdgeInsets.fromLTRB(AppSpacing.xl, AppSpacing.xs, AppSpacing.xl, 32),
+                // KORIXA-SCREEN02-TRUE-BOTTOM-COMPOSITION-OWNER-CORRECTION-
+                // 20260911: el dueño corrigió explícitamente que el ajuste
+                // anterior (inset superior a `AppSpacing.xs` = 4, inferior
+                // sin tocar en 32) era "otro recorte incremental", no el
+                // cambio de composición MATERIAL pedido — a 390×844 el
+                // título seguía en y≈264, muy por debajo del objetivo
+                // (y>=340). Este inset superior baja a 0 (ya no hay más
+                // margen que recortar ahí sin volverse negativo) y el
+                // INFERIOR baja de 32 a `AppSpacing.sm` (8) — sigue habiendo
+                // un colchón real (más el propio `SafeArea`) entre "Crear
+                // cuenta" y el borde del dispositivo, solo que ya no
+                // reproduce el inset de 32 de `_MobileWelcomeContent`
+                // (Welcome no tiene el problema de "grupo demasiado alto"
+                // que motiva esta tarea, así que copiar su inset ahí ya no
+                // es el objetivo). Combinado con los otros ajustes de este
+                // método (`contentSectionGap`/`indicatorToCtaGap`/
+                // `fieldSpacingGap`/`titleToSubtitleGap`/`fieldContentPadding`/
+                // `ctaHeight`/`socialButtonHeight`/`tightenBottomActions`
+                // más abajo), el título pasa de y=264 a y>=340 — medido,
+                // no estimado (ver `login_page_test.dart`).
+                padding: const EdgeInsets.fromLTRB(AppSpacing.xl, 0, AppSpacing.xl, AppSpacing.sm),
                 child: SingleChildScrollView(
                   reverse: true,
                   child: _buildFormColumn(
@@ -280,29 +280,58 @@ class _LoginPageState extends ConsumerState<LoginPage> {
                     indicatorBarWidth: 18,
                     indicatorBarHeight: 4,
                     indicatorBarGap: 5,
-                    // KORIXA-SCREEN02-BOTTOM-ANCHORED-COMPOSITION-20260910:
-                    // `AppSpacing.sm` (8) — antes `AppSpacing.lg` (20,
-                    // KORIXA-SCREEN02-MATCH-SCREEN01-VISUAL-SYSTEM-20260910
-                    // había igualado este valor al de Welcome). En Welcome
-                    // el indicador es el ÚNICO elemento entre el subtítulo
-                    // y el CTA; en Login hay 6 elementos más (campos,
-                    // olvidé-contraseña) — reproducir el MISMO respiro
-                    // amplio ahí, multiplicado por cada gap del grupo, es
-                    // justamente lo que empujaba el grupo completo más
-                    // arriba. Ver `contentSectionGap` abajo para las otras
-                    // 2 separaciones ajustadas por el mismo motivo.
-                    indicatorToCtaGap: AppSpacing.sm,
-                    // KORIXA-SCREEN02-BOTTOM-ANCHORED-COMPOSITION-20260910:
-                    // reduce las separaciones subtítulo→campos y "olvidé
-                    // mi contraseña"→indicador de `sectionGap` (24) a
-                    // `AppSpacing.sm` (8) — el dueño pidió explícitamente
-                    // que estos 10 elementos (título, subtítulo, campos,
-                    // olvidé-contraseña, indicador, CTA, divisor, Google,
-                    // crear-cuenta) se comporten como UN SOLO grupo
-                    // compacto, no como secciones separadas con aire de
-                    // sobra entre ellas. Desktop/phone landscape no reciben
-                    // este parámetro (`null` por defecto) — sin cambio.
-                    contentSectionGap: AppSpacing.sm,
+                    // KORIXA-SCREEN02-TRUE-BOTTOM-COMPOSITION-OWNER-
+                    // CORRECTION-20260911: `AppSpacing.xs` (4, antes
+                    // `AppSpacing.sm` = 8, que a su vez había reemplazado
+                    // `AppSpacing.lg` = 20 del round anterior a este). Cada
+                    // reducción adicional de este único gap se multiplica
+                    // por las 2 veces que `contentSectionGap` lo usa más
+                    // abajo — el dueño pidió un cambio MATERIAL, así que
+                    // esta ronda lleva TODOS los gaps internos del grupo al
+                    // valor más chico ya existente en el sistema de diseño
+                    // (`AppSpacing.xs`), no solo el siguiente escalón.
+                    indicatorToCtaGap: AppSpacing.xs,
+                    // KORIXA-SCREEN02-TRUE-BOTTOM-COMPOSITION-OWNER-
+                    // CORRECTION-20260911: `AppSpacing.xs` (4, antes
+                    // `AppSpacing.sm` = 8) — mismo razonamiento que
+                    // `indicatorToCtaGap` arriba; gobierna subtítulo→campos
+                    // Y "olvidé mi contraseña"→indicador a la vez.
+                    contentSectionGap: AppSpacing.xs,
+                    // KORIXA-SCREEN02-TRUE-BOTTOM-COMPOSITION-OWNER-
+                    // CORRECTION-20260911: nuevo — antes este gap
+                    // (correo→contraseña) usaba el valor compartido
+                    // `compact ? sm : base` (16 en mobile, igual que
+                    // desktop/landscape) sin ningún override específico de
+                    // mobile portrait. `AppSpacing.sm` (8) lo reduce a la
+                    // mitad SOLO acá.
+                    fieldSpacingGap: AppSpacing.sm,
+                    // KORIXA-SCREEN02-TRUE-BOTTOM-COMPOSITION-OWNER-
+                    // CORRECTION-20260911: nuevo — reduce el alto propio de
+                    // cada campo (antes 56, `contentPadding` de 16 vertical
+                    // heredado del `InputDecorationTheme` global) a ~48 sin
+                    // tocar ese tema compartido — el piso táctil de 48
+                    // pedido explícitamente por el encargo ("not smaller
+                    // than approximately 48 logical px").
+                    fieldContentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+                    // KORIXA-SCREEN02-TRUE-BOTTOM-COMPOSITION-OWNER-
+                    // CORRECTION-20260911: nuevo — mismo peso/gradiente/
+                    // radio del CTA (`PrimaryGradientButton`, sin cambios),
+                    // solo el alto baja de 52 (default) a 48 — el piso
+                    // táctil pedido, no más abajo.
+                    ctaHeight: 48,
+                    // KORIXA-SCREEN02-TRUE-BOTTOM-COMPOSITION-OWNER-
+                    // CORRECTION-20260911: nuevo — mismo widget/estilo de
+                    // Google (`GoogleSignInButton`, sin cambios), envuelto
+                    // en un `SizedBox` de 48 (ver `_maybeSizedBox`) en vez
+                    // del alto de tema compartido (52) que Register/otras
+                    // pantallas siguen usando sin cambios.
+                    socialButtonHeight: 48,
+                    // KORIXA-SCREEN02-TRUE-BOTTOM-COMPOSITION-OWNER-
+                    // CORRECTION-20260911: nuevo — título→subtítulo baja de
+                    // `AppSpacing.sm` (8, el valor fijo que este gap
+                    // siempre tuvo en las 3 composiciones) a `AppSpacing.xs`
+                    // (4), exclusivo de mobile portrait.
+                    titleToSubtitleGap: AppSpacing.xs,
                     showFieldIcons: true,
                     // KORIXA-SCREEN02-MATCH-SCREEN01-VISUAL-SYSTEM-20260910:
                     // reemplaza `enhancedSubtitleContrast` (contraste ad
@@ -464,6 +493,19 @@ class _LoginPageState extends ConsumerState<LoginPage> {
     );
   }
 
+  // KORIXA-SCREEN02-TRUE-BOTTOM-COMPOSITION-OWNER-CORRECTION-20260911: fija
+  // el alto de UN botón (Google/Apple) sin tocar `OutlinedButtonThemeData`/
+  // `FilledButtonThemeData` (compartidos por toda la app) — `SizedBox` con
+  // un alto explícito impone una restricción tight que gana sobre el
+  // `minimumSize` más grande del tema (técnica estándar de Flutter, no un
+  // hack). `height == null` devuelve el widget sin envolver, preservando
+  // el alto de tema de siempre para todo llamador que no pase este
+  // parámetro.
+  Widget _maybeSizedBox(double? height, Widget child) {
+    if (height == null) return child;
+    return SizedBox(height: height, child: child);
+  }
+
   // -------------------------------------------------------------------
   // Formulario compartido — idéntico contenido/orden/comportamiento en
   // las 3 composiciones, solo cambia el logo/tamaños vía [compact]. Toda
@@ -553,6 +595,36 @@ class _LoginPageState extends ConsumerState<LoginPage> {
     // subtítulo/campos/CTA/Google quedan pixel-a-pixel iguales, solo se
     // acercan entre sí).
     double? contentSectionGap,
+    // KORIXA-SCREEN02-TRUE-BOTTOM-COMPOSITION-OWNER-CORRECTION-20260911:
+    // 4 parámetros nuevos, todos EXCLUSIVOS de mobile portrait (`null`/
+    // default preserva el comportamiento exacto de todo otro llamador) —
+    // el dueño pidió un cambio de composición MATERIAL, no otro recorte
+    // incremental de separaciones: además de achicar gaps, esta vez
+    // también se reduce la altura propia de campos/CTA/Google (siempre
+    // >= 48px, el piso táctil pedido explícitamente por el encargo).
+    //
+    // `titleToSubtitleGap`: `null` preserva `AppSpacing.sm` (el valor fijo
+    // que este gap siempre tuvo, en las 3 composiciones).
+    double? titleToSubtitleGap,
+    // `fieldSpacingGap`: `null` preserva `compact ? sm : base` (el
+    // comportamiento exacto de siempre entre el campo de correo y el de
+    // contraseña).
+    double? fieldSpacingGap,
+    // `fieldContentPadding`: `null` deja que `TextFormField` herede el
+    // `contentPadding` del `InputDecorationTheme` global de la app (16
+    // vertical, compartido por TODA la app — nunca se toca acá). Mobile
+    // portrait pasa un valor más chico (12 vertical) SOLO en su propia
+    // instancia de `InputDecoration`, reduciendo el alto total de cada
+    // campo de 56 a ~48 sin afectar Register/otros formularios que usan
+    // el mismo tema.
+    EdgeInsetsGeometry? fieldContentPadding,
+    // `socialButtonHeight`: `null` deja que Google/Apple usen su alto de
+    // tema de siempre (52, `OutlinedButtonThemeData`/`FilledButtonThemeData`
+    // compartidos — NO se tocan). Mobile portrait envuelve la instancia en
+    // un `SizedBox` de este alto (48) — técnica estándar de Flutter para
+    // fijar el alto de UN botón sin tocar el tema global que usan otras
+    // pantallas.
+    double? socialButtonHeight,
     // KORIXA-SCREEN02-LOGIN-MOBILE-PORTRAIT-NO-LOGO-20260910: el dueño
     // pidió que mobile portrait NO muestre el logo Korixa — sin dejar el
     // espacio en blanco donde iría (`showLogo: false` omite tanto el
@@ -602,7 +674,14 @@ class _LoginPageState extends ConsumerState<LoginPage> {
     // sin tocar `sectionGap`/`dividerGap` (siguen gobernando el resto
     // del formulario, incluida la separación logo→título→subtítulo→
     // campos, que el encargo no pidió tocar).
-    final double bottomActionGap = tightenBottomActions ? AppSpacing.sm : sectionGap;
+    // KORIXA-SCREEN02-TRUE-BOTTOM-COMPOSITION-OWNER-CORRECTION-20260911:
+    // `AppSpacing.xs` (4, antes `AppSpacing.sm` = 8) — el dueño pidió un
+    // cambio de composición MATERIAL, no otro recorte cosmético; este
+    // gap gobierna 2 de las separaciones del grupo inferior (CTA→divisor
+    // y Google→"¿No tienes cuenta?"), así que reducirlo aporta el doble
+    // de altura ahorrada. `tightenBottomActions` sigue siendo exclusivo
+    // de mobile portrait (desktop/landscape nunca lo activan).
+    final double bottomActionGap = tightenBottomActions ? AppSpacing.xs : sectionGap;
     final double bottomDividerGap = tightenBottomActions ? AppSpacing.xs : dividerGap;
     // KORIXA-SCREEN02-BOTTOM-ANCHORED-COMPOSITION-20260910: override SOLO
     // para las 2 separaciones "sueltas" que quedaban entre subtítulo y
@@ -721,10 +800,11 @@ class _LoginPageState extends ConsumerState<LoginPage> {
         decoration: InputDecoration(
           labelText: l10n.emailLabel,
           prefixIcon: showFieldIcons ? const Icon(Icons.mail_outline) : null,
+          contentPadding: fieldContentPadding,
         ),
         validator: (String? value) => Validators.email(value).message(l10n),
       ),
-      SizedBox(height: compact ? AppSpacing.sm : AppSpacing.base),
+      SizedBox(height: fieldSpacingGap ?? (compact ? AppSpacing.sm : AppSpacing.base)),
       TextFormField(
         controller: _passwordController,
         obscureText: _obscurePassword,
@@ -733,6 +813,7 @@ class _LoginPageState extends ConsumerState<LoginPage> {
         decoration: InputDecoration(
           labelText: l10n.passwordLabel,
           prefixIcon: showFieldIcons ? const Icon(Icons.lock_outline) : null,
+          contentPadding: fieldContentPadding,
           suffixIcon: Semantics(
             // `toggled` anuncia al lector de pantalla el estado actual
             // (mostrando/ocultando), no solo "botón" — sin esto,
@@ -823,25 +904,31 @@ class _LoginPageState extends ConsumerState<LoginPage> {
         ],
       ),
       SizedBox(height: bottomDividerGap),
-      GoogleSignInButton(
-        label: l10n.continueWithGoogle,
-        isLoading: socialState.isLoading,
-        onPressed: anyLoading
-            ? null
-            : () => _handleSocialSignIn(
-                  ref.read(socialAuthControllerProvider.notifier).signInWithGoogle,
-                ),
-      ),
-      if (_isApplePlatform) ...<Widget>[
-        const SizedBox(height: AppSpacing.md),
-        AppleSignInButton(
-          label: l10n.continueWithApple,
+      _maybeSizedBox(
+        socialButtonHeight,
+        GoogleSignInButton(
+          label: l10n.continueWithGoogle,
           isLoading: socialState.isLoading,
           onPressed: anyLoading
               ? null
               : () => _handleSocialSignIn(
-                    ref.read(socialAuthControllerProvider.notifier).signInWithApple,
+                    ref.read(socialAuthControllerProvider.notifier).signInWithGoogle,
                   ),
+        ),
+      ),
+      if (_isApplePlatform) ...<Widget>[
+        const SizedBox(height: AppSpacing.md),
+        _maybeSizedBox(
+          socialButtonHeight,
+          AppleSignInButton(
+            label: l10n.continueWithApple,
+            isLoading: socialState.isLoading,
+            onPressed: anyLoading
+                ? null
+                : () => _handleSocialSignIn(
+                      ref.read(socialAuthControllerProvider.notifier).signInWithApple,
+                    ),
+          ),
         ),
       ],
       SizedBox(height: bottomActionGap),
@@ -925,7 +1012,7 @@ class _LoginPageState extends ConsumerState<LoginPage> {
                 SizedBox(height: compact ? AppSpacing.sm : AppSpacing.lg),
               ],
               titleWidget,
-              const SizedBox(height: AppSpacing.sm),
+              SizedBox(height: titleToSubtitleGap ?? AppSpacing.sm),
               subtitleWidget,
               SizedBox(height: effectiveSectionGap),
               ...controlChildren,
