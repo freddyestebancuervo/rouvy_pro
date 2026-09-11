@@ -304,13 +304,19 @@ void main() {
     return null;
   }
 
-  bool hasHeroImage(WidgetTester tester) {
+  // KORIXA-SCREEN02-MOBILE-BACKGROUND-ASSET-SWAP-20260911: `assetPath`
+  // agregado con default el panorámico original (desktop/phone
+  // landscape, sin cambios) — mobile portrait ahora usa un archivo
+  // dedicado (`korixa_login_hero_guatape_mobile.png`), así que sus
+  // llamadores pasan ese nombre explícitamente.
+  bool hasHeroImage(
+    WidgetTester tester, {
+    String assetPath = 'assets/images/korixa_login_hero_guatape.webp',
+  }) {
     final Iterable<Image> images = tester.widgetList<Image>(
       find.descendant(of: find.byKey(const Key('login-hero-image')), matching: find.byType(Image)),
     );
-    return images.any(
-      (Image image) => resolvedAssetName(image.image) == 'assets/images/korixa_login_hero_guatape.webp',
-    );
+    return images.any((Image image) => resolvedAssetName(image.image) == assetPath);
   }
 
   void expectExclusiveLayout(WidgetTester tester, String selectedKey) {
@@ -347,7 +353,11 @@ void main() {
     expect(tester.takeException(), isNull, reason: 'no debe haber overflow en 390x844');
 
     expectExclusiveLayout(tester, 'login-portrait-layout');
-    expect(hasHeroImage(tester), isTrue, reason: 'el hero de Guatapé debe estar presente en portrait');
+    expect(
+      hasHeroImage(tester, assetPath: 'assets/images/korixa_login_hero_guatape_mobile.png'),
+      isTrue,
+      reason: 'el hero de Guatapé (asset dedicado de mobile) debe estar presente en portrait',
+    );
 
     expect(find.byType(TextFormField), findsNWidgets(2), reason: 'email + password');
     expect(find.byType(PrimaryGradientButton), findsOneWidget);
@@ -448,7 +458,11 @@ void main() {
       expect(tester.takeException(), isNull, reason: 'no debe haber overflow en $label');
 
       expectExclusiveLayout(tester, 'login-portrait-layout');
-      expect(hasHeroImage(tester), isTrue, reason: '$label: el hero de Guatapé debe estar presente en portrait');
+      expect(
+        hasHeroImage(tester, assetPath: 'assets/images/korixa_login_hero_guatape_mobile.png'),
+        isTrue,
+        reason: '$label: el hero de Guatapé (asset dedicado de mobile) debe estar presente en portrait',
+      );
 
       final Iterable<Image> images = tester.widgetList<Image>(find.byType(Image));
       final bool hasDesktopLogo = images.any(
@@ -1354,7 +1368,11 @@ void main() {
       expect(tester.takeException(), isNull, reason: '$label: no overflow');
 
       // BACKGROUND_GUATAPE_PRESENT
-      expect(hasHeroImage(tester), isTrue, reason: '$label: BACKGROUND_GUATAPE_PRESENT');
+      expect(
+        hasHeroImage(tester, assetPath: 'assets/images/korixa_login_hero_guatape_mobile.png'),
+        isTrue,
+        reason: '$label: BACKGROUND_GUATAPE_PRESENT',
+      );
 
       // TOP_MOBILE_LOGO_PRESENT = NO
       expect(find.byKey(const Key('login-logo')), findsNothing, reason: '$label: TOP_MOBILE_LOGO_PRESENT debe ser NO');
