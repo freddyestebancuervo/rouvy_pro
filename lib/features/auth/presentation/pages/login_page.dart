@@ -220,31 +220,70 @@ class _LoginPageState extends ConsumerState<LoginPage> {
         SafeArea(
           child: Align(
             alignment: Alignment.bottomCenter,
-            child: Padding(
-              padding: const EdgeInsets.fromLTRB(AppSpacing.xl, AppSpacing.lg, AppSpacing.xl, AppSpacing.lg),
-              child: SingleChildScrollView(
-                reverse: true,
-                child: _buildFormColumn(
-                  context: context,
-                  l10n: l10n,
-                  loginState: loginState,
-                  socialState: socialState,
-                  anyLoading: anyLoading,
-                  logoAsset: 'assets/icons/korixa_logo.png',
-                  logoHeight: 40,
-                  compact: false,
-                  showLogo: false,
-                  floatingOverPhoto: true,
-                  showIndicator: true,
-                  indicatorKey: 'login-portrait-indicator-row',
-                  indicatorBarWidth: 18,
-                  indicatorBarHeight: 4,
-                  indicatorBarGap: 5,
-                  showFieldIcons: true,
-                  enhancedSubtitleContrast: true,
-                  ctaIcon: Icons.arrow_forward_rounded,
-                  ctaIconTrailing: true,
-                  tightenBottomActions: true,
+            // KORIXA-SCREEN02-MATCH-SCREEN01-VISUAL-SYSTEM-20260910: mismo
+            // tope de ancho (480) que ya usa `WelcomePage._MobileWelcomeContent`
+            // (`welcome-content-max-width`) — sin esto, a 768×1024 (tablet
+            // portrait) el bloque de contenido se estiraba a lo ancho
+            // completo del viewport (720px útiles tras el padding),
+            // mucho más ancho que cualquier formulario de Login legible;
+            // SCREEN_01 ya resuelve exactamente este mismo caso acotando
+            // a 480 y centrando, en vez de "estirar ciegamente las
+            // dimensiones de teléfono" (pedido explícito del encargo).
+            child: ConstrainedBox(
+              key: const Key('login-portrait-content-max-width'),
+              constraints: const BoxConstraints(maxWidth: 480),
+              child: Padding(
+                // KORIXA-SCREEN02-MATCH-SCREEN01-VISUAL-SYSTEM-20260910:
+                // mismos insets exactos que `_MobileWelcomeContent`
+                // (24/24/24/32) — antes este padding era (24/20/24/20),
+                // una franja inferior más chica que la ya aprobada de
+                // SCREEN_01 para el mismo tipo de composición (hero
+                // full-bleed + contenido anclado abajo).
+                padding: const EdgeInsets.fromLTRB(AppSpacing.xl, AppSpacing.xl, AppSpacing.xl, 32),
+                child: SingleChildScrollView(
+                  reverse: true,
+                  child: _buildFormColumn(
+                    context: context,
+                    l10n: l10n,
+                    loginState: loginState,
+                    socialState: socialState,
+                    anyLoading: anyLoading,
+                    logoAsset: 'assets/icons/korixa_logo.png',
+                    logoHeight: 40,
+                    compact: false,
+                    showLogo: false,
+                    // KORIXA-SCREEN02-MATCH-SCREEN01-VISUAL-SYSTEM-20260910:
+                    // `false` — SCREEN_01 nunca aplica sombra de texto a
+                    // título/subtítulo, ni siquiera flotando directamente
+                    // sobre la foto (confía solo en el mismo scrim
+                    // `imageScrimBottom` que esta composición ya usa,
+                    // idéntico al de Welcome mobile). `matchScreen01Typography`
+                    // (abajo) cubre el resto del tratamiento tipográfico
+                    // canónico.
+                    floatingOverPhoto: false,
+                    showIndicator: true,
+                    indicatorKey: 'login-portrait-indicator-row',
+                    indicatorBarWidth: 18,
+                    indicatorBarHeight: 4,
+                    indicatorBarGap: 5,
+                    // KORIXA-SCREEN02-MATCH-SCREEN01-VISUAL-SYSTEM-20260910:
+                    // mismo espaciado indicador→CTA ya aprobado en
+                    // SCREEN_01 (`AppSpacing.lg` = 20), en vez del
+                    // `sectionGap` (24) que esta pantalla usaba antes.
+                    indicatorToCtaGap: AppSpacing.lg,
+                    showFieldIcons: true,
+                    // KORIXA-SCREEN02-MATCH-SCREEN01-VISUAL-SYSTEM-20260910:
+                    // reemplaza `enhancedSubtitleContrast` (contraste ad
+                    // hoc de la tarea anterior) por el tratamiento
+                    // tipográfico CANÓNICO de SCREEN_01 — título en
+                    // negrita (w800) centrado y subtítulo `bodyLarge`
+                    // (16px) en `DarkTech.textSecondary`, ambos sin
+                    // sombra, igual que "Conecta tu energía" en Welcome.
+                    matchScreen01Typography: true,
+                    ctaIcon: Icons.arrow_forward_rounded,
+                    ctaIconTrailing: true,
+                    tightenBottomActions: true,
+                  ),
                 ),
               ),
             ),
@@ -415,9 +454,17 @@ class _LoginPageState extends ConsumerState<LoginPage> {
     // panel/tarjeta — el título/subtítulo quedan directamente sobre la
     // foto, así que reciben una sombra de texto suave para legibilidad
     // (permitida explícitamente por el encargo: "sombras suaves ... si
-    // hace falta"). `false` en mobile portrait (sin cambios): ahí el
-    // formulario sigue sobre un fondo Dark Tech sólido, donde una sombra
-    // no tendría ningún efecto visible ni sentido.
+    // hace falta").
+    //
+    // KORIXA-SCREEN02-MATCH-SCREEN01-VISUAL-SYSTEM-20260910: `false` en
+    // mobile portrait (antes `true`, KORIXA-PR127-LOGIN-MOBILE-VISUAL-
+    // POLISH-20260910) — SCREEN_01 nunca usa sombra de texto, ni siquiera
+    // flotando directamente sobre su propia foto, porque ya confía en el
+    // mismo scrim `imageScrimBottom` que mobile portrait usa desde el
+    // full-bleed de KORIXA-SCREEN02-LOGIN-MOBILE-PORTRAIT-NO-LOGO-
+    // 20260910. Desktop/phone landscape usan `_LoginHeroContentScrim`
+    // (un scrim horizontal más angosto, sin la misma cobertura vertical),
+    // así que conservan su sombra existente sin cambios.
     bool floatingOverPhoto = false,
     // KORIXA-SCREEN02-LOGIN-MATCH-SCREEN01-DESKTOP-SCALE-20260910: `null`
     // (portrait/landscape, sin cambios) conserva el único `Column` con
@@ -446,6 +493,12 @@ class _LoginPageState extends ConsumerState<LoginPage> {
     double indicatorBarWidth = 24,
     double indicatorBarHeight = 4,
     double indicatorBarGap = 6,
+    // KORIXA-SCREEN02-MATCH-SCREEN01-VISUAL-SYSTEM-20260910: `null`
+    // preserva `sectionGap` (comportamiento exacto de todo llamador
+    // existente) como separación indicador→CTA. Mobile portrait pasa
+    // `AppSpacing.lg` (20) — el mismo valor ya aprobado entre el
+    // indicador y "Comenzar" en `WelcomePage._MobileWelcomeContent`.
+    double? indicatorToCtaGap,
     // KORIXA-SCREEN02-LOGIN-MOBILE-PORTRAIT-NO-LOGO-20260910: el dueño
     // pidió que mobile portrait NO muestre el logo Korixa — sin dejar el
     // espacio en blanco donde iría (`showLogo: false` omite tanto el
@@ -461,11 +514,20 @@ class _LoginPageState extends ConsumerState<LoginPage> {
     // Íconos mail/lock a la izquierda de los campos (Material, ya
     // incluidos en el SDK — cero dependencias nuevas).
     bool showFieldIcons = false,
-    // Contraste reforzado del subtítulo: color más claro que
-    // `DarkTech.textSecondary` + sombra de texto más fuerte — el fondo
-    // ahora es la foto completa (antes un panel sólido), así que el
-    // contraste por defecto ya no alcanza en todas las zonas de la foto.
-    bool enhancedSubtitleContrast = false,
+    // KORIXA-SCREEN02-MATCH-SCREEN01-VISUAL-SYSTEM-20260910: reemplaza al
+    // anterior `enhancedSubtitleContrast` (contraste ad hoc de blanco +
+    // sombra fuerte, KORIXA-PR127-LOGIN-MOBILE-VISUAL-POLISH-20260910).
+    // El dueño pidió que SCREEN_02 herede el sistema tipográfico EXACTO
+    // ya aprobado en SCREEN_01 ("Conecta tu energía."), no una variante
+    // propia — con `true`: título en `headlineMedium` w800 centrado
+    // (igual que el título mobile de Welcome) y subtítulo en `bodyLarge`
+    // (16px, en vez del `bodyMedium` de 14px anterior) en
+    // `DarkTech.textSecondary`, ambos SIN sombra de texto — Welcome nunca
+    // usa sombra en título/subtítulo, ni flotando directamente sobre la
+    // foto, porque ya confía en el mismo scrim `imageScrimBottom` que
+    // esta composición usa. Solo mobile portrait pasa `true`; desktop y
+    // phone landscape quedan con su tratamiento actual sin cambios.
+    bool matchScreen01Typography = false,
     // Ícono decorativo dentro del CTA — `iconTrailing: true` lo ubica a
     // la derecha del texto (mockup aprobado por el dueño). Nunca cambia
     // `onPressed`/semántica del botón (ver `PrimaryGradientButton`).
@@ -533,14 +595,21 @@ class _LoginPageState extends ConsumerState<LoginPage> {
       // algún día el texto ocupa 2 líneas de distinto largo); el
       // centrado de la caja en sí respecto a la columna de 550 lo da
       // `crossAxisAlignment.center` en [content] más abajo.
-      textAlign: isDesktopScale ? TextAlign.center : null,
+      textAlign: (isDesktopScale || matchScreen01Typography) ? TextAlign.center : null,
       style: textTheme.headlineMedium?.copyWith(
         fontSize: titleFontSize ?? (compact ? 22 : null),
         // KORIXA-SCREEN02-LOGIN-MATCH-SCREEN01-DESKTOP-SCALE-20260910:
         // mismo peso/tracking/interlineado que el título de escritorio de
         // Welcome (`_DesktopWelcomeContent`) — solo aplica cuando se pide
         // el tamaño grande de desktop (`titleFontSize` no nulo).
-        fontWeight: titleFontSize != null ? FontWeight.w800 : null,
+        // KORIXA-SCREEN02-MATCH-SCREEN01-VISUAL-SYSTEM-20260910: mobile
+        // portrait (`matchScreen01Typography`) también fuerza `w800` —
+        // el mismo peso de "Conecta tu energía." en Welcome mobile
+        // (`headlineMedium` con `fontWeight: FontWeight.w800`); sin este
+        // override el título de Login quedaba en el `w700` por defecto
+        // de `headlineMedium`, un peso visualmente más liviano que el ya
+        // aprobado en SCREEN_01.
+        fontWeight: (titleFontSize != null || matchScreen01Typography) ? FontWeight.w800 : null,
         letterSpacing: titleFontSize != null ? -0.5 : null,
         height: titleFontSize != null ? 1.08 : null,
         shadows: legibilityShadow,
@@ -551,30 +620,34 @@ class _LoginPageState extends ConsumerState<LoginPage> {
       l10n.loginSubtitle,
       key: const Key('login-subtitle'),
       // KORIXA-SCREEN02-LOGIN-SUBTITLE-POSITION-CENTER-ACTIVE-INDICATOR-
-      // 20260910: sin `textAlign` (igual que antes de KORIXA-SCREEN02-
-      // LOGIN-ALIGNMENT-INDICATOR-POLISH-20260910) — el dueño pidió
-      // deshacer específicamente la posición horizontal del subtítulo;
-      // combinado con que este widget ya no vive dentro del `SizedBox`
-      // de 550 (ver [content] más abajo), esto reproduce exactamente su
-      // posición/alineación anterior.
-      style: textTheme.bodyMedium?.copyWith(
+      // 20260910: sin `textAlign` por defecto (`null`) fuera de mobile
+      // portrait — el dueño pidió deshacer específicamente la posición
+      // horizontal del subtítulo de desktop; combinado con que este
+      // widget ya no vive dentro del `SizedBox` de 550 (ver [content] más
+      // abajo), esto reproduce exactamente su posición/alineación
+      // anterior en desktop/phone landscape, sin cambios.
+      //
+      // KORIXA-SCREEN02-MATCH-SCREEN01-VISUAL-SYSTEM-20260910: mobile
+      // portrait (`matchScreen01Typography`) SÍ centra — igual que el
+      // subtítulo de Welcome mobile (`textAlign: TextAlign.center`).
+      textAlign: matchScreen01Typography ? TextAlign.center : null,
+      // KORIXA-SCREEN02-MATCH-SCREEN01-VISUAL-SYSTEM-20260910:
+      // `matchScreen01Typography` usa `bodyLarge` (16px) — el mismo
+      // tamaño base del subtítulo de Welcome mobile — en vez del
+      // `bodyMedium` (14px) que este subtítulo usaba antes. El color
+      // sigue siendo `DarkTech.textSecondary` en ambos casos (ya era el
+      // color por defecto de `bodyMedium`, ahora explícito porque
+      // `bodyLarge` por defecto usa el color de texto PRIMARIO). Sin
+      // sombra cuando se pide el estilo canónico: Welcome nunca aplica
+      // sombra a su subtítulo, ni flotando directamente sobre la foto —
+      // confía en el mismo scrim `imageScrimBottom` que esta composición
+      // ya usa (reemplaza el contraste ad hoc de blanco+sombra fuerte de
+      // KORIXA-PR127-LOGIN-MOBILE-VISUAL-POLISH-20260910).
+      style: (matchScreen01Typography ? textTheme.bodyLarge : textTheme.bodyMedium)?.copyWith(
         fontSize: subtitleFontSize,
-        // KORIXA-PR127-LOGIN-MOBILE-VISUAL-POLISH-20260910: en mobile
-        // portrait el fondo ahora es la foto completa (antes un panel
-        // sólido) — `DarkTech.textSecondary` (un gris medio) pierde
-        // contraste contra zonas claras de la foto. `enhancedSubtitleContrast`
-        // usa un blanco casi puro con leve transparencia en su lugar,
-        // combinado con una sombra más fuerte abajo — sigue leyéndose
-        // claramente "secundario" (más tenue que el título) por peso de
-        // fuente, no por un gris que puede perderse contra el cielo/foto.
-        color: enhancedSubtitleContrast ? Colors.white.withValues(alpha: 0.92) : DarkTech.textSecondary,
+        color: DarkTech.textSecondary,
         fontWeight: subtitleFontSize != null ? FontWeight.w500 : null,
-        shadows: enhancedSubtitleContrast
-            ? <Shadow>[
-                Shadow(color: Colors.black.withValues(alpha: 0.85), blurRadius: 14),
-                Shadow(color: Colors.black.withValues(alpha: 0.6), blurRadius: 4),
-              ]
-            : legibilityShadow,
+        shadows: matchScreen01Typography ? null : legibilityShadow,
       ),
     );
 
@@ -667,7 +740,7 @@ class _LoginPageState extends ConsumerState<LoginPage> {
       // CTA en su captura anotada — `sectionGap` (24 en desktop) en vez
       // del `AppSpacing.xs` (4) anterior, que dejaba el CTA pegado
       // directamente al enlace de "Olvidé mi contraseña".
-      SizedBox(height: showIndicator ? sectionGap : AppSpacing.xs),
+      SizedBox(height: showIndicator ? (indicatorToCtaGap ?? sectionGap) : AppSpacing.xs),
       PrimaryGradientButton(
         label: l10n.loginButton,
         isLoading: loginState.isLoading,

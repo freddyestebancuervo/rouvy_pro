@@ -1054,4 +1054,128 @@ void main() {
     );
     expect(find.byType(BackdropFilter), findsNothing, reason: 'sin outer card en phone landscape, congelado');
   });
+
+  // ---------------------------------------------------------------------
+  // KORIXA-SCREEN02-MATCH-SCREEN01-VISUAL-SYSTEM-20260910 — SCREEN_02
+  // mobile portrait debe heredar el sistema tipográfico/de espaciado EXACTO
+  // ya aprobado en SCREEN_01 Welcome mobile (`_MobileWelcomeContent`):
+  // título `headlineMedium` w800 centrado, subtítulo `bodyLarge` en
+  // `DarkTech.textSecondary` sin sombra, contenido acotado a 480 (para que
+  // 768×1024 no se estire ciegamente), y el mismo espaciado indicador→CTA
+  // (`AppSpacing.lg`). Desktop/phone landscape quedan fuera de alcance —
+  // ver `DESKTOP_FROZEN_NO_VISUAL_CHANGE`/`PHONE_LANDSCAPE_FROZEN_NO_
+  // VISUAL_CHANGE` más arriba, que siguen pasando sin tocarse.
+  // ---------------------------------------------------------------------
+
+  testWidgets('MOBILE_TITLE_MATCHES_SCREEN01_TYPOGRAPHY = PASS', (WidgetTester tester) async {
+    await pumpLoginPage(tester, repository, surfaceSize: const Size(390, 844));
+
+    final Text title = tester.widget(find.byKey(const Key('login-title')));
+    expect(
+      title.style?.fontWeight,
+      FontWeight.w800,
+      reason: 'TITLE_STYLE_MATCH: el título de Login mobile debe usar el mismo peso (w800) que "Conecta tu energía." en Welcome mobile',
+    );
+    expect(title.textAlign, TextAlign.center, reason: 'TITLE_STYLE_MATCH: el título debe centrarse igual que en SCREEN_01');
+
+    await pumpLoginPage(tester, repository, surfaceSize: const Size(932, 430));
+    final Text landscapeTitle = tester.widget(find.byKey(const Key('login-title')));
+    expect(
+      landscapeTitle.style?.fontWeight,
+      isNot(FontWeight.w800),
+      reason: 'phone landscape no debe ganar el peso canónico en esta tarea — fuera de alcance, sin cambios',
+    );
+  });
+
+  testWidgets('MOBILE_SUBTITLE_MATCHES_SCREEN01_TYPOGRAPHY = PASS', (WidgetTester tester) async {
+    await pumpLoginPage(tester, repository, surfaceSize: const Size(390, 844));
+
+    final Text subtitle = tester.widget(find.byKey(const Key('login-subtitle')));
+    expect(
+      subtitle.style?.fontSize,
+      16,
+      reason: 'SUBTITLE_STYLE_MATCH: el subtítulo debe usar bodyLarge (16px), el mismo tamaño base que el subtítulo de Welcome mobile',
+    );
+    expect(subtitle.style?.color, DarkTech.textSecondary, reason: 'SUBTITLE_STYLE_MATCH: mismo color que SCREEN_01');
+    expect(subtitle.style?.shadows, isNull, reason: 'SUBTITLE_STYLE_MATCH: SCREEN_01 nunca aplica sombra de texto al subtítulo');
+    expect(subtitle.textAlign, TextAlign.center, reason: 'SUBTITLE_STYLE_MATCH: mismo alineamiento centrado que SCREEN_01');
+  });
+
+  testWidgets('MOBILE_TITLE_NO_TEXT_SHADOW_MATCHES_SCREEN01 = PASS', (WidgetTester tester) async {
+    await pumpLoginPage(tester, repository, surfaceSize: const Size(390, 844));
+
+    final Text title = tester.widget(find.byKey(const Key('login-title')));
+    expect(
+      title.style?.shadows,
+      isNull,
+      reason: 'SCREEN_01 nunca aplica sombra de texto al título, ni flotando directamente sobre la foto — confía en el mismo scrim',
+    );
+  });
+
+  testWidgets('MOBILE_CONTENT_WIDTH_MATCHES_SCREEN01_CAP = PASS', (WidgetTester tester) async {
+    await pumpLoginPage(tester, repository, surfaceSize: const Size(390, 844));
+    final Size narrowSize = tester.getSize(find.byKey(const Key('login-portrait-content-max-width')));
+    expect(
+      narrowSize.width,
+      lessThanOrEqualTo(390),
+      reason: 'a 390 de ancho el tope de 480 no debe forzar overflow — el contenido sigue acotado por el propio viewport',
+    );
+  });
+
+  testWidgets('RESPONSIVE_768x1024_CONTENT_WIDTH_SENSIBLE = PASS', (WidgetTester tester) async {
+    const Size tabletSize = Size(768, 1024);
+    await pumpLoginPage(tester, repository, surfaceSize: tabletSize);
+    expect(tester.takeException(), isNull, reason: 'no debe haber overflow en 768x1024');
+
+    // KORIXA-SCREEN02-MATCH-SCREEN01-VISUAL-SYSTEM-20260910: el encargo
+    // pide explícitamente NO "estirar ciegamente las dimensiones de
+    // teléfono" — a 768 de ancho, el mismo tope de 480 ya aprobado en
+    // SCREEN_01 (`welcome-content-max-width`) debe aplicar, en vez de
+    // dejar que el formulario ocupe los ~720px útiles del viewport.
+    final Size contentSize = tester.getSize(find.byKey(const Key('login-portrait-content-max-width')));
+    expect(
+      contentSize.width,
+      closeTo(480, 0.5),
+      reason: 'RESPONSIVE_768x1024: el contenido debe acotarse a 480 (igual que SCREEN_01), no estirarse a lo ancho completo del viewport',
+    );
+
+    final Size ctaSize = tester.getSize(find.byType(PrimaryGradientButton));
+    expect(
+      ctaSize.width,
+      lessThanOrEqualTo(480),
+      reason: 'RESPONSIVE_768x1024: el CTA no debe quedar más ancho que el tope de contenido de SCREEN_01',
+    );
+  });
+
+  testWidgets('MOBILE_INDICATOR_TO_CTA_GAP_MATCHES_SCREEN01 = PASS', (WidgetTester tester) async {
+    await pumpLoginPage(tester, repository, surfaceSize: const Size(390, 844));
+
+    final Rect indicatorRect = tester.getRect(find.byKey(const Key('login-portrait-indicator-row')));
+    final Rect ctaRect = tester.getRect(find.byType(PrimaryGradientButton));
+    final double gap = ctaRect.top - indicatorRect.bottom;
+    expect(
+      gap,
+      closeTo(AppSpacing.lg, 0.5),
+      reason: 'el espacio entre el indicador y el CTA debe igualar el ya aprobado en SCREEN_01 (AppSpacing.lg = 20), no el sectionGap (24) anterior',
+    );
+  });
+
+  testWidgets('LOGIN_FUNCTIONALITY_CALLBACKS_UNCHANGED_AFTER_VISUAL_ALIGNMENT = PASS', (WidgetTester tester) async {
+    // KORIXA-SCREEN02-MATCH-SCREEN01-VISUAL-SYSTEM-20260910: encargo
+    // PRESENTATION ONLY — prueba explícita de que los 3 callbacks de
+    // Login (submit, olvidé mi contraseña, crear cuenta) siguen intactos
+    // tras el realineamiento visual, a 390x844 (el tamaño que más cambió
+    // en esta tarea).
+    when(() => repository.login(email: 'rider@ridepro.com', password: 'securePass123'))
+        .thenAnswer((_) async => const Right(tUser));
+    await pumpLoginPage(tester, repository, surfaceSize: const Size(390, 844));
+
+    await tester.enterText(find.byType(TextFormField).at(0), 'rider@ridepro.com');
+    await tester.enterText(find.byType(TextFormField).at(1), 'securePass123');
+    await tester.ensureVisible(find.text('Iniciar sesión'));
+    await tester.tap(find.text('Iniciar sesión'));
+    await tester.pumpAndSettle();
+
+    expect(find.text('HOME'), findsOneWidget, reason: 'EMAIL_PASSWORD_BEHAVIOR_CHANGED = NO');
+  });
 }
