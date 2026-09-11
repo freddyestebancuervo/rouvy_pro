@@ -487,7 +487,13 @@ class _LoginPageState extends ConsumerState<LoginPage> {
     final Widget subtitleWidget = Text(
       l10n.loginSubtitle,
       key: const Key('login-subtitle'),
-      textAlign: isDesktopScale ? TextAlign.center : null,
+      // KORIXA-SCREEN02-LOGIN-SUBTITLE-POSITION-CENTER-ACTIVE-INDICATOR-
+      // 20260910: sin `textAlign` (igual que antes de KORIXA-SCREEN02-
+      // LOGIN-ALIGNMENT-INDICATOR-POLISH-20260910) — el dueño pidió
+      // deshacer específicamente la posición horizontal del subtítulo;
+      // combinado con que este widget ya no vive dentro del `SizedBox`
+      // de 550 (ver [content] más abajo), esto reproduce exactamente su
+      // posición/alineación anterior.
       style: textTheme.bodyMedium?.copyWith(
         fontSize: subtitleFontSize,
         color: DarkTech.textSecondary,
@@ -556,11 +562,24 @@ class _LoginPageState extends ConsumerState<LoginPage> {
         // archivo) con los MISMOS parámetros que
         // `_DesktopOnboardingIndicator` de Welcome (24×4, separación 6),
         // no una aproximación visual. Puramente decorativo: sin
-        // swipe/navegación/estado, la primera barra activa no representa
-        // progreso de autenticación. `Center` lo alinea al centro de esta
+        // swipe/navegación/estado. `Center` lo alinea al centro de esta
         // columna de 550 — la misma columna que fields/CTA/Google.
+        //
+        // KORIXA-SCREEN02-LOGIN-SUBTITLE-POSITION-CENTER-ACTIVE-
+        // INDICATOR-20260910: `activeIndex: 1` — el dueño pidió que la
+        // barra CENTRAL (no la primera, como en Welcome) sea la activa
+        // en Login específicamente, para distinguir visualmente los dos
+        // indicadores. Welcome sigue con el default (`activeIndex: 0`,
+        // sin tocar su propio llamador) — sigue sin representar ningún
+        // progreso de autenticación real en ninguna de las 2 pantallas.
         const Center(
-          child: ThreeBarIndicator(key: Key('login-desktop-indicator-row'), barWidth: 24, barHeight: 4, gap: 6),
+          child: ThreeBarIndicator(
+            key: Key('login-desktop-indicator-row'),
+            barWidth: 24,
+            barHeight: 4,
+            gap: 6,
+            activeIndex: 1,
+          ),
         ),
       ],
       // KORIXA-SCREEN02-LOGIN-ALIGNMENT-INDICATOR-POLISH-20260910: el
@@ -624,42 +643,60 @@ class _LoginPageState extends ConsumerState<LoginPage> {
     ];
 
     final Widget content = controlWidth != null
-        ? SizedBox(
-            // KORIXA-SCREEN02-LOGIN-ALIGNMENT-INDICATOR-POLISH-20260910:
-            // el dueño pidió que TODO el bloque (logo/título/subtítulo Y
-            // los controles) quede centrado sobre la MISMA columna de
-            // 550 — antes solo los controles vivían en un `SizedBox` de
-            // ese ancho y logo/título/subtítulo se alineaban aparte
-            // (`crossAxisAlignment.end`) al ancho más ancho del bloque
-            // exterior (680), leyéndose "corridos a la derecha" respecto
-            // al formulario. Un único `SizedBox(width: controlWidth)`
-            // envolviendo todo, con `crossAxisAlignment.center`, logra
-            // que absolutamente todo comparta el mismo centro horizontal
-            // — logo y título ya no necesitan su propio ancho fijo:
-            // `crossAxisAlignment.center` los centra usando su ancho
-            // natural (más angosto que 550), y los controles (que sí
-            // necesitan llenar el ancho completo para sus fondos/bordes)
-            // se anidan en su propia columna `stretch` interior.
-            key: const Key('login-desktop-control-width'),
-            width: controlWidth,
-            child: Column(
-              key: const Key('login-desktop-content-group'),
-              crossAxisAlignment: CrossAxisAlignment.center,
-              mainAxisSize: MainAxisSize.min,
-              children: <Widget>[
-                logoWidget,
-                SizedBox(height: compact ? AppSpacing.sm : AppSpacing.lg),
-                titleWidget,
-                const SizedBox(height: AppSpacing.sm),
-                subtitleWidget,
-                SizedBox(height: sectionGap),
-                Column(
+        ? Column(
+            // KORIXA-SCREEN02-LOGIN-SUBTITLE-POSITION-CENTER-ACTIVE-
+            // INDICATOR-20260910: el dueño pidió deshacer SOLO la
+            // posición horizontal del subtítulo (volver a la posición
+            // previa a KORIXA-SCREEN02-LOGIN-ALIGNMENT-INDICATOR-POLISH-
+            // 20260910), manteniendo logo/título centrados sobre la
+            // columna de 550 exactamente como quedaron en esa tarea. El
+            // subtítulo ahora es HERMANO de los dos `SizedBox(width:
+            // controlWidth)` (logo+título, y controles), no su hijo —
+            // como texto sin ancho propio fijo, su caja reportada sigue
+            // el ancho MÁXIMO disponible (comportamiento de `Text`, ver
+            // `textWidthBasis`), que es más ancho que 550 — por eso este
+            // `Column` exterior usa `crossAxisAlignment.end`: cada hijo
+            // queda con su borde derecho pegado al mismo borde (el de
+            // este `Column`, anclado a la derecha por el `Align` de
+            // `_buildDesktop`), sin importar su propio ancho. Los dos
+            // `SizedBox` de 550 (con el mismo ancho exacto que antes)
+            // terminan en la MISMA posición final que ya tenían — medido
+            // y verificado, no adivinado — mientras que el subtítulo,
+            // más ancho, se extiende más hacia la izquierda,
+            // reproduciendo EXACTAMENTE la posición horizontal medida en
+            // el commit de referencia `0d748ec723bd96d1260cddfdec8ff8944cc867c5`
+            // (antes de KORIXA-SCREEN02-LOGIN-ALIGNMENT-INDICATOR-POLISH-
+            // 20260910).
+            crossAxisAlignment: CrossAxisAlignment.end,
+            mainAxisSize: MainAxisSize.min,
+            children: <Widget>[
+              SizedBox(
+                key: const Key('login-desktop-header-width'),
+                width: controlWidth,
+                child: Column(
+                  key: const Key('login-desktop-content-group'),
+                  crossAxisAlignment: CrossAxisAlignment.center,
+                  mainAxisSize: MainAxisSize.min,
+                  children: <Widget>[
+                    logoWidget,
+                    SizedBox(height: compact ? AppSpacing.sm : AppSpacing.lg),
+                    titleWidget,
+                  ],
+                ),
+              ),
+              const SizedBox(height: AppSpacing.sm),
+              subtitleWidget,
+              SizedBox(height: sectionGap),
+              SizedBox(
+                key: const Key('login-desktop-control-width'),
+                width: controlWidth,
+                child: Column(
                   crossAxisAlignment: CrossAxisAlignment.stretch,
                   mainAxisSize: MainAxisSize.min,
                   children: controlChildren,
                 ),
-              ],
-            ),
+              ),
+            ],
           )
         : Column(
             crossAxisAlignment: CrossAxisAlignment.stretch,

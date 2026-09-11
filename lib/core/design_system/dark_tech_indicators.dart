@@ -21,23 +21,39 @@ import '../../app/theme/app_radius.dart';
 /// `WelcomePage` sigue siendo el único lugar que decide los 3 tamaños
 /// concretos (mobile/desktop/phone-landscape); este widget solo aplica
 /// los parámetros que recibe.
+///
+/// KORIXA-SCREEN02-LOGIN-SUBTITLE-POSITION-CENTER-ACTIVE-INDICATOR-
+/// 20260910: [activeIndex] agregado con default `0` — preserva el
+/// comportamiento exacto de todo llamador existente (`WelcomePage`, que
+/// no lo pasa) sin tocarlo. SCREEN_02 Login desktop es el único llamador
+/// que pasa `activeIndex: 1` (la barra CENTRAL activa), pedido
+/// explícitamente por el dueño para distinguir visualmente este
+/// indicador puramente decorativo del de Welcome — sigue sin
+/// representar progreso real de autenticación ni ningún estado.
 class ThreeBarIndicator extends StatelessWidget {
-  const ThreeBarIndicator({required this.barWidth, required this.barHeight, required this.gap, super.key});
+  const ThreeBarIndicator({
+    required this.barWidth,
+    required this.barHeight,
+    required this.gap,
+    this.activeIndex = 0,
+    super.key,
+  }) : assert(activeIndex >= 0 && activeIndex <= 2, 'activeIndex debe ser 0, 1 o 2 — solo hay 3 barras');
 
   final double barWidth;
   final double barHeight;
   final double gap;
+  final int activeIndex;
 
   @override
   Widget build(BuildContext context) {
     return Row(
       mainAxisSize: MainAxisSize.min,
       children: <Widget>[
-        _IndicatorBar(active: true, width: barWidth, height: barHeight),
+        _IndicatorBar(active: activeIndex == 0, width: barWidth, height: barHeight),
         SizedBox(width: gap),
-        _IndicatorBar(active: false, width: barWidth, height: barHeight),
+        _IndicatorBar(active: activeIndex == 1, width: barWidth, height: barHeight),
         SizedBox(width: gap),
-        _IndicatorBar(active: false, width: barWidth, height: barHeight),
+        _IndicatorBar(active: activeIndex == 2, width: barWidth, height: barHeight),
       ],
     );
   }

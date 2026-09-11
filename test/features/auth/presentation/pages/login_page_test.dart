@@ -678,16 +678,36 @@ void main() {
     );
   });
 
-  testWidgets('LOGIN_DESKTOP_SUBTITLE_CENTERED_OVER_CONTROLS = PASS', (WidgetTester tester) async {
+  // KORIXA-SCREEN02-LOGIN-SUBTITLE-POSITION-CENTER-ACTIVE-INDICATOR-
+  // 20260910: el dueño pidió deshacer ESPECÍFICAMENTE la posición
+  // horizontal del subtítulo introducida por KORIXA-SCREEN02-LOGIN-
+  // ALIGNMENT-INDICATOR-POLISH-20260910 (el test anterior de este mismo
+  // nombre, `LOGIN_DESKTOP_SUBTITLE_CENTERED_OVER_CONTROLS`, verificaba
+  // exactamente ESE centrado — queda reemplazado por este, que prueba
+  // la posición de referencia anterior). El valor de referencia (1060.0)
+  // se midió empíricamente vía `tester.getRect`/`getCenter` en el commit
+  // `0d748ec723bd96d1260cddfdec8ff8944cc867c5` (inmediatamente antes de
+  // esa tarea), no fue adivinado de una captura.
+  testWidgets('LOGIN_DESKTOP_SUBTITLE_POSITION_MATCHES_PREVIOUS_REFERENCE = PASS', (WidgetTester tester) async {
     await pumpLoginPage(tester, repository, surfaceSize: const Size(1440, 900));
 
-    final double columnCenterX = tester.getCenter(find.byKey(const Key('login-desktop-control-width'))).dx;
+    const double previousReferenceCenterX = 1060.0;
     final double subtitleCenterX = tester.getCenter(find.byKey(const Key('login-subtitle'))).dx;
     expect(
       subtitleCenterX,
-      closeTo(columnCenterX, 1.0),
-      reason: '"Inicia sesión para continuar tu ruta" debe quedar centrado sobre la columna de 550',
+      closeTo(previousReferenceCenterX, 1.0),
+      reason:
+          '"Inicia sesión para continuar tu ruta" debe volver a la posición horizontal medida en 0d748ec (1060.0 a 1440x900), no quedar centrada sobre la columna de 550',
     );
+
+    // El logo y el título NO deben moverse — siguen centrados sobre la
+    // columna de 550, exactamente como en KORIXA-SCREEN02-LOGIN-
+    // ALIGNMENT-INDICATOR-POLISH-20260910.
+    final double columnCenterX = tester.getCenter(find.byKey(const Key('login-desktop-control-width'))).dx;
+    final double logoCenterX = tester.getCenter(find.byKey(const Key('login-logo'))).dx;
+    final double titleCenterX = tester.getCenter(find.byKey(const Key('login-title'))).dx;
+    expect(logoCenterX, closeTo(columnCenterX, 1.0), reason: 'el logo no debe moverse en esta tarea');
+    expect(titleCenterX, closeTo(columnCenterX, 1.0), reason: 'el título no debe moverse en esta tarea');
   });
 
   testWidgets('LOGIN_DESKTOP_INDICATOR_MATCHES_SCREEN01_AND_IS_CENTERED = PASS', (WidgetTester tester) async {
@@ -700,20 +720,30 @@ void main() {
     // widget compartido que usa `_DesktopOnboardingIndicator` de Welcome
     // (`core/design_system/dark_tech_indicators.dart`) — reusado, no
     // aproximado. 3 barras, misma decoración activa/inactiva.
-    final Iterable<Container> bars = tester.widgetList<Container>(
-      find.descendant(of: indicatorFinder, matching: find.byType(Container)),
-    );
+    //
+    // KORIXA-SCREEN02-LOGIN-SUBTITLE-POSITION-CENTER-ACTIVE-INDICATOR-
+    // 20260910: a diferencia de Welcome (primera barra activa), Login
+    // pide la barra CENTRAL activa (`activeIndex: 1`) — se verifica por
+    // POSICIÓN (izquierda/centro/derecha), no solo por conteo, ya que el
+    // orden de `find.descendant` sigue el orden real de los hijos del
+    // `Row` (izquierda a derecha).
+    final List<Container> bars = tester
+        .widgetList<Container>(find.descendant(of: indicatorFinder, matching: find.byType(Container)))
+        .toList();
     expect(bars.length, 3, reason: 'el indicador debe mostrar exactamente 3 líneas, igual que SCREEN_01');
 
-    final int activeCount = bars
-        .where((Container bar) => bar.decoration is BoxDecoration && (bar.decoration! as BoxDecoration).gradient != null)
-        .length;
-    final int inactiveCount = bars
-        .where(
-          (Container bar) =>
-              bar.decoration is BoxDecoration && (bar.decoration! as BoxDecoration).color == DarkTech.border,
-        )
-        .length;
+    bool isActive(Container bar) => bar.decoration is BoxDecoration && (bar.decoration! as BoxDecoration).gradient != null;
+    bool isInactive(Container bar) =>
+        bar.decoration is BoxDecoration && (bar.decoration! as BoxDecoration).color == DarkTech.border;
+
+    expect(isActive(bars[0]), isFalse, reason: 'LOGIN_LEFT_BAR_ACTIVE debe ser NO');
+    expect(isInactive(bars[0]), isTrue, reason: 'la barra izquierda debe quedar gris inactiva');
+    expect(isActive(bars[1]), isTrue, reason: 'LOGIN_CENTER_BAR_ACTIVE debe ser YES — activeIndex: 1');
+    expect(isActive(bars[2]), isFalse, reason: 'LOGIN_RIGHT_BAR_ACTIVE debe ser NO');
+    expect(isInactive(bars[2]), isTrue, reason: 'la barra derecha debe quedar gris inactiva');
+
+    final int activeCount = bars.where(isActive).length;
+    final int inactiveCount = bars.where(isInactive).length;
     expect(activeCount, 1, reason: 'exactamente 1 línea debe quedar activa, igual que SCREEN_01');
     expect(inactiveCount, 2, reason: 'las otras 2 líneas deben quedar en gris inactivo, igual que SCREEN_01');
 
