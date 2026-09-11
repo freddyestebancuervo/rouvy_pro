@@ -18,6 +18,7 @@ import 'package:rouvy_pro/features/auth/domain/usecases/login_usecase.dart';
 import 'package:rouvy_pro/features/auth/domain/usecases/sign_in_with_apple_usecase.dart';
 import 'package:rouvy_pro/features/auth/domain/usecases/sign_in_with_google_usecase.dart';
 import 'package:rouvy_pro/features/auth/presentation/pages/login_page.dart';
+import 'package:rouvy_pro/features/auth/presentation/pages/welcome_page.dart';
 import 'package:rouvy_pro/features/auth/presentation/providers/auth_providers.dart';
 import 'package:rouvy_pro/features/auth/presentation/widgets/social_sign_in_buttons.dart';
 
@@ -1460,5 +1461,193 @@ void main() {
       await tester.pumpAndSettle();
       expect(tester.takeException(), isNull, reason: '$label: no overflow tras scrollear a Crear cuenta');
     });
+  });
+
+  // ---------------------------------------------------------------------
+  // KORIXA-SCREEN02-MOBILE-VISUAL-VIEWPORT-BOTTOM-ANCHOR-FIX-20260911 —
+  // el dueño reportó, en un navegador móvil real, que el grupo de
+  // contenido de Login aparecía "notablemente más arriba" cuando el
+  // chrome del navegador (barra de URL) reduce el alto visual real
+  // disponible. Investigado con evidencia antes de tocar código (medición
+  // directa a 8 alturas vía un widget test desechable): con la
+  // implementación anterior (`Align(bottomCenter)` sin ningún piso de
+  // altura), el alto del grupo de contenido es prácticamente constante
+  // (~490-500px, hecho de tipografía/campos/botones de tamaño fijo) y,
+  // anclado al fondo, CUALQUIER reducción del alto de viewport se resta
+  // 1:1 del espacio escénico de arriba — matemáticamente inevitable con
+  // ESE mecanismo, y exactamente el comportamiento que el dueño pidió
+  // corregir. La corrección impone un piso de altura TOTAL
+  // (`_minPortraitCompositionHeight` = 750) para la composición: cuando
+  // el viewport real ya supera el piso (844/932/1024, geometría idéntica
+  // a antes), no cambia nada; cuando es más corto, el piso preserva un
+  // espacio escénico mínimo y el excedente se vuelve scrolleable (ya no
+  // `reverse: true` — el scroll arranca mostrando el INICIO, así que
+  // Google/Crear cuenta quedan alcanzables scrolleando hacia ABAJO,
+  // nunca ocultos scrolleando hacia arriba).
+  // ---------------------------------------------------------------------
+
+  testWidgets('NORMAL_390x844_GEOMETRY_NOT_REGRESSED = PASS', (WidgetTester tester) async {
+    // Valor de referencia medido en el commit inmediatamente anterior a
+    // esta corrección (`5d754ddc49fc1ee85fd5ecea9a3237d9a6a27436`) — el
+    // piso de 750 nunca debe activarse a 390x844 (750 < 844), así que el
+    // título debe seguir EXACTAMENTE en la misma posición, no solo
+    // "todavía >= 340".
+    await pumpLoginPage(tester, repository, surfaceSize: const Size(390, 844));
+    final double titleTop = tester.getRect(find.byKey(const Key('login-title'))).top;
+    expect(
+      titleTop,
+      closeTo(344.0, 0.5),
+      reason: 'NORMAL_390x844_GEOMETRY_NOT_REGRESSED: el piso de altura no debe activarse a 390x844 — geometría idéntica a la ya aprobada',
+    );
+  });
+
+  testWidgets('NORMAL_HEIGHT_BOTTOM_COMPOSITION_PRESERVED = PASS', (WidgetTester tester) async {
+    // A 430x932 y 768x1024 (ambos > el piso de 750) el piso tampoco debe
+    // activarse — mismos valores ya medidos/aprobados en rondas
+    // anteriores.
+    await pumpLoginPage(tester, repository, surfaceSize: const Size(430, 932));
+    expect(
+      tester.getRect(find.byKey(const Key('login-title'))).top,
+      closeTo(440.0, 0.5),
+      reason: 'NORMAL_HEIGHT_BOTTOM_COMPOSITION_PRESERVED a 430x932',
+    );
+
+    await pumpLoginPage(tester, repository, surfaceSize: const Size(768, 1024));
+    expect(
+      tester.getRect(find.byKey(const Key('login-title'))).top,
+      closeTo(532.0, 0.5),
+      reason: 'NORMAL_HEIGHT_BOTTOM_COMPOSITION_PRESERVED a 768x1024',
+    );
+  });
+
+  testWidgets('SHORT_VIEWPORT_DOES_NOT_FORCE_GROUP_TO_TOP = PASS', (WidgetTester tester) async {
+    // El objetivo central del encargo: en viewports cortos, el título NO
+    // debe empezar en el primer cuarto de la pantalla — el piso de altura
+    // debe preservar un espacio escénico mínimo real, no dejar que se
+    // comprima proporcionalmente con el viewport.
+    for (final Size size in const <Size>[Size(360, 680), Size(390, 700), Size(390, 740), Size(430, 760)]) {
+      await pumpLoginPage(tester, repository, surfaceSize: size);
+      final double titleTop = tester.getRect(find.byKey(const Key('login-title'))).top;
+      expect(
+        titleTop,
+        greaterThanOrEqualTo(200.0),
+        reason: 'SHORT_VIEWPORT_DOES_NOT_FORCE_GROUP_TO_TOP en ${size.width.toInt()}x${size.height.toInt()}: el título no debe quedar pegado arriba solo porque el viewport es corto',
+      );
+    }
+  });
+
+  testWidgets('SHORT_VIEWPORT_SCROLL_AVAILABLE = PASS', (WidgetTester tester) async {
+    // A 390x700/390x740 el encargo acepta explícitamente que Crear
+    // cuenta/Google requieran scroll — se prueba que el scroll REALMENTE
+    // está disponible y funciona (no que el contenido se comprimió para
+    // evitarlo).
+    for (final Size size in const <Size>[Size(390, 700), Size(390, 740)]) {
+      await pumpLoginPage(tester, repository, surfaceSize: size);
+      expect(tester.takeException(), isNull, reason: 'sin overflow al construir en ${size.width.toInt()}x${size.height.toInt()}');
+
+      // El título debe estar visible SIN scrollear (posición inicial).
+      final double titleTop = tester.getRect(find.byKey(const Key('login-title'))).top;
+      expect(
+        titleTop,
+        allOf(greaterThanOrEqualTo(0), lessThan(size.height)),
+        reason: 'SHORT_VIEWPORT_SCROLL_AVAILABLE en ${size.width.toInt()}x${size.height.toInt()}: el título debe verse de entrada, sin necesidad de scrollear — antes NO reverse:true tapaba justo esto',
+      );
+
+      await tester.ensureVisible(find.text('Crear cuenta'));
+      await tester.pumpAndSettle();
+      expect(tester.takeException(), isNull, reason: 'SHORT_VIEWPORT_SCROLL_AVAILABLE: scroll hasta Crear cuenta debe funcionar sin error');
+    }
+  });
+
+  testWidgets('ALL_LOGIN_ACTIONS_REACHABLE_AFTER_SCROLL = PASS', (WidgetTester tester) async {
+    // El caso más extremo pedido — 360x680 — todos los controles deben
+    // seguir siendo alcanzables (con scroll si hace falta), nunca
+    // recortados/inaccesibles.
+    const Size size = Size(360, 680);
+    await pumpLoginPage(tester, repository, surfaceSize: size);
+    expect(tester.takeException(), isNull);
+
+    expect(find.text('Bienvenido de nuevo'), findsOneWidget, reason: 'título alcanzable');
+    expect(find.byType(TextFormField), findsNWidgets(2), reason: 'campos alcanzables');
+    expect(find.text('¿Olvidaste tu contraseña?'), findsOneWidget, reason: 'olvidé mi contraseña alcanzable');
+    expect(find.byKey(const Key('login-portrait-indicator-row')), findsOneWidget, reason: 'indicador alcanzable');
+
+    await tester.ensureVisible(find.byType(PrimaryGradientButton));
+    await tester.pumpAndSettle();
+    expect(tester.takeException(), isNull, reason: 'CTA alcanzable tras scroll');
+
+    await tester.ensureVisible(find.byType(GoogleSignInButton));
+    await tester.pumpAndSettle();
+    expect(tester.takeException(), isNull, reason: 'Google alcanzable tras scroll');
+
+    await tester.ensureVisible(find.text('Crear cuenta'));
+    await tester.pumpAndSettle();
+    expect(tester.takeException(), isNull, reason: 'Crear cuenta alcanzable tras scroll');
+    expect(find.text('Crear cuenta'), findsOneWidget);
+  });
+
+  const <String, Size>{
+    '360x680': Size(360, 680),
+    '390x700': Size(390, 700),
+    '390x740': Size(390, 740),
+    '430x760': Size(430, 760),
+  }.forEach((String label, Size size) {
+    testWidgets('NO_OVERFLOW_$label = PASS', (WidgetTester tester) async {
+      await pumpLoginPage(tester, repository, surfaceSize: size);
+      expect(tester.takeException(), isNull, reason: 'NO_OVERFLOW_$label al construir');
+
+      expect(find.byType(TextFormField), findsNWidgets(2));
+      expect(find.byType(PrimaryGradientButton), findsOneWidget);
+
+      await tester.ensureVisible(find.text('Crear cuenta'));
+      await tester.pumpAndSettle();
+      expect(tester.takeException(), isNull, reason: 'NO_OVERFLOW_$label tras scrollear a Crear cuenta');
+      expect(find.text('Crear cuenta'), findsOneWidget);
+    });
+  });
+
+  testWidgets('AUTH_CALLBACKS_UNCHANGED = PASS', (WidgetTester tester) async {
+    // El encargo es de layout responsivo ÚNICAMENTE — prueba explícita
+    // de que el flujo de submit sigue intacto, ahora medido en un
+    // viewport CORTO (donde el fix realmente actúa), no solo en 390x844.
+    when(() => repository.login(email: 'rider@ridepro.com', password: 'securePass123'))
+        .thenAnswer((_) async => const Right(tUser));
+    await pumpLoginPage(tester, repository, surfaceSize: const Size(390, 700));
+
+    await tester.enterText(find.byType(TextFormField).at(0), 'rider@ridepro.com');
+    await tester.enterText(find.byType(TextFormField).at(1), 'securePass123');
+    await tester.ensureVisible(find.text('Iniciar sesión'));
+    await tester.tap(find.text('Iniciar sesión'));
+    await tester.pumpAndSettle();
+
+    expect(find.text('HOME'), findsOneWidget, reason: 'AUTH_CALLBACKS_UNCHANGED: EMAIL_PASSWORD_BEHAVIOR_CHANGED = NO incluso en viewport corto');
+  });
+
+  testWidgets('SCREEN01_UNCHANGED = PASS', (WidgetTester tester) async {
+    // Este encargo solo toca `login_page.dart` (mobile portrait) — prueba
+    // de regresión explícita de que Welcome (SCREEN_01) sigue exactamente
+    // igual: mismo copy, mismo CTA, mismo indicador (tamaño/gap ya
+    // aprobados), sin ningún efecto colateral del fix de Login.
+    tester.view.physicalSize = const Size(390, 844);
+    tester.view.devicePixelRatio = 1.0;
+    addTearDown(tester.view.reset);
+
+    await tester.pumpWidget(
+      authPageHarness(initialLocation: '/welcome', welcomePage: const WelcomePage()),
+    );
+    await tester.pumpAndSettle();
+
+    expect(find.text('Conecta tu energía.'), findsOneWidget, reason: 'SCREEN01_UNCHANGED: título de Welcome intacto');
+    expect(
+      find.text('Entrena, compite y vive rutas increíbles en indoor y outdoor.'),
+      findsOneWidget,
+      reason: 'SCREEN01_UNCHANGED: subtítulo de Welcome intacto',
+    );
+    expect(find.text('Comenzar'), findsOneWidget, reason: 'SCREEN01_UNCHANGED: CTA de Welcome intacto');
+
+    final Finder indicatorFinder = find.byKey(const Key('welcome-indicator-row'));
+    expect(indicatorFinder, findsOneWidget, reason: 'SCREEN01_UNCHANGED: indicador de Welcome presente');
+    final Size indicatorSize = tester.getSize(indicatorFinder);
+    expect(indicatorSize.width, closeTo(64, 0.5), reason: 'SCREEN01_UNCHANGED: tamaño del indicador de Welcome (18/4/5) sin cambios');
   });
 }

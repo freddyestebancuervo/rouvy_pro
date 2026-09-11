@@ -1,3 +1,5 @@
+import 'dart:math' as math;
+
 import 'package:flutter/foundation.dart' show defaultTargetPlatform, kIsWeb, TargetPlatform;
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -128,6 +130,22 @@ class _LoginPageState extends ConsumerState<LoginPage> {
   static const double _desktopTitleFontSize = 51;
   static const double _desktopSubtitleFontSize = 24;
 
+  // KORIXA-SCREEN02-MOBILE-VISUAL-VIEWPORT-BOTTOM-ANCHOR-FIX-20260911:
+  // piso de altura TOTAL (foto vacía + grupo de contenido) para la
+  // composición de mobile portrait — ver el comentario extenso en
+  // `_buildPortrait` para el porqué completo. 750 se eligió porque:
+  // (a) supera ampliamente el alto natural del grupo de contenido
+  // (~490-500px, medido), garantizando siempre >= ~250px de espacio
+  // escénico mínimo aunque el viewport real sea más corto; (b) es menor
+  // que CUALQUIERA de los 3 tamaños de referencia ya aprobados
+  // (390×844, 430×932, 768×1024), así que el piso es un NO-OP en los 3
+  // — geometría idéntica a la ya aprobada, sin scroll forzado ahí;
+  // (c) cubre incluso un iPhone SE completo (375×667) como candidato
+  // razonable a "permitir scroll en vez de comprimir", no solo los
+  // casos de chrome de navegador reducido pedidos explícitamente por
+  // este encargo (390×700/390×740, ambos < 750).
+  static const double _minPortraitCompositionHeight = 750;
+
   @override
   Widget build(BuildContext context) {
     final AppLocalizations l10n = AppLocalizations.of(context);
@@ -241,45 +259,123 @@ class _LoginPageState extends ConsumerState<LoginPage> {
           child: DecoratedBox(decoration: BoxDecoration(gradient: AppGradients.imageScrimBottom)),
         ),
         SafeArea(
-          child: Align(
-            alignment: Alignment.bottomCenter,
-            // KORIXA-SCREEN02-MATCH-SCREEN01-VISUAL-SYSTEM-20260910: mismo
-            // tope de ancho (480) que ya usa `WelcomePage._MobileWelcomeContent`
-            // (`welcome-content-max-width`) — sin esto, a 768×1024 (tablet
-            // portrait) el bloque de contenido se estiraba a lo ancho
-            // completo del viewport (720px útiles tras el padding),
-            // mucho más ancho que cualquier formulario de Login legible;
-            // SCREEN_01 ya resuelve exactamente este mismo caso acotando
-            // a 480 y centrando, en vez de "estirar ciegamente las
-            // dimensiones de teléfono" (pedido explícito del encargo).
-            child: ConstrainedBox(
-              key: const Key('login-portrait-content-max-width'),
-              constraints: const BoxConstraints(maxWidth: 480),
-              child: Padding(
-                // KORIXA-SCREEN02-TRUE-BOTTOM-COMPOSITION-OWNER-CORRECTION-
-                // 20260911: el dueño corrigió explícitamente que el ajuste
-                // anterior (inset superior a `AppSpacing.xs` = 4, inferior
-                // sin tocar en 32) era "otro recorte incremental", no el
-                // cambio de composición MATERIAL pedido — a 390×844 el
-                // título seguía en y≈264, muy por debajo del objetivo
-                // (y>=340). Este inset superior baja a 0 (ya no hay más
-                // margen que recortar ahí sin volverse negativo) y el
-                // INFERIOR baja de 32 a `AppSpacing.sm` (8) — sigue habiendo
-                // un colchón real (más el propio `SafeArea`) entre "Crear
-                // cuenta" y el borde del dispositivo, solo que ya no
-                // reproduce el inset de 32 de `_MobileWelcomeContent`
-                // (Welcome no tiene el problema de "grupo demasiado alto"
-                // que motiva esta tarea, así que copiar su inset ahí ya no
-                // es el objetivo). Combinado con los otros ajustes de este
-                // método (`contentSectionGap`/`indicatorToCtaGap`/
-                // `fieldSpacingGap`/`titleToSubtitleGap`/`fieldContentPadding`/
-                // `ctaHeight`/`socialButtonHeight`/`tightenBottomActions`
-                // más abajo), el título pasa de y=264 a y>=340 — medido,
-                // no estimado (ver `login_page_test.dart`).
-                padding: const EdgeInsets.fromLTRB(AppSpacing.xl, 0, AppSpacing.xl, AppSpacing.sm),
-                child: SingleChildScrollView(
-                  reverse: true,
-                  child: _buildFormColumn(
+          // KORIXA-SCREEN02-MOBILE-VISUAL-VIEWPORT-BOTTOM-ANCHOR-FIX-
+          // 20260911: corrección del dueño — en un navegador móvil real,
+          // el chrome del navegador (barra de URL) reduce el alto visual
+          // REAL disponible por debajo de lo que cualquiera de los
+          // tamaños "de referencia" (844/932/1024) asume. Investigado
+          // ANTES de tocar código (medición directa vía un widget test
+          // desechable a 8 alturas, 680-1024): con la implementación
+          // anterior (`Align(bottomCenter)` sin ningún piso de altura),
+          // el alto TOTAL del grupo de contenido es prácticamente
+          // constante (~490-500px — está hecho de tipografía/campos/
+          // botones de tamaño fijo) y, anclado al fondo, CUALQUIER
+          // reducción del alto de viewport se resta 1:1 del espacio
+          // escénico de arriba (medido: solo 200px de espacio arriba a
+          // 390×700, contra 344px a 390×844). Eso es matemáticamente
+          // inevitable con ESE mecanismo de anclaje — no es una
+          // regresión de código nueva, pero SÍ es exactamente el
+          // comportamiento que el dueño pidió corregir: "no comprimir el
+          // espacio escénico para que quepa todo, permitir scroll en su
+          // lugar".
+          //
+          // Solución: patrón estándar de Flutter "anclar abajo si entra,
+          // si no, scrollear". `LayoutBuilder` mide el alto REAL
+          // disponible (ya neto de `SafeArea`); `ConstrainedBox(minHeight:
+          // _minPortraitCompositionHeight)` más abajo impone un piso de
+          // altura TOTAL para la composición (foto vacía + grupo), nunca
+          // el alto real crudo del viewport. Cuando el viewport real ya
+          // es >= ese piso (844/932/1024, todos los tamaños ya
+          // aprobados), el piso no cambia nada — geometría idéntica a
+          // antes (medido: y=344 sigue en 344 a 390×844, ver
+          // `NORMAL_390x844_GEOMETRY_NOT_REGRESSED`). Cuando el viewport
+          // real es más corto que el piso (700/740/680/760), el `Column`
+          // interior (`mainAxisAlignment.end`, ver más abajo) sigue
+          // anclando el grupo al fondo de esa altura PISO (no del
+          // viewport real), preservando el espacio escénico mínimo — el
+          // excedente (piso − viewport real) se vuelve scrolleable
+          // (`SingleChildScrollView`, ya NO `reverse: true`: con
+          // `reverse` en `false` el scroll arranca mostrando el INICIO
+          // — foto + título — no el final, así que "Crear cuenta"/
+          // Google quedan alcanzables scrolleando hacia abajo, nunca
+          // ocultos scrolleando hacia arriba).
+          child: LayoutBuilder(
+            builder: (BuildContext context, BoxConstraints safeAreaConstraints) {
+              final double actualViewportHeight = safeAreaConstraints.maxHeight;
+              final double compositionHeight =
+                  math.max(actualViewportHeight, _minPortraitCompositionHeight);
+
+              return Align(
+                alignment: Alignment.topCenter,
+                // KORIXA-SCREEN02-MATCH-SCREEN01-VISUAL-SYSTEM-20260910: mismo
+                // tope de ancho (480) que ya usa `WelcomePage._MobileWelcomeContent`
+                // (`welcome-content-max-width`) — sin esto, a 768×1024 (tablet
+                // portrait) el bloque de contenido se estiraba a lo ancho
+                // completo del viewport (720px útiles tras el padding),
+                // mucho más ancho que cualquier formulario de Login legible;
+                // SCREEN_01 ya resuelve exactamente este mismo caso acotando
+                // a 480 y centrando, en vez de "estirar ciegamente las
+                // dimensiones de teléfono" (pedido explícito del encargo).
+                child: ConstrainedBox(
+                  key: const Key('login-portrait-content-max-width'),
+                  constraints: const BoxConstraints(maxWidth: 480),
+                  // KORIXA-SCREEN02-MOBILE-VISUAL-VIEWPORT-BOTTOM-ANCHOR-
+                  // FIX-20260911: fuerza al `SingleChildScrollView` de abajo
+                  // a tener exactamente el alto REAL disponible (no el alto
+                  // piso) — sin esto, restricciones sueltas dejarían al
+                  // scrollview encogerse a su propio contenido en vez de
+                  // establecer una ventana de scroll real del tamaño de la
+                  // pantalla.
+                  child: SizedBox(
+                    height: actualViewportHeight,
+                    child: SingleChildScrollView(
+                      child: ConstrainedBox(
+                        // El piso de altura vive AQUÍ — sobre el propio
+                        // contenido con su padding, no sobre el `SizedBox`
+                        // de arriba (que representa el viewport REAL, nunca
+                        // debe agrandarse).
+                        constraints: BoxConstraints(minHeight: compositionHeight),
+                        child: Padding(
+                          // KORIXA-SCREEN02-TRUE-BOTTOM-COMPOSITION-OWNER-CORRECTION-
+                          // 20260911: el dueño corrigió explícitamente que el ajuste
+                          // anterior (inset superior a `AppSpacing.xs` = 4, inferior
+                          // sin tocar en 32) era "otro recorte incremental", no el
+                          // cambio de composición MATERIAL pedido — a 390×844 el
+                          // título seguía en y≈264, muy por debajo del objetivo
+                          // (y>=340). Este inset superior baja a 0 (ya no hay más
+                          // margen que recortar ahí sin volverse negativo) y el
+                          // INFERIOR baja de 32 a `AppSpacing.sm` (8) — sigue habiendo
+                          // un colchón real (más el propio `SafeArea`) entre "Crear
+                          // cuenta" y el borde del dispositivo, solo que ya no
+                          // reproduce el inset de 32 de `_MobileWelcomeContent`
+                          // (Welcome no tiene el problema de "grupo demasiado alto"
+                          // que motiva esta tarea, así que copiar su inset ahí ya no
+                          // es el objetivo). Combinado con los otros ajustes de este
+                          // método (`contentSectionGap`/`indicatorToCtaGap`/
+                          // `fieldSpacingGap`/`titleToSubtitleGap`/`fieldContentPadding`/
+                          // `ctaHeight`/`socialButtonHeight`/`tightenBottomActions`
+                          // más abajo), el título pasa de y=264 a y>=340 — medido,
+                          // no estimado (ver `login_page_test.dart`).
+                          padding: const EdgeInsets.fromLTRB(AppSpacing.xl, 0, AppSpacing.xl, AppSpacing.sm),
+                          child: Column(
+                            // KORIXA-SCREEN02-MOBILE-VISUAL-VIEWPORT-BOTTOM-
+                            // ANCHOR-FIX-20260911: `mainAxisSize.min` (el
+                            // `Column` reporta el alto natural de su único
+                            // hijo) + `mainAxisAlignment.end` — cuando el
+                            // `ConstrainedBox` de arriba fuerza un alto mayor
+                            // al natural (piso > contenido real), este
+                            // `Column` queda con ESE alto mayor (las
+                            // restricciones del padre siempre ganan sobre la
+                            // preferencia `min`) y `mainAxisAlignment.end`
+                            // ancla su único hijo (el grupo real de Login) al
+                            // fondo de ese espacio extra — el mismo patrón
+                            // que un `Align(bottomCenter)`, pero definido en
+                            // términos del PISO en vez del viewport real
+                            // crudo.
+                            mainAxisSize: MainAxisSize.min,
+                            mainAxisAlignment: MainAxisAlignment.end,
+                            children: <Widget>[
+                              _buildFormColumn(
                     context: context,
                     l10n: l10n,
                     loginState: loginState,
@@ -383,9 +479,15 @@ class _LoginPageState extends ConsumerState<LoginPage> {
                     // phone landscape ya tenían siempre.
                     tightenBottomActions: true,
                   ),
+                            ],
+                          ),
+                        ),
+                      ),
+                    ),
+                  ),
                 ),
-              ),
-            ),
+              );
+            },
           ),
         ),
       ],
