@@ -1117,9 +1117,47 @@ void main() {
       16,
       reason: 'SUBTITLE_STYLE_MATCH: el subtítulo debe usar bodyLarge (16px), el mismo tamaño base que el subtítulo de Welcome mobile',
     );
-    expect(subtitle.style?.color, DarkTech.textSecondary, reason: 'SUBTITLE_STYLE_MATCH: mismo color que SCREEN_01');
-    expect(subtitle.style?.shadows, isNull, reason: 'SUBTITLE_STYLE_MATCH: SCREEN_01 nunca aplica sombra de texto al subtítulo');
+    // KORIXA-SCREEN02-SUBTITLE-CONTRAST-AND-SKY-REFINEMENT-20260911: el
+    // dueño pidió específicamente MÁS legibilidad que el subtítulo
+    // canónico de SCREEN_01 en esta pantalla — color mezclado 45% hacia
+    // blanco (`subtitleContrastBoost`) en vez del `DarkTech.textSecondary`
+    // puro, más una sombra suave. Ya NO se prueba igualdad exacta con
+    // SCREEN_01 en color/sombra (ver `SUBTITLE_CONTRAST_BOOST_APPLIED`
+    // más abajo para el valor exacto esperado) — el resto (tamaño,
+    // alineación) sigue igual.
+    expect(
+      subtitle.style?.color,
+      isNot(DarkTech.textSecondary),
+      reason: 'SUBTITLE_LEGIBILITY_IMPROVED: el color debe ser más claro que el gris canónico de SCREEN_01',
+    );
     expect(subtitle.textAlign, TextAlign.center, reason: 'SUBTITLE_STYLE_MATCH: mismo alineamiento centrado que SCREEN_01');
+  });
+
+  testWidgets('SUBTITLE_CONTRAST_BOOST_APPLIED = PASS', (WidgetTester tester) async {
+    // KORIXA-SCREEN02-SUBTITLE-CONTRAST-AND-SKY-REFINEMENT-20260911:
+    // encargo — subir legibilidad del subtítulo con un ajuste sutil
+    // (más blanco + sombra suave), SIN cambiar texto/tipografía/tamaño/
+    // posición. Se prueba el valor exacto para que una regresión futura
+    // (p. ej. quitar la sombra sin querer) falle aquí explícitamente.
+    await pumpLoginPage(tester, repository, surfaceSize: const Size(390, 844));
+
+    final Text subtitle = tester.widget(find.byKey(const Key('login-subtitle')));
+    expect(
+      subtitle.data,
+      'Inicia sesión para continuar tu ruta',
+      reason: 'SUBTITLE_TEXT_UNCHANGED: el copy debe seguir siendo exactamente el mismo',
+    );
+    expect(
+      subtitle.style?.color,
+      Color.lerp(DarkTech.textSecondary, Colors.white, 0.45),
+      reason: 'el color debe ser la mezcla sutil hacia blanco pedida (45%), no un blanco puro ni el gris original',
+    );
+    expect(subtitle.style?.fontSize, 16, reason: 'la tipografía/tamaño no deben cambiar');
+    final List<Shadow>? shadows = subtitle.style?.shadows;
+    expect(shadows, isNotNull, reason: 'debe llevar una sombra suave para reforzar el contraste');
+    expect(shadows!.length, 1);
+    expect(shadows.single.blurRadius, 6, reason: 'sombra suave y discreta, no exagerada');
+    expect(shadows.single.color.a, closeTo(0.45, 0.01), reason: 'opacidad de sombra sutil');
   });
 
   testWidgets('MOBILE_TITLE_NO_TEXT_SHADOW_MATCHES_SCREEN01 = PASS', (WidgetTester tester) async {

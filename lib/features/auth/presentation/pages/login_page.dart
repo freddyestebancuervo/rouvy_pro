@@ -364,6 +364,14 @@ class _LoginPageState extends ConsumerState<LoginPage> {
                     // (16px) en `DarkTech.textSecondary`, ambos sin
                     // sombra, igual que "Conecta tu energía" en Welcome.
                     matchScreen01Typography: true,
+                    // KORIXA-SCREEN02-SUBTITLE-CONTRAST-AND-SKY-
+                    // REFINEMENT-20260911: el dueño pidió subir un poco
+                    // la legibilidad del subtítulo específicamente en
+                    // Login (no en Welcome) — ver el parámetro para el
+                    // detalle exacto del ajuste (mezcla hacia blanco +
+                    // sombra suave, sin cambiar tipografía/tamaño/
+                    // posición).
+                    subtitleContrastBoost: true,
                     // KORIXA-SCREEN02-FINAL-APPROVED-VISUAL-LOCK-20260911:
                     // el dueño fijó el diseño final aprobado y pidió
                     // explícitamente quitar la flecha decorativa del CTA
@@ -684,6 +692,19 @@ class _LoginPageState extends ConsumerState<LoginPage> {
     // esta composición usa. Solo mobile portrait pasa `true`; desktop y
     // phone landscape quedan con su tratamiento actual sin cambios.
     bool matchScreen01Typography = false,
+    // KORIXA-SCREEN02-SUBTITLE-CONTRAST-AND-SKY-REFINEMENT-20260911:
+    // `false` preserva el subtítulo canónico de SCREEN_01 (sin sombra,
+    // `DarkTech.textSecondary` puro) para todo llamador existente.
+    // Mobile portrait pasa `true` — el dueño pidió específicamente MÁS
+    // legibilidad que SCREEN_01 en esta pantalla (Login vive sobre un
+    // encuadre distinto del hero, con zonas más claras del cielo detrás
+    // del subtítulo), vía un ajuste sutil: un poco más de blanco (mezcla
+    // 45% hacia `Colors.white`, no blanco puro — sigue leyéndose
+    // "secundario", más tenue que el título, por peso de fuente) + UNA
+    // sombra suave (alpha 0.45, blur 6 — perceptible solo como
+    // contraste extra, no como un halo). No cambia tipografía, tamaño
+    // ni posición del subtítulo.
+    bool subtitleContrastBoost = false,
     // Ícono decorativo dentro del CTA — `iconTrailing: true` lo ubica a
     // la derecha del texto (mockup aprobado por el dueño). Nunca cambia
     // `onPressed`/semántica del botón (ver `PrimaryGradientButton`).
@@ -815,9 +836,13 @@ class _LoginPageState extends ConsumerState<LoginPage> {
       // KORIXA-PR127-LOGIN-MOBILE-VISUAL-POLISH-20260910).
       style: (matchScreen01Typography ? textTheme.bodyLarge : textTheme.bodyMedium)?.copyWith(
         fontSize: subtitleFontSize,
-        color: DarkTech.textSecondary,
+        color: subtitleContrastBoost
+            ? Color.lerp(DarkTech.textSecondary, Colors.white, 0.45)
+            : DarkTech.textSecondary,
         fontWeight: subtitleFontSize != null ? FontWeight.w500 : null,
-        shadows: matchScreen01Typography ? null : legibilityShadow,
+        shadows: subtitleContrastBoost
+            ? <Shadow>[Shadow(color: Colors.black.withValues(alpha: 0.45), blurRadius: 6)]
+            : (matchScreen01Typography ? null : legibilityShadow),
       ),
     );
 
