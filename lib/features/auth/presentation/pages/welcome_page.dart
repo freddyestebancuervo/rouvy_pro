@@ -4,10 +4,10 @@ import 'package:go_router/go_router.dart';
 import '../../../../app/router/app_router.dart';
 import '../../../../app/theme/app_colors.dart';
 import '../../../../app/theme/app_gradients.dart';
-import '../../../../app/theme/app_radius.dart';
 import '../../../../app/theme/app_spacing.dart';
 import '../../../../app/theme/app_theme.dart';
 import '../../../../core/design_system/dark_tech_buttons.dart';
+import '../../../../core/design_system/dark_tech_indicators.dart';
 import '../../../../core/responsive/korixa_viewport.dart';
 import '../../../../l10n/generated/app_localizations.dart';
 
@@ -698,7 +698,12 @@ class _PhoneLandscapeOnboardingIndicator extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return const _ThreeBarIndicator(barWidth: 16, barHeight: 3, gap: 4);
+    return const ThreeBarIndicator(
+      key: Key('welcome-indicator-row'),
+      barWidth: 16,
+      barHeight: 3,
+      gap: 4,
+    );
   }
 }
 
@@ -795,29 +800,13 @@ class _HeroImage extends StatelessWidget {
 /// pasa de una píldora única a estas mismas 3 barras — mismo lenguaje
 /// visual que ya se aprobó para desktop, solo que a un tamaño más chico
 /// y compacto (Sección "elegante, minimal, no pesado" del encargo).
-class _ThreeBarIndicator extends StatelessWidget {
-  const _ThreeBarIndicator({required this.barWidth, required this.barHeight, required this.gap});
-
-  final double barWidth;
-  final double barHeight;
-  final double gap;
-
-  @override
-  Widget build(BuildContext context) {
-    return Row(
-      key: const Key('welcome-indicator-row'),
-      mainAxisSize: MainAxisSize.min,
-      children: <Widget>[
-        _Bar(active: true, width: barWidth, height: barHeight),
-        SizedBox(width: gap),
-        _Bar(active: false, width: barWidth, height: barHeight),
-        SizedBox(width: gap),
-        _Bar(active: false, width: barWidth, height: barHeight),
-      ],
-    );
-  }
-}
-
+///
+/// KORIXA-SCREEN02-LOGIN-ALIGNMENT-INDICATOR-POLISH-20260910: la
+/// implementación real (`Row` + barras) se extrajo a
+/// `core/design_system/dark_tech_indicators.dart` (`ThreeBarIndicator`)
+/// para que SCREEN_02 Login pueda reusarla EXACTAMENTE — este archivo
+/// sigue siendo la única fuente de verdad de los 3 tamaños concretos
+/// (mobile 18/4/5, desktop 24/4/6, phone-landscape 16/3/4).
 /// Indicador de mobile — 3 barras compactas (18×4, separación 5): total
 /// ~64px de ancho, apenas más que los 32px de la píldora única anterior,
 /// para que siga leyéndose "minimal" en un viewport angosto.
@@ -826,7 +815,7 @@ class _OnboardingIndicator extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return const _ThreeBarIndicator(barWidth: 18, barHeight: 4, gap: 5);
+    return const ThreeBarIndicator(key: Key('welcome-indicator-row'), barWidth: 18, barHeight: 4, gap: 5);
   }
 }
 
@@ -838,31 +827,7 @@ class _DesktopOnboardingIndicator extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return const _ThreeBarIndicator(barWidth: 24, barHeight: 4, gap: 6);
-  }
-}
-
-class _Bar extends StatelessWidget {
-  const _Bar({required this.active, required this.width, required this.height});
-
-  final bool active;
-  final double width;
-  final double height;
-
-  @override
-  Widget build(BuildContext context) {
-    return Container(
-      width: width,
-      height: height,
-      decoration: BoxDecoration(
-        // Activa: mismo gradiente de marca que el CTA. Inactivas:
-        // `DarkTech.border` — el tono "gris oscuro" ya existente en el
-        // sistema de diseño (no un color nuevo).
-        gradient: active ? AppGradients.primaryCta : null,
-        color: active ? null : DarkTech.border,
-        borderRadius: AppRadius.pillRadius,
-      ),
-    );
+    return const ThreeBarIndicator(key: Key('welcome-indicator-row'), barWidth: 24, barHeight: 4, gap: 6);
   }
 }
 

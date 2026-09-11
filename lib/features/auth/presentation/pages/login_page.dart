@@ -9,6 +9,7 @@ import '../../../../app/theme/app_gradients.dart';
 import '../../../../app/theme/app_spacing.dart';
 import '../../../../app/theme/app_theme.dart';
 import '../../../../core/design_system/dark_tech_buttons.dart';
+import '../../../../core/design_system/dark_tech_indicators.dart';
 import '../../../../core/error/failures.dart';
 import '../../../../core/responsive/korixa_viewport.dart';
 import '../../../../core/utils/validation_l10n.dart';
@@ -361,6 +362,7 @@ class _LoginPageState extends ConsumerState<LoginPage> {
                     subtitleFontSize: _desktopSubtitleFontSize,
                     ctaHeight: _desktopCtaHeight,
                     ctaFontSize: _desktopCtaFontSize,
+                    showIndicator: true,
                   ),
                 ),
               ),
@@ -413,6 +415,12 @@ class _LoginPageState extends ConsumerState<LoginPage> {
     double? subtitleFontSize,
     double? ctaHeight,
     double? ctaFontSize,
+    // KORIXA-SCREEN02-LOGIN-ALIGNMENT-INDICATOR-POLISH-20260910: `true`
+    // solo en desktop — el dueño pidió agregar el mismo indicador de 3
+    // barras de SCREEN_01 debajo de "¿Olvidaste tu contraseña?", pero
+    // solo para la composición mostrada en su captura anotada. Phone
+    // landscape/mobile portrait no lo reciben (sin cambio visual).
+    bool showIndicator = false,
   }) {
     final TextTheme textTheme = Theme.of(context).textTheme;
     final double sectionGap = compact ? AppSpacing.sm : AppSpacing.xl;
@@ -420,6 +428,11 @@ class _LoginPageState extends ConsumerState<LoginPage> {
     final List<Shadow>? legibilityShadow = floatingOverPhoto
         ? <Shadow>[Shadow(color: Colors.black.withValues(alpha: 0.65), blurRadius: 10)]
         : null;
+    // KORIXA-SCREEN02-LOGIN-ALIGNMENT-INDICATOR-POLISH-20260910: cuando
+    // el bloque tiene un ancho de control fijo (solo desktop), el dueño
+    // pidió que logo/título/subtítulo queden centrados sobre ese mismo
+    // ancho en vez de alineados a la derecha — ver [content] más abajo.
+    final bool isDesktopScale = controlWidth != null;
 
     // KORIXA-SCREEN02-LOGIN-VISUAL-IMPLEMENTATION-20260907: branding
     // Korixa — antes esta pantalla no tenía NINGÚN logo (auditoría
@@ -439,6 +452,7 @@ class _LoginPageState extends ConsumerState<LoginPage> {
     // asset, mismo tamaño, sin cambio).
     final Widget logoWidget = Image.asset(
       logoAsset,
+      key: const Key('login-logo'),
       height: logoHeight,
       fit: BoxFit.contain,
       filterQuality: highQualityLogo ? FilterQuality.high : FilterQuality.low,
@@ -448,6 +462,15 @@ class _LoginPageState extends ConsumerState<LoginPage> {
 
     final Widget titleWidget = Text(
       l10n.loginTitle,
+      key: const Key('login-title'),
+      // KORIXA-SCREEN02-LOGIN-ALIGNMENT-INDICATOR-POLISH-20260910: el
+      // dueño reportó el título/subtítulo "alineados a la derecha
+      // respecto al formulario" — `textAlign: center` centra el/los
+      // renglones DENTRO de su propia caja (necesario en particular si
+      // algún día el texto ocupa 2 líneas de distinto largo); el
+      // centrado de la caja en sí respecto a la columna de 550 lo da
+      // `crossAxisAlignment.center` en [content] más abajo.
+      textAlign: isDesktopScale ? TextAlign.center : null,
       style: textTheme.headlineMedium?.copyWith(
         fontSize: titleFontSize ?? (compact ? 22 : null),
         // KORIXA-SCREEN02-LOGIN-MATCH-SCREEN01-DESKTOP-SCALE-20260910:
@@ -463,6 +486,8 @@ class _LoginPageState extends ConsumerState<LoginPage> {
 
     final Widget subtitleWidget = Text(
       l10n.loginSubtitle,
+      key: const Key('login-subtitle'),
+      textAlign: isDesktopScale ? TextAlign.center : null,
       style: textTheme.bodyMedium?.copyWith(
         fontSize: subtitleFontSize,
         color: DarkTech.textSecondary,
@@ -522,7 +547,28 @@ class _LoginPageState extends ConsumerState<LoginPage> {
           child: Text(l10n.forgotPasswordLink),
         ),
       ),
-      const SizedBox(height: AppSpacing.xs),
+      if (showIndicator) ...<Widget>[
+        SizedBox(height: sectionGap),
+        // KORIXA-SCREEN02-LOGIN-ALIGNMENT-INDICATOR-POLISH-20260910: el
+        // dueño pidió explícitamente "las 3 líneas de la pantalla 1" —
+        // reusa `ThreeBarIndicator` (extraído desde `WelcomePage` a
+        // `core/design_system/dark_tech_indicators.dart`, ver ese
+        // archivo) con los MISMOS parámetros que
+        // `_DesktopOnboardingIndicator` de Welcome (24×4, separación 6),
+        // no una aproximación visual. Puramente decorativo: sin
+        // swipe/navegación/estado, la primera barra activa no representa
+        // progreso de autenticación. `Center` lo alinea al centro de esta
+        // columna de 550 — la misma columna que fields/CTA/Google.
+        const Center(
+          child: ThreeBarIndicator(key: Key('login-desktop-indicator-row'), barWidth: 24, barHeight: 4, gap: 6),
+        ),
+      ],
+      // KORIXA-SCREEN02-LOGIN-ALIGNMENT-INDICATOR-POLISH-20260910: el
+      // dueño marcó una separación intencional entre el indicador y el
+      // CTA en su captura anotada — `sectionGap` (24 en desktop) en vez
+      // del `AppSpacing.xs` (4) anterior, que dejaba el CTA pegado
+      // directamente al enlace de "Olvidé mi contraseña".
+      SizedBox(height: showIndicator ? sectionGap : AppSpacing.xs),
       PrimaryGradientButton(
         label: l10n.loginButton,
         isLoading: loginState.isLoading,
@@ -578,27 +624,42 @@ class _LoginPageState extends ConsumerState<LoginPage> {
     ];
 
     final Widget content = controlWidth != null
-        ? Column(
-            key: const Key('login-desktop-content-group'),
-            crossAxisAlignment: CrossAxisAlignment.end,
-            mainAxisSize: MainAxisSize.min,
-            children: <Widget>[
-              logoWidget,
-              SizedBox(height: compact ? AppSpacing.sm : AppSpacing.lg),
-              titleWidget,
-              const SizedBox(height: AppSpacing.sm),
-              subtitleWidget,
-              SizedBox(height: sectionGap),
-              SizedBox(
-                key: const Key('login-desktop-control-width'),
-                width: controlWidth,
-                child: Column(
+        ? SizedBox(
+            // KORIXA-SCREEN02-LOGIN-ALIGNMENT-INDICATOR-POLISH-20260910:
+            // el dueño pidió que TODO el bloque (logo/título/subtítulo Y
+            // los controles) quede centrado sobre la MISMA columna de
+            // 550 — antes solo los controles vivían en un `SizedBox` de
+            // ese ancho y logo/título/subtítulo se alineaban aparte
+            // (`crossAxisAlignment.end`) al ancho más ancho del bloque
+            // exterior (680), leyéndose "corridos a la derecha" respecto
+            // al formulario. Un único `SizedBox(width: controlWidth)`
+            // envolviendo todo, con `crossAxisAlignment.center`, logra
+            // que absolutamente todo comparta el mismo centro horizontal
+            // — logo y título ya no necesitan su propio ancho fijo:
+            // `crossAxisAlignment.center` los centra usando su ancho
+            // natural (más angosto que 550), y los controles (que sí
+            // necesitan llenar el ancho completo para sus fondos/bordes)
+            // se anidan en su propia columna `stretch` interior.
+            key: const Key('login-desktop-control-width'),
+            width: controlWidth,
+            child: Column(
+              key: const Key('login-desktop-content-group'),
+              crossAxisAlignment: CrossAxisAlignment.center,
+              mainAxisSize: MainAxisSize.min,
+              children: <Widget>[
+                logoWidget,
+                SizedBox(height: compact ? AppSpacing.sm : AppSpacing.lg),
+                titleWidget,
+                const SizedBox(height: AppSpacing.sm),
+                subtitleWidget,
+                SizedBox(height: sectionGap),
+                Column(
                   crossAxisAlignment: CrossAxisAlignment.stretch,
                   mainAxisSize: MainAxisSize.min,
                   children: controlChildren,
                 ),
-              ),
-            ],
+              ],
+            ),
           )
         : Column(
             crossAxisAlignment: CrossAxisAlignment.stretch,

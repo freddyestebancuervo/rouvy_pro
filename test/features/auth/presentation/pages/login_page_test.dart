@@ -8,6 +8,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:mocktail/mocktail.dart';
 
+import 'package:rouvy_pro/app/theme/app_colors.dart';
 import 'package:rouvy_pro/app/theme/app_spacing.dart';
 import 'package:rouvy_pro/core/design_system/dark_tech_buttons.dart';
 import 'package:rouvy_pro/core/error/failures.dart';
@@ -561,11 +562,20 @@ void main() {
     await pumpLoginPage(tester, repository, surfaceSize: const Size(1440, 900));
     expect(tester.takeException(), isNull, reason: 'no debe haber overflow a 1440x900');
 
+    // KORIXA-SCREEN02-LOGIN-ALIGNMENT-INDICATOR-POLISH-20260910: el
+    // dueño pidió que TODO el bloque (logo/título/subtítulo/indicador Y
+    // los controles) comparta el mismo centro sobre la columna de 550 —
+    // ya no solo los controles. La región exterior de 680 (ya aprobada
+    // en SCREEN_01) sigue existiendo como TECHO — nunca se excede — pero
+    // ya no necesita llenarse por completo, porque nada adentro pide más
+    // de 550. Este test prueba el techo (<=680, nunca un valor mayor
+    // inventado); el ancho real renderizado del bloque se prueba en
+    // `LOGIN_DESKTOP_PRIMARY_CONTROL_WIDTH_MATCHES_SCREEN01` (550).
     final Size contentSize = tester.getSize(find.byKey(const Key('login-desktop-content-max-width')));
     expect(
       contentSize.width,
-      closeTo(680, 0.5),
-      reason: 'la región de contenido de Login debe igualar el ancho de contenido ya aprobado de SCREEN_01 (680), no un valor chico inventado',
+      lessThanOrEqualTo(680.5),
+      reason: 'la región exterior de Login nunca debe exceder el techo ya aprobado de SCREEN_01 (680)',
     );
   });
 
@@ -635,6 +645,107 @@ void main() {
     );
   });
 
+  // ---------------------------------------------------------------------
+  // KORIXA-SCREEN02-LOGIN-ALIGNMENT-INDICATOR-POLISH-20260910 — el dueño
+  // marcó en una captura anotada que el logo/título/subtítulo se veían
+  // "corridos a la derecha" respecto al formulario, y pidió agregar el
+  // mismo indicador de 3 barras de SCREEN_01 debajo de "¿Olvidaste tu
+  // contraseña?", con el CTA reposicionado más abajo. Estos tests miden
+  // geometría real (centro X, orden vertical), no solo presencia.
+  // ---------------------------------------------------------------------
+
+  testWidgets('LOGIN_DESKTOP_LOGO_CENTERED_OVER_CONTROLS = PASS', (WidgetTester tester) async {
+    await pumpLoginPage(tester, repository, surfaceSize: const Size(1440, 900));
+
+    final double columnCenterX = tester.getCenter(find.byKey(const Key('login-desktop-control-width'))).dx;
+    final double logoCenterX = tester.getCenter(find.byKey(const Key('login-logo'))).dx;
+    expect(
+      logoCenterX,
+      closeTo(columnCenterX, 1.0),
+      reason: 'el logo debe quedar centrado horizontalmente sobre la columna de 550, no corrido a la derecha',
+    );
+  });
+
+  testWidgets('LOGIN_DESKTOP_TITLE_CENTERED_OVER_CONTROLS = PASS', (WidgetTester tester) async {
+    await pumpLoginPage(tester, repository, surfaceSize: const Size(1440, 900));
+
+    final double columnCenterX = tester.getCenter(find.byKey(const Key('login-desktop-control-width'))).dx;
+    final double titleCenterX = tester.getCenter(find.byKey(const Key('login-title'))).dx;
+    expect(
+      titleCenterX,
+      closeTo(columnCenterX, 1.0),
+      reason: '"Bienvenido de nuevo" debe quedar centrado sobre la columna de 550, no alineado a la derecha respecto al formulario',
+    );
+  });
+
+  testWidgets('LOGIN_DESKTOP_SUBTITLE_CENTERED_OVER_CONTROLS = PASS', (WidgetTester tester) async {
+    await pumpLoginPage(tester, repository, surfaceSize: const Size(1440, 900));
+
+    final double columnCenterX = tester.getCenter(find.byKey(const Key('login-desktop-control-width'))).dx;
+    final double subtitleCenterX = tester.getCenter(find.byKey(const Key('login-subtitle'))).dx;
+    expect(
+      subtitleCenterX,
+      closeTo(columnCenterX, 1.0),
+      reason: '"Inicia sesión para continuar tu ruta" debe quedar centrado sobre la columna de 550',
+    );
+  });
+
+  testWidgets('LOGIN_DESKTOP_INDICATOR_MATCHES_SCREEN01_AND_IS_CENTERED = PASS', (WidgetTester tester) async {
+    await pumpLoginPage(tester, repository, surfaceSize: const Size(1440, 900));
+
+    final Finder indicatorFinder = find.byKey(const Key('login-desktop-indicator-row'));
+    expect(indicatorFinder, findsOneWidget, reason: 'el indicador de SCREEN_01 debe existir en desktop');
+
+    // KORIXA-SCREEN02-LOGIN-ALIGNMENT-INDICATOR-POLISH-20260910: mismo
+    // widget compartido que usa `_DesktopOnboardingIndicator` de Welcome
+    // (`core/design_system/dark_tech_indicators.dart`) — reusado, no
+    // aproximado. 3 barras, misma decoración activa/inactiva.
+    final Iterable<Container> bars = tester.widgetList<Container>(
+      find.descendant(of: indicatorFinder, matching: find.byType(Container)),
+    );
+    expect(bars.length, 3, reason: 'el indicador debe mostrar exactamente 3 líneas, igual que SCREEN_01');
+
+    final int activeCount = bars
+        .where((Container bar) => bar.decoration is BoxDecoration && (bar.decoration! as BoxDecoration).gradient != null)
+        .length;
+    final int inactiveCount = bars
+        .where(
+          (Container bar) =>
+              bar.decoration is BoxDecoration && (bar.decoration! as BoxDecoration).color == DarkTech.border,
+        )
+        .length;
+    expect(activeCount, 1, reason: 'exactamente 1 línea debe quedar activa, igual que SCREEN_01');
+    expect(inactiveCount, 2, reason: 'las otras 2 líneas deben quedar en gris inactivo, igual que SCREEN_01');
+
+    final double columnCenterX = tester.getCenter(find.byKey(const Key('login-desktop-control-width'))).dx;
+    final double indicatorCenterX = tester.getCenter(indicatorFinder).dx;
+    expect(
+      indicatorCenterX,
+      closeTo(columnCenterX, 1.0),
+      reason: 'el indicador debe quedar centrado horizontalmente sobre la columna de 550',
+    );
+  });
+
+  testWidgets('LOGIN_DESKTOP_INDICATOR_BELOW_FORGOT_PASSWORD_AND_CTA_BELOW_INDICATOR = PASS',
+      (WidgetTester tester) async {
+    await pumpLoginPage(tester, repository, surfaceSize: const Size(1440, 900));
+
+    final double forgotPasswordY = tester.getCenter(find.text('¿Olvidaste tu contraseña?')).dy;
+    final double indicatorY = tester.getCenter(find.byKey(const Key('login-desktop-indicator-row'))).dy;
+    final double ctaY = tester.getCenter(find.byType(PrimaryGradientButton)).dy;
+
+    expect(
+      indicatorY,
+      greaterThan(forgotPasswordY),
+      reason: 'el indicador de SCREEN_01 debe quedar DEBAJO de "¿Olvidaste tu contraseña?"',
+    );
+    expect(
+      ctaY,
+      greaterThan(indicatorY),
+      reason: 'el CTA "Iniciar sesión" debe quedar DEBAJO del indicador, con una separación intencional',
+    );
+  });
+
   testWidgets('PHONE_LANDSCAPE_HERO_FULL_BLEED_WIDTH = PASS', (WidgetTester tester) async {
     const Size landscapeSize = Size(932, 430);
     await pumpLoginPage(tester, repository, surfaceSize: landscapeSize);
@@ -666,5 +777,20 @@ void main() {
       findsNothing,
       reason: 'mobile portrait nunca tuvo panel flotante — el hero y el formulario ya estaban apilados verticalmente sin bloque opaco',
     );
+  });
+
+  // KORIXA-SCREEN02-LOGIN-ALIGNMENT-INDICATOR-POLISH-20260910: el
+  // indicador de SCREEN_01 es específicamente para la composición de
+  // escritorio de la captura anotada del dueño — phone landscape y
+  // mobile portrait no lo reciben, sin cambio visual en ninguna de las 2.
+  testWidgets('PHONE_LANDSCAPE_NO_SCREEN01_INDICATOR = PASS (fuera de alcance de esta tarea)',
+      (WidgetTester tester) async {
+    await pumpLoginPage(tester, repository, surfaceSize: const Size(932, 430));
+    expect(find.byKey(const Key('login-desktop-indicator-row')), findsNothing);
+  });
+
+  testWidgets('PORTRAIT_NO_SCREEN01_INDICATOR = PASS (sin cambio visual)', (WidgetTester tester) async {
+    await pumpLoginPage(tester, repository, surfaceSize: const Size(390, 844));
+    expect(find.byKey(const Key('login-desktop-indicator-row')), findsNothing);
   });
 }
