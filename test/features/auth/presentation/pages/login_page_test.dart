@@ -1520,42 +1520,31 @@ void main() {
     );
   });
 
-  testWidgets('SHORT_VIEWPORT_DOES_NOT_FORCE_GROUP_TO_TOP = PASS', (WidgetTester tester) async {
-    // El objetivo central del encargo: en viewports cortos, el título NO
-    // debe empezar en el primer cuarto de la pantalla — el piso de altura
-    // debe preservar un espacio escénico mínimo real, no dejar que se
-    // comprima proporcionalmente con el viewport.
+  testWidgets('SHORT_VIEWPORT_SACRIFICES_SCENIC_SPACE_NOT_SCROLL = PASS', (WidgetTester tester) async {
+    // KORIXA-SCREEN02-FIXED-BLOCK-NO-MOVEMENT-20260911: el dueño corrigió
+    // explícitamente el criterio de la ronda anterior — la decisión de
+    // scroll ya NO debe basarse en preservar espacio escénico ni en un
+    // piso de altura artificial; debe basarse SOLO en si el contenido
+    // FUNCIONAL entra o no en el alto real. "Se sacrifica primero el
+    // paisaje visible arriba" — así que a estos 4 tamaños "cortos" el
+    // título SÍ puede (y debe) subir proporcionalmente con el viewport
+    // (nada de piso de 750 manteniéndolo artificialmente abajo), MIENTRAS
+    // el contenido real siga entrando sin desbordar.
     for (final Size size in const <Size>[Size(360, 680), Size(390, 700), Size(390, 740), Size(430, 760)]) {
       await pumpLoginPage(tester, repository, surfaceSize: size);
-      final double titleTop = tester.getRect(find.byKey(const Key('login-title'))).top;
-      expect(
-        titleTop,
-        greaterThanOrEqualTo(200.0),
-        reason: 'SHORT_VIEWPORT_DOES_NOT_FORCE_GROUP_TO_TOP en ${size.width.toInt()}x${size.height.toInt()}: el título no debe quedar pegado arriba solo porque el viewport es corto',
-      );
-    }
-  });
+      expect(tester.takeException(), isNull, reason: 'NO_OVERFLOW en ${size.width.toInt()}x${size.height.toInt()}');
 
-  testWidgets('SHORT_VIEWPORT_SCROLL_AVAILABLE = PASS', (WidgetTester tester) async {
-    // A 390x700/390x740 el encargo acepta explícitamente que Crear
-    // cuenta/Google requieran scroll — se prueba que el scroll REALMENTE
-    // está disponible y funciona (no que el contenido se comprimió para
-    // evitarlo).
-    for (final Size size in const <Size>[Size(390, 700), Size(390, 740)]) {
-      await pumpLoginPage(tester, repository, surfaceSize: size);
-      expect(tester.takeException(), isNull, reason: 'sin overflow al construir en ${size.width.toInt()}x${size.height.toInt()}');
-
-      // El título debe estar visible SIN scrollear (posición inicial).
-      final double titleTop = tester.getRect(find.byKey(const Key('login-title'))).top;
+      // El contenido natural (~500px) entra en los 4 tamaños "cortos"
+      // pedidos por este encargo — el scroll debe quedar deshabilitado,
+      // no forzado, en ninguno de ellos.
+      final SingleChildScrollView scrollView = tester.widget(find.byType(SingleChildScrollView).first);
       expect(
-        titleTop,
-        allOf(greaterThanOrEqualTo(0), lessThan(size.height)),
-        reason: 'SHORT_VIEWPORT_SCROLL_AVAILABLE en ${size.width.toInt()}x${size.height.toInt()}: el título debe verse de entrada, sin necesidad de scrollear — antes NO reverse:true tapaba justo esto',
+        scrollView.physics,
+        isA<NeverScrollableScrollPhysics>(),
+        reason: 'SCROLL_ONLY_WHEN_CONTENT_DOES_NOT_FIT: a ${size.width.toInt()}x${size.height.toInt()} el contenido real entra, así que el scroll debe seguir deshabilitado',
       );
 
-      await tester.ensureVisible(find.text('Crear cuenta'));
-      await tester.pumpAndSettle();
-      expect(tester.takeException(), isNull, reason: 'SHORT_VIEWPORT_SCROLL_AVAILABLE: scroll hasta Crear cuenta debe funcionar sin error');
+      expect(find.text('Crear cuenta'), findsOneWidget, reason: 'ALL_ACTIONS_REACHABLE en ${size.width.toInt()}x${size.height.toInt()}');
     }
   });
 
@@ -1721,47 +1710,83 @@ void main() {
     expect(scrollView.physics, isA<NeverScrollableScrollPhysics>(), reason: 'SCROLL_ENABLED = NO a 360x800 (entra sin scroll)');
   });
 
-  testWidgets('SHORT_390x700_SCROLL_ENABLED = PASS', (WidgetTester tester) async {
+  testWidgets('SHORT_390x700_SCROLL_DISABLED_IF_FITS = PASS', (WidgetTester tester) async {
+    // KORIXA-SCREEN02-FIXED-BLOCK-NO-MOVEMENT-20260911: a 390x700 el
+    // contenido REAL (~500px) sigue entrando sin desbordar — el encargo
+    // pide explícitamente "permitir scroll SOLO SI REALMENTE hace falta",
+    // así que acá NO debe habilitarse (a diferencia del criterio de la
+    // ronda anterior, que lo forzaba para proteger espacio escénico).
     await pumpLoginPage(tester, repository, surfaceSize: const Size(390, 700));
+    expect(tester.takeException(), isNull, reason: 'NO_OVERFLOW a 390x700');
+
     final SingleChildScrollView scrollView = tester.widget(find.byType(SingleChildScrollView).first);
     expect(
       scrollView.physics,
-      isNot(isA<NeverScrollableScrollPhysics>()),
-      reason: 'SCROLL_ENABLED = YES a 390x700 — el piso fuerza más altura de la disponible, así que el scroll debe seguir activo',
+      isA<NeverScrollableScrollPhysics>(),
+      reason: 'SCROLL_ONLY_WHEN_CONTENT_DOES_NOT_FIT: a 390x700 el contenido real entra sin desbordar',
     );
 
-    // El arrastre SÍ debe mover el contenido acá.
+    // El arrastre NO debe mover el contenido acá.
     final Finder titleFinder = find.byKey(const Key('login-title'));
     final double before = tester.getRect(titleFinder).top;
     await tester.drag(find.byType(SingleChildScrollView).first, const Offset(0, -100));
     await tester.pumpAndSettle();
     final double after = tester.getRect(titleFinder).top;
-    expect((before - after).abs(), greaterThan(2.0), reason: 'a 390x700 el arrastre SÍ debe desplazar el contenido (scroll intencional)');
+    expect((before - after).abs(), lessThanOrEqualTo(2.0), reason: 'a 390x700 el arrastre NO debe desplazar el contenido — cabe sin scroll');
 
-    await tester.ensureVisible(find.text('Crear cuenta'));
-    await tester.pumpAndSettle();
-    expect(tester.takeException(), isNull);
-    expect(find.text('Crear cuenta'), findsOneWidget, reason: 'ALL_ACTIONS_REACHABLE a 390x700');
+    expect(find.text('Crear cuenta'), findsOneWidget, reason: 'ALL_ACTIONS_REACHABLE a 390x700, sin necesidad de scroll');
   });
 
-  testWidgets('SHORT_360x680_SCROLL_ENABLED = PASS', (WidgetTester tester) async {
+  testWidgets('SHORT_360x680_SCROLL_DISABLED_IF_FITS = PASS', (WidgetTester tester) async {
+    // 360x680 es el caso más corto pedido por el encargo — el contenido
+    // real (~500px) también entra sin desbordar ahí, así que el scroll
+    // debe quedar deshabilitado igual que en todos los demás tamaños
+    // "cortos" pedidos.
     await pumpLoginPage(tester, repository, surfaceSize: const Size(360, 680));
+    expect(tester.takeException(), isNull, reason: 'NO_OVERFLOW a 360x680');
+
+    final SingleChildScrollView scrollView = tester.widget(find.byType(SingleChildScrollView).first);
+    expect(
+      scrollView.physics,
+      isA<NeverScrollableScrollPhysics>(),
+      reason: 'SCROLL_ONLY_WHEN_CONTENT_DOES_NOT_FIT: a 360x680 (el caso más corto pedido) el contenido real también entra',
+    );
+
+    expect(find.text('Crear cuenta'), findsOneWidget, reason: 'ALL_ACTIONS_REACHABLE a 360x680, sin necesidad de scroll');
+    expect(find.byType(GoogleSignInButton), findsOneWidget, reason: 'GOOGLE_REACHABLE a 360x680, sin necesidad de scroll');
+  });
+
+  testWidgets('EXTREME_HEIGHT_SCROLL_ENABLES_WHEN_CONTENT_GENUINELY_OVERFLOWS = PASS', (WidgetTester tester) async {
+    // KORIXA-SCREEN02-FIXED-BLOCK-NO-MOVEMENT-20260911: ningún tamaño
+    // pedido por este encargo (680-1024) llega a desbordar el contenido
+    // real (~500px) — así que TODOS quedan sin scroll. Este test prueba
+    // el otro lado del mecanismo con un alto deliberadamente extremo
+    // (más corto que cualquier dispositivo real), para confirmar que el
+    // scroll SÍ se habilita cuando el contenido genuinamente no entra —
+    // no que la física quedó fija en `NeverScrollable` sin importar el
+    // alto.
+    const Size extremeSize = Size(360, 400);
+    await pumpLoginPage(tester, repository, surfaceSize: extremeSize);
+    expect(tester.takeException(), isNull, reason: 'NO_OVERFLOW incluso en un alto extremo — debe scrollear, no desbordar');
+
     final SingleChildScrollView scrollView = tester.widget(find.byType(SingleChildScrollView).first);
     expect(
       scrollView.physics,
       isNot(isA<NeverScrollableScrollPhysics>()),
-      reason: 'SCROLL_ENABLED = YES a 360x680 (el caso más corto pedido)',
+      reason: 'SCROLL_ONLY_WHEN_CONTENT_DOES_NOT_FIT: a un alto extremo donde el contenido real (~500px) no entra, el scroll debe habilitarse',
     );
-    expect(tester.takeException(), isNull, reason: 'NO_OVERFLOW a 360x680');
+
+    final Finder titleFinder = find.byKey(const Key('login-title'));
+    final double before = tester.getRect(titleFinder).top;
+    await tester.drag(find.byType(SingleChildScrollView).first, const Offset(0, -80));
+    await tester.pumpAndSettle();
+    final double after = tester.getRect(titleFinder).top;
+    expect((before - after).abs(), greaterThan(2.0), reason: 'el arrastre debe desplazar el contenido cuando el scroll realmente hace falta');
 
     await tester.ensureVisible(find.text('Crear cuenta'));
     await tester.pumpAndSettle();
     expect(tester.takeException(), isNull);
-    expect(find.text('Crear cuenta'), findsOneWidget, reason: 'ALL_ACTIONS_REACHABLE a 360x680');
-
-    await tester.ensureVisible(find.byType(GoogleSignInButton));
-    await tester.pumpAndSettle();
-    expect(tester.takeException(), isNull);
+    expect(find.text('Crear cuenta'), findsOneWidget, reason: 'ALL_ACTIONS_REACHABLE incluso en el alto extremo, vía scroll');
   });
 
   const <String, Size>{
@@ -1778,26 +1803,20 @@ void main() {
       await pumpLoginPage(tester, repository, surfaceSize: size);
       expect(tester.takeException(), isNull, reason: 'NO_OVERFLOW en $label');
 
+      // KORIXA-SCREEN02-FIXED-BLOCK-NO-MOVEMENT-20260911: los 8 tamaños
+      // pedidos por este encargo (360x680 a 768x1024) dejan entrar el
+      // contenido REAL (~500px) sin desbordar — así que el scroll debe
+      // quedar deshabilitado en TODOS ellos, no solo en los que antes se
+      // consideraban "normales". Ver `EXTREME_HEIGHT_SCROLL_ENABLES_
+      // WHEN_CONTENT_GENUINELY_OVERFLOWS` para la prueba de que el
+      // mecanismo SÍ habilita scroll cuando de verdad hace falta.
       final SingleChildScrollView scrollView = tester.widget(find.byType(SingleChildScrollView).first);
-      final bool expectedScrollNeeded = size.height < 750;
-      if (expectedScrollNeeded) {
-        expect(
-          scrollView.physics,
-          isNot(isA<NeverScrollableScrollPhysics>()),
-          reason: '$label: SCROLL_ENABLED debe ser YES (viewport más corto que el piso de 750)',
-        );
-      } else {
-        expect(
-          scrollView.physics,
-          isA<NeverScrollableScrollPhysics>(),
-          reason: '$label: SCROLL_ENABLED debe ser NO (el contenido ya entra sin inflar el piso)',
-        );
-      }
+      expect(
+        scrollView.physics,
+        isA<NeverScrollableScrollPhysics>(),
+        reason: '$label: SCROLL_ONLY_WHEN_CONTENT_DOES_NOT_FIT — el contenido real entra en $label, así que el scroll debe estar deshabilitado',
+      );
 
-      // Alcanzabilidad final, con o sin scroll según corresponda.
-      await tester.ensureVisible(find.text('Crear cuenta'));
-      await tester.pumpAndSettle();
-      expect(tester.takeException(), isNull, reason: '$label: NO_OVERFLOW tras intentar llegar a Crear cuenta');
       expect(find.text('Crear cuenta'), findsOneWidget, reason: '$label: ALL_ACTIONS_REACHABLE');
     });
   });

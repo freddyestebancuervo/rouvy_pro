@@ -1,5 +1,3 @@
-import 'dart:math' as math;
-
 import 'package:flutter/foundation.dart' show defaultTargetPlatform, kIsWeb, TargetPlatform;
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -51,6 +49,45 @@ class _LoginPageState extends ConsumerState<LoginPage> {
   final _emailController = TextEditingController();
   final _passwordController = TextEditingController();
   bool _obscurePassword = true;
+
+  // KORIXA-SCREEN02-FIXED-BLOCK-NO-MOVEMENT-20260911: el dueño pidió
+  // explícitamente que la decisión de habilitar scroll en mobile
+  // portrait NO se base en preservar espacio escénico ni en un piso de
+  // altura artificial (el `_minPortraitCompositionHeight` de la ronda
+  // anterior) — debe basarse ÚNICAMENTE en si el contenido FUNCIONAL
+  // realmente entra o no en el alto útil real. Eso exige conocer la
+  // altura NATURAL real del grupo (título→crear cuenta), que depende de
+  // fuentes/escalado de accesibilidad del dispositivo — no un número
+  // fijo confiable de antemano. `_portraitContentKey` mide esa altura
+  // real después de cada layout (`_schedulePortraitScrollFitMeasurement`,
+  // ver `_buildPortrait`); `_portraitScrollNeeded` guarda el resultado.
+  //
+  // Default `true` (asumir que hace falta scroll) hasta la primera
+  // medición real — es la opción SEGURA: nunca recorta contenido antes
+  // de medir. La única diferencia observable entre "scrolleable pero
+  // sin scrollear" y "no scrolleable" es la respuesta a un gesto de
+  // arrastre real — imposible dentro del primer frame (~16ms) antes de
+  // que la medición se complete y corrija el estado si hace falta, así
+  // que no hay parpadeo visual perceptible.
+  final GlobalKey _portraitContentKey = GlobalKey();
+  bool _portraitScrollNeeded = true;
+
+  void _schedulePortraitScrollFitMeasurement(double availableHeight) {
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      final RenderBox? contentBox = _portraitContentKey.currentContext?.findRenderObject() as RenderBox?;
+      if (contentBox == null || !contentBox.hasSize) return;
+      // KORIXA-SCREEN02-FIXED-BLOCK-NO-MOVEMENT-20260911: `contentBox`
+      // es el `Padding` que envuelve el grupo REAL de Login — mide su
+      // alto NATURAL (nunca inflado por ningún `ConstrainedBox` padre,
+      // las restricciones solo fluyen hacia abajo) y lo compara contra
+      // el alto REAL disponible medido en esta misma pasada de layout.
+      final bool needsScroll = contentBox.size.height > availableHeight;
+      if (needsScroll != _portraitScrollNeeded) {
+        setState(() => _portraitScrollNeeded = needsScroll);
+      }
+    });
+  }
 
   @override
   void dispose() {
@@ -129,22 +166,6 @@ class _LoginPageState extends ConsumerState<LoginPage> {
   static const double _desktopLogoHeight = 188;
   static const double _desktopTitleFontSize = 51;
   static const double _desktopSubtitleFontSize = 24;
-
-  // KORIXA-SCREEN02-MOBILE-VISUAL-VIEWPORT-BOTTOM-ANCHOR-FIX-20260911:
-  // piso de altura TOTAL (foto vacía + grupo de contenido) para la
-  // composición de mobile portrait — ver el comentario extenso en
-  // `_buildPortrait` para el porqué completo. 750 se eligió porque:
-  // (a) supera ampliamente el alto natural del grupo de contenido
-  // (~490-500px, medido), garantizando siempre >= ~250px de espacio
-  // escénico mínimo aunque el viewport real sea más corto; (b) es menor
-  // que CUALQUIERA de los 3 tamaños de referencia ya aprobados
-  // (390×844, 430×932, 768×1024), así que el piso es un NO-OP en los 3
-  // — geometría idéntica a la ya aprobada, sin scroll forzado ahí;
-  // (c) cubre incluso un iPhone SE completo (375×667) como candidato
-  // razonable a "permitir scroll en vez de comprimir", no solo los
-  // casos de chrome de navegador reducido pedidos explícitamente por
-  // este encargo (390×700/390×740, ambos < 750).
-  static const double _minPortraitCompositionHeight = 750;
 
   @override
   Widget build(BuildContext context) {
@@ -259,74 +280,39 @@ class _LoginPageState extends ConsumerState<LoginPage> {
           child: DecoratedBox(decoration: BoxDecoration(gradient: AppGradients.imageScrimBottom)),
         ),
         SafeArea(
-          // KORIXA-SCREEN02-MOBILE-VISUAL-VIEWPORT-BOTTOM-ANCHOR-FIX-
-          // 20260911: corrección del dueño — en un navegador móvil real,
-          // el chrome del navegador (barra de URL) reduce el alto visual
-          // REAL disponible por debajo de lo que cualquiera de los
-          // tamaños "de referencia" (844/932/1024) asume. Investigado
-          // ANTES de tocar código (medición directa vía un widget test
-          // desechable a 8 alturas, 680-1024): con la implementación
-          // anterior (`Align(bottomCenter)` sin ningún piso de altura),
-          // el alto TOTAL del grupo de contenido es prácticamente
-          // constante (~490-500px — está hecho de tipografía/campos/
-          // botones de tamaño fijo) y, anclado al fondo, CUALQUIER
-          // reducción del alto de viewport se resta 1:1 del espacio
-          // escénico de arriba (medido: solo 200px de espacio arriba a
-          // 390×700, contra 344px a 390×844). Eso es matemáticamente
-          // inevitable con ESE mecanismo de anclaje — no es una
-          // regresión de código nueva, pero SÍ es exactamente el
-          // comportamiento que el dueño pidió corregir: "no comprimir el
-          // espacio escénico para que quepa todo, permitir scroll en su
-          // lugar".
+          // KORIXA-SCREEN02-FIXED-BLOCK-NO-MOVEMENT-20260911: corrección
+          // sobre la ronda anterior (KORIXA-SCREEN02-MOBILE-VISUAL-
+          // VIEWPORT-BOTTOM-ANCHOR-FIX-20260911) — el dueño grabó video
+          // en dispositivo real mostrando que el grupo de contenido
+          // TODAVÍA se desplazaba en un viewport normal, y pidió
+          // explícitamente que la decisión de scroll NO se base en
+          // preservar espacio escénico ni en un piso de altura artificial
+          // (el `_minPortraitCompositionHeight` = 750 de esa ronda), sino
+          // ÚNICAMENTE en si el contenido FUNCIONAL realmente entra o no
+          // en el alto útil real — "sacrificar paisaje visible arriba
+          // primero; solo si aun así no entra, habilitar scroll".
           //
-          // Solución: patrón estándar de Flutter "anclar abajo si entra,
-          // si no, scrollear". `LayoutBuilder` mide el alto REAL
-          // disponible (ya neto de `SafeArea`); `ConstrainedBox(minHeight:
-          // _minPortraitCompositionHeight)` más abajo impone un piso de
-          // altura TOTAL para la composición (foto vacía + grupo), nunca
-          // el alto real crudo del viewport. Cuando el viewport real ya
-          // es >= ese piso (844/932/1024, todos los tamaños ya
-          // aprobados), el piso no cambia nada — geometría idéntica a
-          // antes (medido: y=344 sigue en 344 a 390×844, ver
-          // `NORMAL_390x844_GEOMETRY_NOT_REGRESSED`). Cuando el viewport
-          // real es más corto que el piso (700/740/680/760), el `Column`
-          // interior (`mainAxisAlignment.end`, ver más abajo) sigue
-          // anclando el grupo al fondo de esa altura PISO (no del
-          // viewport real), preservando el espacio escénico mínimo — el
-          // excedente (piso − viewport real) se vuelve scrolleable
-          // (`SingleChildScrollView`, ya NO `reverse: true`: con
-          // `reverse` en `false` el scroll arranca mostrando el INICIO
-          // — foto + título — no el final, así que "Crear cuenta"/
-          // Google quedan alcanzables scrolleando hacia abajo, nunca
-          // ocultos scrolleando hacia arriba).
+          // Ya NO hay ningún piso de altura: `ConstrainedBox` más abajo
+          // usa `minHeight: actualViewportHeight` (el alto real, sin
+          // inflar) — el grupo se ancla al fondo de ESE alto real
+          // siempre, así que el espacio escénico se reduce libremente
+          // junto con el viewport (nunca se fuerza scroll solo para
+          // "proteger" espacio escénico). El scroll se activa
+          // ÚNICAMENTE cuando el alto NATURAL medido del grupo (título→
+          // crear cuenta, `_portraitContentKey`) excede el alto real
+          // disponible — medición real vía
+          // `_schedulePortraitScrollFitMeasurement`, no una estimación:
+          // el alto natural depende de la fuente/escala de accesibilidad
+          // del dispositivo, no es un número fijo confiable de antemano.
+          //
+          // `SingleChildScrollView` sigue sin `reverse: true` — cuando SÍ
+          // hace falta scroll, arranca mostrando el INICIO (foto+título),
+          // así que Google/Crear cuenta quedan alcanzables scrolleando
+          // hacia abajo, nunca ocultos scrolleando hacia arriba.
           child: LayoutBuilder(
             builder: (BuildContext context, BoxConstraints safeAreaConstraints) {
               final double actualViewportHeight = safeAreaConstraints.maxHeight;
-              final double compositionHeight =
-                  math.max(actualViewportHeight, _minPortraitCompositionHeight);
-              // KORIXA-SCREEN02-MOBILE-CONDITIONAL-SCROLL-STABLE-BLOCK-
-              // 20260911: evidencia de video en dispositivo real del dueño
-              // — con la ronda anterior, el `SingleChildScrollView` de
-              // abajo quedaba SIEMPRE presente y arrastrable, incluso
-              // cuando el contenido entraba sin necesidad de scroll
-              // (viewport >= `_minPortraitCompositionHeight`, el piso es
-              // un no-op ahí). Un `SingleChildScrollView` con
-              // `maxScrollExtent == 0` sigue aceptando el gesto de
-              // arrastre — en algunos navegadores/plataformas eso produce
-              // el "rebote"/desplazamiento visible del grupo completo que
-              // el dueño grabó, aunque nuestros widget tests (que miden
-              // geometría estática tras `pumpAndSettle`, nunca simulan un
-              // arrastre táctil real) nunca lo detectaron. La condición
-              // de scroll es 100% determinista a partir de la MISMA
-              // comparación que ya decide el piso — si el viewport real
-              // ya alcanza el piso, el contenido natural (~500px, medido)
-              // SIEMPRE entra sin necesidad de inflar nada, así que
-              // jamás hace falta scrollear; si el viewport real es más
-              // corto que el piso, el piso fuerza una altura MAYOR que
-              // el viewport real por diseño (para proteger el espacio
-              // escénico), así que el scroll SIEMPRE hace falta ahí. No
-              // se necesita una segunda pasada de medición.
-              final bool scrollNeeded = actualViewportHeight < _minPortraitCompositionHeight;
+              _schedulePortraitScrollFitMeasurement(actualViewportHeight);
 
               return Align(
                 alignment: Alignment.topCenter,
@@ -352,26 +338,40 @@ class _LoginPageState extends ConsumerState<LoginPage> {
                   child: SizedBox(
                     height: actualViewportHeight,
                     child: SingleChildScrollView(
-                      // KORIXA-SCREEN02-MOBILE-CONDITIONAL-SCROLL-STABLE-
-                      // BLOCK-20260911: `NeverScrollableScrollPhysics`
-                      // cuando `!scrollNeeded` — desactiva por completo el
-                      // reconocedor de gestos de arrastre/rebote/overscroll
-                      // del `Scrollable` (no solo "clampea la posición a
-                      // 0"; el widget deja de responder al gesto), así el
-                      // grupo de contenido queda tan estático como si no
-                      // hubiera ningún `ScrollView` — sin necesitar dos
-                      // árboles de widgets distintos para cada caso.
-                      // Cuando `scrollNeeded` (viewport corto), usa la
-                      // física por defecto de la plataforma para permitir
-                      // scrollear hacia Google/Crear cuenta.
-                      physics: scrollNeeded ? null : const NeverScrollableScrollPhysics(),
+                      // KORIXA-SCREEN02-FIXED-BLOCK-NO-MOVEMENT-20260911:
+                      // `NeverScrollableScrollPhysics` cuando
+                      // `!_portraitScrollNeeded` (medido, ver
+                      // `_schedulePortraitScrollFitMeasurement`) —
+                      // desactiva por completo el reconocedor de gestos de
+                      // arrastre/rebote/overscroll del `Scrollable` (no
+                      // solo "clampea la posición a 0"; el widget deja de
+                      // responder al gesto), así el grupo de contenido
+                      // queda tan estático como si no hubiera ningún
+                      // `ScrollView` — sin necesitar dos árboles de
+                      // widgets distintos para cada caso. Cuando el
+                      // contenido natural SÍ excede el alto real
+                      // disponible, usa la física por defecto de la
+                      // plataforma para permitir scrollear hacia Google/
+                      // Crear cuenta.
+                      physics: _portraitScrollNeeded ? null : const NeverScrollableScrollPhysics(),
                       child: ConstrainedBox(
-                        // El piso de altura vive AQUÍ — sobre el propio
-                        // contenido con su padding, no sobre el `SizedBox`
-                        // de arriba (que representa el viewport REAL, nunca
-                        // debe agrandarse).
-                        constraints: BoxConstraints(minHeight: compositionHeight),
+                        // KORIXA-SCREEN02-FIXED-BLOCK-NO-MOVEMENT-20260911:
+                        // `minHeight: actualViewportHeight` — SIN ningún
+                        // piso artificial por encima del alto real (la
+                        // ronda anterior usaba un piso fijo de 750 para
+                        // "proteger" espacio escénico; el dueño pidió
+                        // explícitamente eliminar ese razonamiento). Esto
+                        // ancla el grupo al fondo del alto REAL cuando
+                        // entra (sacrificando espacio escénico libremente
+                        // según encoja el viewport, nunca forzando scroll
+                        // solo para preservarlo) — y cuando el contenido
+                        // NATURAL es más alto que esto, el propio `Column`
+                        // de abajo crece más allá de este mínimo sin
+                        // problema (las restricciones son un PISO, nunca
+                        // un techo), habilitando el scroll real.
+                        constraints: BoxConstraints(minHeight: actualViewportHeight),
                         child: Padding(
+                          key: _portraitContentKey,
                           // KORIXA-SCREEN02-TRUE-BOTTOM-COMPOSITION-OWNER-CORRECTION-
                           // 20260911: el dueño corrigió explícitamente que el ajuste
                           // anterior (inset superior a `AppSpacing.xs` = 4, inferior
@@ -394,20 +394,27 @@ class _LoginPageState extends ConsumerState<LoginPage> {
                           // no estimado (ver `login_page_test.dart`).
                           padding: const EdgeInsets.fromLTRB(AppSpacing.xl, 0, AppSpacing.xl, AppSpacing.sm),
                           child: Column(
-                            // KORIXA-SCREEN02-MOBILE-VISUAL-VIEWPORT-BOTTOM-
-                            // ANCHOR-FIX-20260911: `mainAxisSize.min` (el
-                            // `Column` reporta el alto natural de su único
-                            // hijo) + `mainAxisAlignment.end` — cuando el
-                            // `ConstrainedBox` de arriba fuerza un alto mayor
-                            // al natural (piso > contenido real), este
-                            // `Column` queda con ESE alto mayor (las
-                            // restricciones del padre siempre ganan sobre la
-                            // preferencia `min`) y `mainAxisAlignment.end`
-                            // ancla su único hijo (el grupo real de Login) al
-                            // fondo de ese espacio extra — el mismo patrón
-                            // que un `Align(bottomCenter)`, pero definido en
-                            // términos del PISO en vez del viewport real
-                            // crudo.
+                            // KORIXA-SCREEN02-FIXED-BLOCK-NO-MOVEMENT-
+                            // 20260911: `mainAxisSize.min` (el `Column`
+                            // reporta el alto natural de su único hijo) +
+                            // `mainAxisAlignment.end` — cuando el
+                            // `ConstrainedBox` de arriba fuerza un alto
+                            // mayor al natural (viewport real > contenido
+                            // real, el caso normal), este `Column` queda
+                            // con ESE alto real (las restricciones del
+                            // padre siempre ganan sobre la preferencia
+                            // `min`) y `mainAxisAlignment.end` ancla su
+                            // único hijo (el grupo real de Login) al fondo
+                            // de ese espacio extra — el mismo patrón que
+                            // un `Align(bottomCenter)`, pero definido en
+                            // términos del alto REAL del viewport, sin
+                            // ningún piso artificial de por medio. Cuando
+                            // el contenido natural excede el alto real
+                            // (viewport corto), este `Column` simplemente
+                            // crece más allá — las restricciones son un
+                            // piso, nunca un techo — habilitando el
+                            // scroll real que la física de arriba permite
+                            // en ese caso.
                             mainAxisSize: MainAxisSize.min,
                             mainAxisAlignment: MainAxisAlignment.end,
                             children: <Widget>[
