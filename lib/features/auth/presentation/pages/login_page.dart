@@ -341,8 +341,15 @@ class _LoginPageState extends ConsumerState<LoginPage> {
                     // (16px) en `DarkTech.textSecondary`, ambos sin
                     // sombra, igual que "Conecta tu energía" en Welcome.
                     matchScreen01Typography: true,
-                    ctaIcon: Icons.arrow_forward_rounded,
-                    ctaIconTrailing: true,
+                    // KORIXA-SCREEN02-FINAL-APPROVED-VISUAL-LOCK-20260911:
+                    // el dueño fijó el diseño final aprobado y pidió
+                    // explícitamente quitar la flecha decorativa del CTA
+                    // (agregada en KORIXA-PR127-LOGIN-MOBILE-VISUAL-
+                    // POLISH-20260910) — el botón principal debe quedar
+                    // solo con el texto "Iniciar sesión", sin ícono. No se
+                    // pasan `ctaIcon`/`ctaIconTrailing` — ambos vuelven a
+                    // sus defaults (`null`/`false`), igual que desktop y
+                    // phone landscape ya tenían siempre.
                     tightenBottomActions: true,
                   ),
                 ),

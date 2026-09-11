@@ -975,17 +975,24 @@ void main() {
     expect(find.byIcon(Icons.lock_outline), findsNothing);
   });
 
-  testWidgets('MOBILE_CTA_HAS_TRAILING_ARROW_DESKTOP_UNCHANGED = PASS', (WidgetTester tester) async {
+  testWidgets('PRIMARY_CTA_HAS_NO_ARROW_ICON = PASS', (WidgetTester tester) async {
+    // KORIXA-SCREEN02-FINAL-APPROVED-VISUAL-LOCK-20260911: reemplaza el
+    // test homónimo `_HAS_TRAILING_ARROW` (KORIXA-PR127-LOGIN-MOBILE-
+    // VISUAL-POLISH-20260910) — el dueño fijó el diseño final aprobado y
+    // pidió explícitamente quitar la flecha decorativa: el CTA principal
+    // debe quedar solo con el texto "Iniciar sesión", sin ícono, en las
+    // 3 composiciones (mobile ya no es la excepción).
     await pumpLoginPage(tester, repository, surfaceSize: const Size(390, 844));
     final PrimaryGradientButton mobileCta = tester.widget(find.byType(PrimaryGradientButton));
-    expect(mobileCta.icon, Icons.arrow_forward_rounded, reason: 'el CTA de mobile debe llevar la flecha decorativa del mockup aprobado');
-    expect(mobileCta.iconTrailing, isTrue, reason: 'la flecha debe ir a la DERECHA del texto, no a la izquierda');
+    expect(mobileCta.icon, isNull, reason: 'PRIMARY_CTA_ARROW_PRESENT = NO: el CTA de mobile ya no debe llevar ningún ícono');
+    expect(mobileCta.label, 'Iniciar sesión', reason: 'PRIMARY_CTA_TEXT = "Iniciar sesión", sin flecha ni texto adicional');
     // Puramente visual — el callback sigue siendo exactamente el mismo.
     expect(mobileCta.onPressed, isNotNull);
 
     await pumpLoginPage(tester, repository, surfaceSize: const Size(1440, 900));
     final PrimaryGradientButton desktopCta = tester.widget(find.byType(PrimaryGradientButton));
-    expect(desktopCta.icon, isNull, reason: 'el CTA de desktop no debe ganar la flecha en esta tarea');
+    expect(desktopCta.icon, isNull, reason: 'el CTA de desktop tampoco debe llevar ícono');
+    expect(desktopCta.label, 'Iniciar sesión');
   });
 
   testWidgets('MOBILE_CTA_AND_GOOGLE_SHARE_SAME_WIDTH_NO_HORIZONTAL_OVERFLOW = PASS', (WidgetTester tester) async {
@@ -1324,5 +1331,78 @@ void main() {
       greaterThan(tabletSize.height * 0.30),
       reason: 'TABLET_WIDTH_CAPPED_768x1024: composición balanceada, con espacio escénico real arriba',
     );
+  });
+
+  // ---------------------------------------------------------------------
+  // KORIXA-SCREEN02-FINAL-APPROVED-VISUAL-LOCK-20260911 — el dueño fijó
+  // el diseño final aprobado de SCREEN_02 mobile portrait. Este bloque
+  // prueba explícitamente cada criterio de aceptación enumerado en el
+  // encargo, en un solo lugar, en los 4 tamaños requeridos — no solo que
+  // cada elemento individual ya estaba probado en tests anteriores
+  // (dispersos por tarea), sino que TODOS coexisten simultáneamente en el
+  // diseño final.
+  // ---------------------------------------------------------------------
+
+  const <String, Size>{
+    '360x800': Size(360, 800),
+    '390x844': Size(390, 844),
+    '430x932': Size(430, 932),
+    '768x1024': Size(768, 1024),
+  }.forEach((String label, Size size) {
+    testWidgets('$label SCREEN02_MATCHES_APPROVED_DESIGN = PASS', (WidgetTester tester) async {
+      await pumpLoginPage(tester, repository, surfaceSize: size);
+      expect(tester.takeException(), isNull, reason: '$label: no overflow');
+
+      // BACKGROUND_GUATAPE_PRESENT
+      expect(hasHeroImage(tester), isTrue, reason: '$label: BACKGROUND_GUATAPE_PRESENT');
+
+      // TOP_MOBILE_LOGO_PRESENT = NO
+      expect(find.byKey(const Key('login-logo')), findsNothing, reason: '$label: TOP_MOBILE_LOGO_PRESENT debe ser NO');
+
+      // TITLE_PRESENT / SUBTITLE_PRESENT
+      expect(find.text('Bienvenido de nuevo'), findsOneWidget, reason: '$label: TITLE_PRESENT');
+      expect(find.text('Inicia sesión para continuar tu ruta'), findsOneWidget, reason: '$label: SUBTITLE_PRESENT');
+
+      // EMAIL_FIELD_PRESENT / PASSWORD_FIELD_PRESENT
+      expect(find.byType(TextFormField), findsNWidgets(2), reason: '$label: EMAIL_FIELD_PRESENT + PASSWORD_FIELD_PRESENT');
+
+      // FORGOT_PASSWORD_PRESENT
+      expect(find.text('¿Olvidaste tu contraseña?'), findsOneWidget, reason: '$label: FORGOT_PASSWORD_PRESENT');
+
+      // THREE_BAR_INDICATOR_PRESENT + CENTER_BAR_PURPLE_BLUE_GRADIENT
+      final Finder indicatorFinder = find.byKey(const Key('login-portrait-indicator-row'));
+      expect(indicatorFinder, findsOneWidget, reason: '$label: THREE_BAR_INDICATOR_PRESENT');
+      final List<Container> bars = tester
+          .widgetList<Container>(find.descendant(of: indicatorFinder, matching: find.byType(Container)))
+          .toList();
+      expect(bars.length, 3, reason: '$label: el indicador debe tener exactamente 3 barras');
+      final BoxDecoration leftDecoration = bars[0].decoration! as BoxDecoration;
+      final BoxDecoration centerDecoration = bars[1].decoration! as BoxDecoration;
+      final BoxDecoration rightDecoration = bars[2].decoration! as BoxDecoration;
+      expect(leftDecoration.color, DarkTech.border, reason: '$label: barra izquierda gris');
+      expect(centerDecoration.gradient, AppGradients.primaryCta, reason: '$label: CENTER_BAR_PURPLE_BLUE_GRADIENT');
+      expect(rightDecoration.color, DarkTech.border, reason: '$label: barra derecha gris');
+
+      // PRIMARY_CTA_TEXT + PRIMARY_CTA_ARROW_PRESENT = NO
+      final PrimaryGradientButton cta = tester.widget(find.byType(PrimaryGradientButton));
+      expect(cta.label, 'Iniciar sesión', reason: '$label: PRIMARY_CTA_TEXT');
+      expect(cta.icon, isNull, reason: '$label: PRIMARY_CTA_ARROW_PRESENT debe ser NO');
+
+      // GOOGLE_BUTTON_PRESENT / CREATE_ACCOUNT_PRESENT
+      expect(find.byType(GoogleSignInButton), findsOneWidget, reason: '$label: GOOGLE_BUTTON_PRESENT');
+      expect(find.text('Crear cuenta'), findsOneWidget, reason: '$label: CREATE_ACCOUNT_PRESENT');
+
+      // BOTTOM_ANCHORED_COMPOSITION: el título nunca debe empezar en el
+      // primer tercio del viewport — sigue anclado abajo, con espacio
+      // escénico real arriba.
+      final double titleTop = tester.getRect(find.byKey(const Key('login-title'))).top;
+      expect(titleTop, greaterThan(size.height * 0.25), reason: '$label: BOTTOM_ANCHORED_COMPOSITION');
+
+      // Alcanzabilidad final — incluso si hace falta scroll en pantallas
+      // chicas, Crear cuenta y Google deben poder alcanzarse sin error.
+      await tester.ensureVisible(find.text('Crear cuenta'));
+      await tester.pumpAndSettle();
+      expect(tester.takeException(), isNull, reason: '$label: no overflow tras scrollear a Crear cuenta');
+    });
   });
 }
