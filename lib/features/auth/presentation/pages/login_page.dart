@@ -233,13 +233,27 @@ class _LoginPageState extends ConsumerState<LoginPage> {
               key: const Key('login-portrait-content-max-width'),
               constraints: const BoxConstraints(maxWidth: 480),
               child: Padding(
-                // KORIXA-SCREEN02-MATCH-SCREEN01-VISUAL-SYSTEM-20260910:
-                // mismos insets exactos que `_MobileWelcomeContent`
-                // (24/24/24/32) — antes este padding era (24/20/24/20),
-                // una franja inferior más chica que la ya aprobada de
-                // SCREEN_01 para el mismo tipo de composición (hero
-                // full-bleed + contenido anclado abajo).
-                padding: const EdgeInsets.fromLTRB(AppSpacing.xl, AppSpacing.xl, AppSpacing.xl, 32),
+                // KORIXA-SCREEN02-BOTTOM-ANCHORED-COMPOSITION-20260910: el
+                // inset SUPERIOR baja de `AppSpacing.xl` (24, el valor que
+                // KORIXA-SCREEN02-MATCH-SCREEN01-VISUAL-SYSTEM-20260910
+                // había igualado al de `_MobileWelcomeContent`) a
+                // `AppSpacing.xs` (4) — el dueño reportó que el grupo
+                // completo (título→crear cuenta) empezaba muy arriba,
+                // dejando poca foto de Guatapé visible. Como este bloque
+                // ya está anclado ABAJO (`Align(bottomCenter)`, sin
+                // cambios), este inset superior no protege overflow
+                // alguno mientras el contenido quepa sin scroll — solo
+                // agrega altura muerta arriba del título, empujando TODO
+                // el grupo hacia arriba en bloque. Bajarlo es la palanca
+                // más directa: reduce la altura total del grupo, y como
+                // sigue anclado al fondo, el borde SUPERIOR del grupo baja
+                // exactamente esa diferencia — más foto visible arriba,
+                // sin tocar el estilo de ningún elemento. El inset
+                // INFERIOR (32) no se toca — protege la distancia de
+                // "Crear cuenta" al borde/chrome del dispositivo, pedido
+                // explícito de esta tarea ("no empujar tan abajo que
+                // Crear cuenta/Google/CTA queden pegados al borde").
+                padding: const EdgeInsets.fromLTRB(AppSpacing.xl, AppSpacing.xs, AppSpacing.xl, 32),
                 child: SingleChildScrollView(
                   reverse: true,
                   child: _buildFormColumn(
@@ -266,11 +280,29 @@ class _LoginPageState extends ConsumerState<LoginPage> {
                     indicatorBarWidth: 18,
                     indicatorBarHeight: 4,
                     indicatorBarGap: 5,
-                    // KORIXA-SCREEN02-MATCH-SCREEN01-VISUAL-SYSTEM-20260910:
-                    // mismo espaciado indicador→CTA ya aprobado en
-                    // SCREEN_01 (`AppSpacing.lg` = 20), en vez del
-                    // `sectionGap` (24) que esta pantalla usaba antes.
-                    indicatorToCtaGap: AppSpacing.lg,
+                    // KORIXA-SCREEN02-BOTTOM-ANCHORED-COMPOSITION-20260910:
+                    // `AppSpacing.sm` (8) — antes `AppSpacing.lg` (20,
+                    // KORIXA-SCREEN02-MATCH-SCREEN01-VISUAL-SYSTEM-20260910
+                    // había igualado este valor al de Welcome). En Welcome
+                    // el indicador es el ÚNICO elemento entre el subtítulo
+                    // y el CTA; en Login hay 6 elementos más (campos,
+                    // olvidé-contraseña) — reproducir el MISMO respiro
+                    // amplio ahí, multiplicado por cada gap del grupo, es
+                    // justamente lo que empujaba el grupo completo más
+                    // arriba. Ver `contentSectionGap` abajo para las otras
+                    // 2 separaciones ajustadas por el mismo motivo.
+                    indicatorToCtaGap: AppSpacing.sm,
+                    // KORIXA-SCREEN02-BOTTOM-ANCHORED-COMPOSITION-20260910:
+                    // reduce las separaciones subtítulo→campos y "olvidé
+                    // mi contraseña"→indicador de `sectionGap` (24) a
+                    // `AppSpacing.sm` (8) — el dueño pidió explícitamente
+                    // que estos 10 elementos (título, subtítulo, campos,
+                    // olvidé-contraseña, indicador, CTA, divisor, Google,
+                    // crear-cuenta) se comporten como UN SOLO grupo
+                    // compacto, no como secciones separadas con aire de
+                    // sobra entre ellas. Desktop/phone landscape no reciben
+                    // este parámetro (`null` por defecto) — sin cambio.
+                    contentSectionGap: AppSpacing.sm,
                     showFieldIcons: true,
                     // KORIXA-SCREEN02-MATCH-SCREEN01-VISUAL-SYSTEM-20260910:
                     // reemplaza `enhancedSubtitleContrast` (contraste ad
@@ -495,10 +527,32 @@ class _LoginPageState extends ConsumerState<LoginPage> {
     double indicatorBarGap = 6,
     // KORIXA-SCREEN02-MATCH-SCREEN01-VISUAL-SYSTEM-20260910: `null`
     // preserva `sectionGap` (comportamiento exacto de todo llamador
-    // existente) como separación indicador→CTA. Mobile portrait pasa
-    // `AppSpacing.lg` (20) — el mismo valor ya aprobado entre el
-    // indicador y "Comenzar" en `WelcomePage._MobileWelcomeContent`.
+    // existente) como separación indicador→CTA.
+    //
+    // KORIXA-SCREEN02-BOTTOM-ANCHORED-COMPOSITION-20260910: mobile
+    // portrait ahora pasa `AppSpacing.sm` (8, antes `AppSpacing.lg` = 20)
+    // — el dueño pidió explícitamente que el título/subtítulo/campos/
+    // indicador/CTA/Google/crear-cuenta se comporten como UN SOLO grupo
+    // compacto anclado abajo, no que el indicador quede "flotando" con
+    // el mismo respiro amplio que tenía en SCREEN_01 (donde es el ÚNICO
+    // elemento entre el subtítulo y el CTA). Login tiene 6 elementos más
+    // que Welcome entre el subtítulo y el CTA — cada gap generoso ahí
+    // empuja todo el grupo más arriba, dejando menos foto visible
+    // arriba (justo lo que el dueño reportó como incorrecto).
     double? indicatorToCtaGap,
+    // KORIXA-SCREEN02-BOTTOM-ANCHORED-COMPOSITION-20260910: `null`
+    // preserva `sectionGap` en los 2 lugares que lo usan directamente
+    // (subtítulo→controles en la rama compartida portrait/landscape, y
+    // "olvidé mi contraseña"→indicador, compartida con desktop) — cero
+    // cambio para desktop/phone landscape. Mobile portrait pasa
+    // `AppSpacing.sm` (8, antes 24) en ambos — reduce la altura TOTAL
+    // del grupo de contenido (ya anclado al fondo vía `Align(bottomCenter)`
+    // desde `_buildPortrait`), lo que dado el anclaje inferior visualmente
+    // BAJA el borde superior del grupo (más foto de Guatapé visible
+    // arriba) sin tocar el estilo de ningún elemento individual (título/
+    // subtítulo/campos/CTA/Google quedan pixel-a-pixel iguales, solo se
+    // acercan entre sí).
+    double? contentSectionGap,
     // KORIXA-SCREEN02-LOGIN-MOBILE-PORTRAIT-NO-LOGO-20260910: el dueño
     // pidió que mobile portrait NO muestre el logo Korixa — sin dejar el
     // espacio en blanco donde iría (`showLogo: false` omite tanto el
@@ -550,6 +604,13 @@ class _LoginPageState extends ConsumerState<LoginPage> {
     // campos, que el encargo no pidió tocar).
     final double bottomActionGap = tightenBottomActions ? AppSpacing.sm : sectionGap;
     final double bottomDividerGap = tightenBottomActions ? AppSpacing.xs : dividerGap;
+    // KORIXA-SCREEN02-BOTTOM-ANCHORED-COMPOSITION-20260910: override SOLO
+    // para las 2 separaciones "sueltas" que quedaban entre subtítulo y
+    // controles, y entre "olvidé mi contraseña" e indicador — ver
+    // [contentSectionGap] más arriba. `bottomActionGap` (arriba) ya tiene
+    // su propio mecanismo de ajuste (`tightenBottomActions`) y no se toca
+    // acá.
+    final double effectiveSectionGap = contentSectionGap ?? sectionGap;
     final List<Shadow>? legibilityShadow = floatingOverPhoto
         ? <Shadow>[Shadow(color: Colors.black.withValues(alpha: 0.65), blurRadius: 10)]
         : null;
@@ -707,7 +768,7 @@ class _LoginPageState extends ConsumerState<LoginPage> {
         ),
       ),
       if (showIndicator) ...<Widget>[
-        SizedBox(height: sectionGap),
+        SizedBox(height: effectiveSectionGap),
         // KORIXA-SCREEN02-LOGIN-ALIGNMENT-INDICATOR-POLISH-20260910: el
         // dueño pidió explícitamente "las 3 líneas de la pantalla 1" —
         // reusa `ThreeBarIndicator` (extraído desde `WelcomePage` a
@@ -866,7 +927,7 @@ class _LoginPageState extends ConsumerState<LoginPage> {
               titleWidget,
               const SizedBox(height: AppSpacing.sm),
               subtitleWidget,
-              SizedBox(height: sectionGap),
+              SizedBox(height: effectiveSectionGap),
               ...controlChildren,
             ],
           );

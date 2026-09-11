@@ -1147,7 +1147,14 @@ void main() {
     );
   });
 
-  testWidgets('MOBILE_INDICATOR_TO_CTA_GAP_MATCHES_SCREEN01 = PASS', (WidgetTester tester) async {
+  testWidgets('MOBILE_INDICATOR_TO_CTA_GAP_IS_COMPACT = PASS', (WidgetTester tester) async {
+    // KORIXA-SCREEN02-BOTTOM-ANCHORED-COMPOSITION-20260910: reemplaza el
+    // test homónimo `_MATCHES_SCREEN01` de la tarea anterior — el dueño
+    // corrigió explícitamente que replicar el respiro de SCREEN_01
+    // (`AppSpacing.lg` = 20) en CADA separación del grupo de Login
+    // (que tiene 6 elementos más que Welcome entre el subtítulo y el
+    // CTA) empujaba todo el grupo demasiado arriba. Ahora se prueba el
+    // valor compacto nuevo (`AppSpacing.sm` = 8), no el de SCREEN_01.
     await pumpLoginPage(tester, repository, surfaceSize: const Size(390, 844));
 
     final Rect indicatorRect = tester.getRect(find.byKey(const Key('login-portrait-indicator-row')));
@@ -1155,8 +1162,8 @@ void main() {
     final double gap = ctaRect.top - indicatorRect.bottom;
     expect(
       gap,
-      closeTo(AppSpacing.lg, 0.5),
-      reason: 'el espacio entre el indicador y el CTA debe igualar el ya aprobado en SCREEN_01 (AppSpacing.lg = 20), no el sectionGap (24) anterior',
+      closeTo(AppSpacing.sm, 0.5),
+      reason: 'el espacio entre el indicador y el CTA debe ser el nuevo valor compacto (AppSpacing.sm = 8) pedido por el dueño para que el grupo se sienta como UNA sola pieza',
     );
   });
 
@@ -1177,5 +1184,119 @@ void main() {
     await tester.pumpAndSettle();
 
     expect(find.text('HOME'), findsOneWidget, reason: 'EMAIL_PASSWORD_BEHAVIOR_CHANGED = NO');
+  });
+
+  // ---------------------------------------------------------------------
+  // KORIXA-SCREEN02-BOTTOM-ANCHORED-COMPOSITION-20260910 — corrección del
+  // dueño: el grupo de contenido de Login mobile portrait (título→crear
+  // cuenta) empezaba muy arriba, dejando poca foto de Guatapé visible.
+  // El grupo YA estaba anclado abajo (`Align(bottomCenter)`, sin cambios
+  // esta tarea) — el problema real era la ALTURA total del grupo: cada
+  // separación "suelta" (pensada quando el indicador era el único
+  // elemento entre subtítulo y CTA, como en SCREEN_01) se multiplicaba
+  // por los 6 elementos extra de Login, empujando el borde superior del
+  // grupo hacia arriba. Esta tarea reduce 3 separaciones específicas
+  // (top-padding, subtítulo→campos, indicador→CTA) sin tocar el estilo
+  // de ningún elemento individual — ver comentarios en `login_page.dart`
+  // (`contentSectionGap`, `indicatorToCtaGap`, padding de
+  // `_buildPortrait`) para el detalle exacto de cada valor.
+  // ---------------------------------------------------------------------
+
+  testWidgets('TITLE_MOVED_LOWER_VS_PREVIOUS_ROUND = PASS', (WidgetTester tester) async {
+    await pumpLoginPage(tester, repository, surfaceSize: const Size(390, 844));
+
+    // Valor de referencia medido empíricamente (mismo patrón ya usado en
+    // `LOGIN_DESKTOP_SUBTITLE_POSITION_MATCHES_PREVIOUS_REFERENCE` más
+    // arriba) en el commit `30865b915755a4cb00b867d24b0b77c051bbb92e`
+    // (inmediatamente antes de esta tarea, con
+    // `matchScreen01Typography`/`floatingOverPhoto:false` ya aplicados
+    // pero sin el ajuste de separaciones de esta tarea): TITLE_TOP = 220
+    // a 390×844. Tras este encargo el título debe empezar MÁS ABAJO, no
+    // en la misma posición ni más arriba.
+    const double previousTitleTop = 220.0;
+    final double titleTop = tester.getRect(find.byKey(const Key('login-title'))).top;
+    expect(
+      titleTop,
+      greaterThan(previousTitleTop),
+      reason: 'TITLE_MOVED_LOWER: el título debe empezar más abajo que en la ronda anterior (220 a 390x844)',
+    );
+    expect(
+      titleTop - previousTitleTop,
+      greaterThanOrEqualTo(30),
+      reason: 'el desplazamiento hacia abajo debe ser una mejora real y medible, no un ajuste cosmético mínimo',
+    );
+  });
+
+  testWidgets('UPPER_SCENIC_SPACE_INCREASED = PASS', (WidgetTester tester) async {
+    // El hero sigue siendo full-bleed (sin cambios, `BACKGROUND_IMAGE_
+    // CHANGED = NO`) — el "espacio escénico superior" real es el área
+    // por ENCIMA del título, que antes ocupaba el propio grupo de
+    // contenido (padding superior + espacio muerto entre secciones) sin
+    // mostrar foto. Medirlo como "todo lo que queda arriba del título"
+    // prueba directamente que ahora se ve MÁS foto sin obstruir, no solo
+    // que el título se movió por casualidad.
+    for (final Size size in const <Size>[Size(360, 800), Size(390, 844), Size(430, 932)]) {
+      await pumpLoginPage(tester, repository, surfaceSize: size);
+      final double titleTop = tester.getRect(find.byKey(const Key('login-title'))).top;
+      // A los 3 tamaños, `TITLE_TOP` coincide con `430x932`'s valor
+      // desplazado por la diferencia de alto de viewport respecto a
+      // 390x844 (mismo contenido, mismo padding, el viewport extra se
+      // reparte antes del título al estar anclado abajo) — el umbral de
+      // 25% del alto ya deja margen bajo cualquiera de los 3.
+      expect(
+        titleTop,
+        greaterThan(size.height * 0.20),
+        reason:
+            'UPPER_SCENIC_SPACE_INCREASED en ${size.width.toInt()}x${size.height.toInt()}: debe quedar al menos un 20% del alto del viewport de foto visible sin el grupo de contenido encima',
+      );
+    }
+  });
+
+  testWidgets('SCREEN02_CONTENT_GROUP_BOTTOM_ANCHORED = PASS', (WidgetTester tester) async {
+    // El grupo completo (título→crear cuenta) debe comportarse como UNA
+    // sola pieza anclada al fondo — se prueba midiendo que el borde
+    // inferior de "Crear cuenta" queda cerca del borde inferior real del
+    // viewport (dentro del inset de seguridad ya existente, 32), no en
+    // el medio de la pantalla ni con un hueco grande debajo.
+    const Size mobileSize = Size(390, 844);
+    await pumpLoginPage(tester, repository, surfaceSize: mobileSize);
+
+    final double createAccountBottom = tester.getRect(find.text('Crear cuenta')).bottom;
+    expect(
+      mobileSize.height - createAccountBottom,
+      lessThan(60),
+      reason: 'SCREEN02_CONTENT_GROUP_BOTTOM_ANCHORED: "Crear cuenta" debe quedar cerca del borde inferior real (dentro del inset de 32 + su propia altura), no flotando en el medio de la pantalla',
+    );
+  });
+
+  const <String, Size>{
+    '360x800': Size(360, 800),
+    '390x844': Size(390, 844),
+    '430x932': Size(430, 932),
+    '768x1024': Size(768, 1024),
+  }.forEach((String label, Size size) {
+    testWidgets('$label ALL_LOGIN_ACTIONS_VISIBLE_AND_NO_OVERFLOW = PASS', (WidgetTester tester) async {
+      await pumpLoginPage(tester, repository, surfaceSize: size);
+      expect(tester.takeException(), isNull, reason: 'NO_OVERFLOW en $label');
+
+      // Los 10 elementos del grupo, pedidos explícitamente por el
+      // encargo, deben seguir alcanzables — sin overflow y sin que
+      // ninguno quede recortado/oculto.
+      expect(find.text('Bienvenido de nuevo'), findsOneWidget, reason: '$label: título visible');
+      expect(find.text('Inicia sesión para continuar tu ruta'), findsOneWidget, reason: '$label: subtítulo visible');
+      expect(find.byType(TextFormField), findsNWidgets(2), reason: '$label: email + password visibles');
+      expect(find.text('¿Olvidaste tu contraseña?'), findsOneWidget, reason: '$label: olvidé mi contraseña visible');
+      expect(find.byKey(const Key('login-portrait-indicator-row')), findsOneWidget, reason: '$label: indicador visible');
+      expect(find.byType(PrimaryGradientButton), findsOneWidget, reason: '$label: CTA visible');
+      expect(find.byType(GoogleSignInButton), findsOneWidget, reason: '$label: GOOGLE_POSITION: botón de Google visible');
+      expect(find.text('Crear cuenta'), findsOneWidget, reason: '$label: CREATE_ACCOUNT_VISIBLE');
+
+      // Puede requerir scroll en pantallas chicas (pedido explícito del
+      // encargo: "the content should remain scrollable when required"),
+      // pero cada elemento debe seguir siendo alcanzable sin error.
+      await tester.ensureVisible(find.text('Crear cuenta'));
+      await tester.pumpAndSettle();
+      expect(tester.takeException(), isNull, reason: 'NO_OVERFLOW tras scrollear a Crear cuenta en $label');
+    });
   });
 }
