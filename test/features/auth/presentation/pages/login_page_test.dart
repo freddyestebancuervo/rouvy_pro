@@ -1650,4 +1650,155 @@ void main() {
     final Size indicatorSize = tester.getSize(indicatorFinder);
     expect(indicatorSize.width, closeTo(64, 0.5), reason: 'SCREEN01_UNCHANGED: tamaño del indicador de Welcome (18/4/5) sin cambios');
   });
+
+  // ---------------------------------------------------------------------
+  // KORIXA-SCREEN02-MOBILE-CONDITIONAL-SCROLL-STABLE-BLOCK-20260911 —
+  // evidencia de video en dispositivo real: el fondo (Guatapé/ciclista)
+  // queda quieto, pero el GRUPO DE CONTENIDO completo (título, subtítulo,
+  // campos, indicador, CTA, Google, Crear cuenta) se movía verticalmente
+  // como una capa scrolleable independiente, incluso a un alto de
+  // viewport normal donde todo ya entraba sin necesidad de scroll. Causa
+  // raíz verificada en código (no asumida): el `SingleChildScrollView`
+  // de `_buildPortrait` quedaba SIEMPRE presente y arrastrable —
+  // incluso con `maxScrollExtent == 0` un `Scrollable` sigue aceptando
+  // el gesto de arrastre, lo que en algunos navegadores produce el
+  // "rebote"/desplazamiento visible que el dueño grabó. La corrección
+  // usa `NeverScrollableScrollPhysics` cuando el contenido ya entra sin
+  // necesidad de inflar el piso de altura (`_minPortraitCompositionHeight`),
+  // desactivando el gesto de arrastre por completo — no solo clampeando
+  // la posición a 0. Estos tests simulan un arrastre real
+  // (`tester.drag`), no solo miden geometría estática, porque la
+  // regresión original nunca se habría detectado con mediciones
+  // estáticas (los tests de rondas anteriores, todos geometría post-
+  // `pumpAndSettle`, pasaron aunque el bug ya existía).
+  // ---------------------------------------------------------------------
+
+  testWidgets('NORMAL_390x844_DRAG_DOES_NOT_MOVE_CONTENT = PASS', (WidgetTester tester) async {
+    await pumpLoginPage(tester, repository, surfaceSize: const Size(390, 844));
+    final Finder titleFinder = find.byKey(const Key('login-title'));
+    final double before = tester.getRect(titleFinder).top;
+    expect(before, closeTo(344.0, 0.5), reason: 'NORMAL_390x844_TITLE_TOP_Y ≈ 344, referencia ya aprobada');
+
+    // Arrastre real hacia arriba (simula un swipe táctil) — el grupo NO
+    // debe moverse en absoluto.
+    await tester.drag(find.byType(SingleChildScrollView).first, const Offset(0, -300));
+    await tester.pumpAndSettle();
+
+    final double after = tester.getRect(titleFinder).top;
+    expect(
+      (after - before).abs(),
+      lessThanOrEqualTo(2.0),
+      reason: 'CONTENT_BLOCK_VERTICAL_DRIFT <= 2px: el grupo de Login no debe desplazarse con un gesto de arrastre a un alto normal',
+    );
+
+    final SingleChildScrollView scrollView = tester.widget(find.byType(SingleChildScrollView).first);
+    expect(
+      scrollView.physics,
+      isA<NeverScrollableScrollPhysics>(),
+      reason: 'SCROLL_ENABLED = NO: la física debe desactivar el gesto de arrastre por completo a 390x844',
+    );
+  });
+
+  testWidgets('NORMAL_430x932_SCROLL_DISABLED = PASS', (WidgetTester tester) async {
+    await pumpLoginPage(tester, repository, surfaceSize: const Size(430, 932));
+    final SingleChildScrollView scrollView = tester.widget(find.byType(SingleChildScrollView).first);
+    expect(scrollView.physics, isA<NeverScrollableScrollPhysics>(), reason: 'SCROLL_ENABLED = NO a 430x932');
+
+    final Finder titleFinder = find.byKey(const Key('login-title'));
+    final double before = tester.getRect(titleFinder).top;
+    await tester.drag(find.byType(SingleChildScrollView).first, const Offset(0, -300));
+    await tester.pumpAndSettle();
+    final double after = tester.getRect(titleFinder).top;
+    expect((after - before).abs(), lessThanOrEqualTo(2.0), reason: 'sin desplazamiento tras arrastre a 430x932');
+  });
+
+  testWidgets('NORMAL_360x800_SCROLL_DISABLED_IF_FITS = PASS', (WidgetTester tester) async {
+    // 360x800 > el piso de 750 → el contenido natural (~500px) entra
+    // sin inflar nada, así que el scroll debe quedar desactivado igual
+    // que a 390x844/430x932.
+    await pumpLoginPage(tester, repository, surfaceSize: const Size(360, 800));
+    final SingleChildScrollView scrollView = tester.widget(find.byType(SingleChildScrollView).first);
+    expect(scrollView.physics, isA<NeverScrollableScrollPhysics>(), reason: 'SCROLL_ENABLED = NO a 360x800 (entra sin scroll)');
+  });
+
+  testWidgets('SHORT_390x700_SCROLL_ENABLED = PASS', (WidgetTester tester) async {
+    await pumpLoginPage(tester, repository, surfaceSize: const Size(390, 700));
+    final SingleChildScrollView scrollView = tester.widget(find.byType(SingleChildScrollView).first);
+    expect(
+      scrollView.physics,
+      isNot(isA<NeverScrollableScrollPhysics>()),
+      reason: 'SCROLL_ENABLED = YES a 390x700 — el piso fuerza más altura de la disponible, así que el scroll debe seguir activo',
+    );
+
+    // El arrastre SÍ debe mover el contenido acá.
+    final Finder titleFinder = find.byKey(const Key('login-title'));
+    final double before = tester.getRect(titleFinder).top;
+    await tester.drag(find.byType(SingleChildScrollView).first, const Offset(0, -100));
+    await tester.pumpAndSettle();
+    final double after = tester.getRect(titleFinder).top;
+    expect((before - after).abs(), greaterThan(2.0), reason: 'a 390x700 el arrastre SÍ debe desplazar el contenido (scroll intencional)');
+
+    await tester.ensureVisible(find.text('Crear cuenta'));
+    await tester.pumpAndSettle();
+    expect(tester.takeException(), isNull);
+    expect(find.text('Crear cuenta'), findsOneWidget, reason: 'ALL_ACTIONS_REACHABLE a 390x700');
+  });
+
+  testWidgets('SHORT_360x680_SCROLL_ENABLED = PASS', (WidgetTester tester) async {
+    await pumpLoginPage(tester, repository, surfaceSize: const Size(360, 680));
+    final SingleChildScrollView scrollView = tester.widget(find.byType(SingleChildScrollView).first);
+    expect(
+      scrollView.physics,
+      isNot(isA<NeverScrollableScrollPhysics>()),
+      reason: 'SCROLL_ENABLED = YES a 360x680 (el caso más corto pedido)',
+    );
+    expect(tester.takeException(), isNull, reason: 'NO_OVERFLOW a 360x680');
+
+    await tester.ensureVisible(find.text('Crear cuenta'));
+    await tester.pumpAndSettle();
+    expect(tester.takeException(), isNull);
+    expect(find.text('Crear cuenta'), findsOneWidget, reason: 'ALL_ACTIONS_REACHABLE a 360x680');
+
+    await tester.ensureVisible(find.byType(GoogleSignInButton));
+    await tester.pumpAndSettle();
+    expect(tester.takeException(), isNull);
+  });
+
+  const <String, Size>{
+    '360x680': Size(360, 680),
+    '360x800': Size(360, 800),
+    '390x700': Size(390, 700),
+    '390x740': Size(390, 740),
+    '390x844': Size(390, 844),
+    '430x760': Size(430, 760),
+    '430x932': Size(430, 932),
+    '768x1024': Size(768, 1024),
+  }.forEach((String label, Size size) {
+    testWidgets('SCROLL_PHYSICS_MATCHES_NEED_$label = PASS', (WidgetTester tester) async {
+      await pumpLoginPage(tester, repository, surfaceSize: size);
+      expect(tester.takeException(), isNull, reason: 'NO_OVERFLOW en $label');
+
+      final SingleChildScrollView scrollView = tester.widget(find.byType(SingleChildScrollView).first);
+      final bool expectedScrollNeeded = size.height < 750;
+      if (expectedScrollNeeded) {
+        expect(
+          scrollView.physics,
+          isNot(isA<NeverScrollableScrollPhysics>()),
+          reason: '$label: SCROLL_ENABLED debe ser YES (viewport más corto que el piso de 750)',
+        );
+      } else {
+        expect(
+          scrollView.physics,
+          isA<NeverScrollableScrollPhysics>(),
+          reason: '$label: SCROLL_ENABLED debe ser NO (el contenido ya entra sin inflar el piso)',
+        );
+      }
+
+      // Alcanzabilidad final, con o sin scroll según corresponda.
+      await tester.ensureVisible(find.text('Crear cuenta'));
+      await tester.pumpAndSettle();
+      expect(tester.takeException(), isNull, reason: '$label: NO_OVERFLOW tras intentar llegar a Crear cuenta');
+      expect(find.text('Crear cuenta'), findsOneWidget, reason: '$label: ALL_ACTIONS_REACHABLE');
+    });
+  });
 }

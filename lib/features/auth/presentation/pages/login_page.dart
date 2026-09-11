@@ -304,6 +304,29 @@ class _LoginPageState extends ConsumerState<LoginPage> {
               final double actualViewportHeight = safeAreaConstraints.maxHeight;
               final double compositionHeight =
                   math.max(actualViewportHeight, _minPortraitCompositionHeight);
+              // KORIXA-SCREEN02-MOBILE-CONDITIONAL-SCROLL-STABLE-BLOCK-
+              // 20260911: evidencia de video en dispositivo real del dueño
+              // — con la ronda anterior, el `SingleChildScrollView` de
+              // abajo quedaba SIEMPRE presente y arrastrable, incluso
+              // cuando el contenido entraba sin necesidad de scroll
+              // (viewport >= `_minPortraitCompositionHeight`, el piso es
+              // un no-op ahí). Un `SingleChildScrollView` con
+              // `maxScrollExtent == 0` sigue aceptando el gesto de
+              // arrastre — en algunos navegadores/plataformas eso produce
+              // el "rebote"/desplazamiento visible del grupo completo que
+              // el dueño grabó, aunque nuestros widget tests (que miden
+              // geometría estática tras `pumpAndSettle`, nunca simulan un
+              // arrastre táctil real) nunca lo detectaron. La condición
+              // de scroll es 100% determinista a partir de la MISMA
+              // comparación que ya decide el piso — si el viewport real
+              // ya alcanza el piso, el contenido natural (~500px, medido)
+              // SIEMPRE entra sin necesidad de inflar nada, así que
+              // jamás hace falta scrollear; si el viewport real es más
+              // corto que el piso, el piso fuerza una altura MAYOR que
+              // el viewport real por diseño (para proteger el espacio
+              // escénico), así que el scroll SIEMPRE hace falta ahí. No
+              // se necesita una segunda pasada de medición.
+              final bool scrollNeeded = actualViewportHeight < _minPortraitCompositionHeight;
 
               return Align(
                 alignment: Alignment.topCenter,
@@ -329,6 +352,19 @@ class _LoginPageState extends ConsumerState<LoginPage> {
                   child: SizedBox(
                     height: actualViewportHeight,
                     child: SingleChildScrollView(
+                      // KORIXA-SCREEN02-MOBILE-CONDITIONAL-SCROLL-STABLE-
+                      // BLOCK-20260911: `NeverScrollableScrollPhysics`
+                      // cuando `!scrollNeeded` — desactiva por completo el
+                      // reconocedor de gestos de arrastre/rebote/overscroll
+                      // del `Scrollable` (no solo "clampea la posición a
+                      // 0"; el widget deja de responder al gesto), así el
+                      // grupo de contenido queda tan estático como si no
+                      // hubiera ningún `ScrollView` — sin necesitar dos
+                      // árboles de widgets distintos para cada caso.
+                      // Cuando `scrollNeeded` (viewport corto), usa la
+                      // física por defecto de la plataforma para permitir
+                      // scrollear hacia Google/Crear cuenta.
+                      physics: scrollNeeded ? null : const NeverScrollableScrollPhysics(),
                       child: ConstrainedBox(
                         // El piso de altura vive AQUÍ — sobre el propio
                         // contenido con su padding, no sobre el `SizedBox`
