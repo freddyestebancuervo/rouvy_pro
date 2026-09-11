@@ -206,7 +206,34 @@ class _LoginPageState extends ConsumerState<LoginPage> {
       children: <Widget>[
         const ExcludeSemantics(
           key: Key('login-hero-image'),
-          child: _LoginHeroImage(alignment: Alignment(0.15, -0.05)),
+          // KORIXA-SCREEN02-FINAL-HERO-LOGO-VISIBILITY-ONLY-20260911: el
+          // dueño reportó que el logo Korixa en la espalda del jersey del
+          // ciclista (lo que el encargo describe como "la parte trasera
+          // de la pantaloneta" — es el mismo elemento de marca visible en
+          // la foto, ver docblock de [_LoginHeroCyclistFocus]) ya no se
+          // alcanza a ver en mobile portrait. Causa real, verificada
+          // matemáticamente antes de tocar código: con `BoxFit.cover` en
+          // un viewport MÁS ANGOSTO que la foto (1672×941, panorámica),
+          // el alto SIEMPRE es el eje que manda — la imagen escalada
+          // encaja el alto EXACTO del viewport con cero recorte
+          // vertical, así que el parámetro `alignment` (su componente Y)
+          // NUNCA tuvo ningún efecto visual en ninguna composición de
+          // teléfono en vertical, en NINGUNA ronda anterior de esta
+          // tarea — el logo del jersey siempre se dibujaba a la MISMA
+          // fracción vertical de pantalla (~58%) sin importar qué valor
+          // de alignment.y se le pasara. A esa fracción, el bloque de
+          // contenido (anclado abajo desde KORIXA-SCREEN02-BOTTOM-
+          // ANCHORED-COMPOSITION-20260910/KORIXA-SCREEN02-TRUE-BOTTOM-
+          // COMPOSITION-OWNER-CORRECTION-20260911) ya tapa esa zona por
+          // completo. [_LoginHeroCyclistFocus] resuelve esto con un
+          // recorte/zoom vertical real (no solo `alignment`): agranda la
+          // foto ya encuadrada y la ancla al borde INFERIOR, recortando
+          // solo la franja superior (cielo/punta de la Piedra del Peñol,
+          // nunca la roca principal) — así el logo del jersey queda
+          // desplazado hacia una fracción de pantalla más alta, en la
+          // franja despejada arriba del bloque de contenido, sin mover
+          // ese bloque ni un píxel.
+          child: _LoginHeroCyclistFocus(),
         ),
         // Mismo scrim vertical ya aprobado en Welcome mobile
         // (`AppGradients.imageScrimBottom`) — transparente arriba,
@@ -1047,6 +1074,65 @@ class _LoginHeroImage extends StatelessWidget {
       'assets/images/korixa_login_hero_guatape.webp',
       fit: BoxFit.cover,
       alignment: alignment,
+    );
+  }
+}
+
+/// KORIXA-SCREEN02-FINAL-HERO-LOGO-VISIBILITY-ONLY-20260911: encuadre
+/// EXCLUSIVO de mobile portrait — desktop y phone landscape siguen
+/// usando [_LoginHeroImage] sin cambios. Mismo archivo aprobado
+/// (`korixa_login_hero_guatape.webp`), nunca reemplazado/recortado en
+/// disco — este widget solo aplica un zoom+recorte en TIEMPO DE
+/// RENDERIZADO, ya sobre la imagen que [_LoginHeroImage] ya deja
+/// cubriendo el viewport completo con `BoxFit.cover`.
+///
+/// Por qué no bastaba con `alignment.y` (lo que sí resuelve mobile
+/// LANDSCAPE/desktop, donde el viewport es más ancho que alto): la foto
+/// es panorámica (1672×941, ratio ≈1.78). En CUALQUIER viewport de
+/// teléfono en VERTICAL (más angosto que ese ratio, los 4 tamaños
+/// requeridos por este encargo incluidos), `BoxFit.cover` queda
+/// gobernado por el alto — la imagen escalada encaja el alto EXACTO del
+/// viewport con cero remanente vertical para recortar. Con cero
+/// remanente, el componente Y de `alignment` matemáticamente no puede
+/// desplazar nada: el logo del jersey del ciclista siempre terminaba
+/// dibujado a la MISMA fracción de alto de pantalla (~58%, verificado)
+/// sin importar qué valor se le pasara — la fracción exacta donde el
+/// bloque de contenido (anclado abajo, sin tocar esta tarea) ya lo tapa
+/// por completo.
+///
+/// La solución real necesita crear remanente vertical donde antes no
+/// había ninguno: agranda la imagen YA cubierta (`scale`, aplicado por
+/// igual a ancho y alto — nunca solo a uno, eso la distorsionaría/
+/// estiraría, degradando la calidad del ciclista que el encargo pide
+/// mantener) y la ancla al borde INFERIOR (`Alignment.bottomCenter`) —
+/// el borde de abajo (camino/rueda delantera) queda exactamente donde
+/// ya estaba, y el recorte que genera el zoom cae entero sobre el borde
+/// SUPERIOR (cielo y la punta/antena de la Piedra del Peñol — nunca la
+/// roca principal, que sigue ocupando la mayor parte del encuadre).
+/// `ClipRect` evita que el excedente fuera de los bordes del recuadro
+/// se pinte más allá de él (sin esto, `Transform.scale` seguiría
+/// dibujando ese excedente, invisible en la práctica porque el `Stack`
+/// exterior ya ocupa la pantalla completa, pero incorrecto en
+/// principio).
+///
+/// `_zoom = 1.45`: valor medido/ajustado para que el logo del jersey
+/// (fracción original ≈0.58 del alto de la foto) termine visible a
+/// ≈0.38 del alto de pantalla — por encima del inicio del bloque de
+/// contenido (≈0.41-0.52 según el tamaño, los 4 tamaños requeridos) en
+/// los 4 viewports pedidos, verificado con capturas reales.
+class _LoginHeroCyclistFocus extends StatelessWidget {
+  const _LoginHeroCyclistFocus();
+
+  static const double _zoom = 1.45;
+
+  @override
+  Widget build(BuildContext context) {
+    return ClipRect(
+      child: Transform.scale(
+        scale: _zoom,
+        alignment: Alignment.bottomCenter,
+        child: const _LoginHeroImage(alignment: Alignment(0.15, -0.05)),
+      ),
     );
   }
 }
