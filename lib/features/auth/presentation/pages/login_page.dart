@@ -240,6 +240,11 @@ class _LoginPageState extends ConsumerState<LoginPage> {
                   indicatorBarWidth: 18,
                   indicatorBarHeight: 4,
                   indicatorBarGap: 5,
+                  showFieldIcons: true,
+                  enhancedSubtitleContrast: true,
+                  ctaIcon: Icons.arrow_forward_rounded,
+                  ctaIconTrailing: true,
+                  tightenBottomActions: true,
                 ),
               ),
             ),
@@ -448,10 +453,41 @@ class _LoginPageState extends ConsumerState<LoginPage> {
     // lo oculta visualmente). Desktop y phone landscape conservan el
     // logo (`showLogo` default `true`, sin tocar sus llamadores).
     bool showLogo = true,
+    // KORIXA-PR127-LOGIN-MOBILE-VISUAL-POLISH-20260910: los siguientes 5
+    // parámetros son EXCLUSIVOS de mobile portrait — todos con default
+    // que preserva el comportamiento actual de desktop/phone landscape
+    // sin tocar sus llamadores.
+    //
+    // Íconos mail/lock a la izquierda de los campos (Material, ya
+    // incluidos en el SDK — cero dependencias nuevas).
+    bool showFieldIcons = false,
+    // Contraste reforzado del subtítulo: color más claro que
+    // `DarkTech.textSecondary` + sombra de texto más fuerte — el fondo
+    // ahora es la foto completa (antes un panel sólido), así que el
+    // contraste por defecto ya no alcanza en todas las zonas de la foto.
+    bool enhancedSubtitleContrast = false,
+    // Ícono decorativo dentro del CTA — `iconTrailing: true` lo ubica a
+    // la derecha del texto (mockup aprobado por el dueño). Nunca cambia
+    // `onPressed`/semántica del botón (ver `PrimaryGradientButton`).
+    IconData? ctaIcon,
+    bool ctaIconTrailing = false,
+    // Reduce los gaps ENTRE CTA→divisor→Google→Crear-cuenta
+    // específicamente (no toca el gap logo→título→subtítulo→campos) —
+    // el dueño pidió que este grupo se sienta "más junto", sin tocar
+    // `sectionGap`/`dividerGap` en el resto del formulario.
+    bool tightenBottomActions = false,
   }) {
     final TextTheme textTheme = Theme.of(context).textTheme;
     final double sectionGap = compact ? AppSpacing.sm : AppSpacing.xl;
     final double dividerGap = compact ? AppSpacing.sm : AppSpacing.lg;
+    // KORIXA-PR127-LOGIN-MOBILE-VISUAL-POLISH-20260910: el dueño pidió
+    // que el grupo CTA→Google→Crear-cuenta se sienta "más junto" en
+    // mobile portrait — gaps más chicos SOLO entre esos 3 elementos,
+    // sin tocar `sectionGap`/`dividerGap` (siguen gobernando el resto
+    // del formulario, incluida la separación logo→título→subtítulo→
+    // campos, que el encargo no pidió tocar).
+    final double bottomActionGap = tightenBottomActions ? AppSpacing.sm : sectionGap;
+    final double bottomDividerGap = tightenBottomActions ? AppSpacing.xs : dividerGap;
     final List<Shadow>? legibilityShadow = floatingOverPhoto
         ? <Shadow>[Shadow(color: Colors.black.withValues(alpha: 0.65), blurRadius: 10)]
         : null;
@@ -523,9 +559,22 @@ class _LoginPageState extends ConsumerState<LoginPage> {
       // posición/alineación anterior.
       style: textTheme.bodyMedium?.copyWith(
         fontSize: subtitleFontSize,
-        color: DarkTech.textSecondary,
+        // KORIXA-PR127-LOGIN-MOBILE-VISUAL-POLISH-20260910: en mobile
+        // portrait el fondo ahora es la foto completa (antes un panel
+        // sólido) — `DarkTech.textSecondary` (un gris medio) pierde
+        // contraste contra zonas claras de la foto. `enhancedSubtitleContrast`
+        // usa un blanco casi puro con leve transparencia en su lugar,
+        // combinado con una sombra más fuerte abajo — sigue leyéndose
+        // claramente "secundario" (más tenue que el título) por peso de
+        // fuente, no por un gris que puede perderse contra el cielo/foto.
+        color: enhancedSubtitleContrast ? Colors.white.withValues(alpha: 0.92) : DarkTech.textSecondary,
         fontWeight: subtitleFontSize != null ? FontWeight.w500 : null,
-        shadows: legibilityShadow,
+        shadows: enhancedSubtitleContrast
+            ? <Shadow>[
+                Shadow(color: Colors.black.withValues(alpha: 0.85), blurRadius: 14),
+                Shadow(color: Colors.black.withValues(alpha: 0.6), blurRadius: 4),
+              ]
+            : legibilityShadow,
       ),
     );
 
@@ -535,7 +584,10 @@ class _LoginPageState extends ConsumerState<LoginPage> {
         keyboardType: TextInputType.emailAddress,
         textInputAction: TextInputAction.next,
         autofillHints: const <String>[AutofillHints.email],
-        decoration: InputDecoration(labelText: l10n.emailLabel),
+        decoration: InputDecoration(
+          labelText: l10n.emailLabel,
+          prefixIcon: showFieldIcons ? const Icon(Icons.mail_outline) : null,
+        ),
         validator: (String? value) => Validators.email(value).message(l10n),
       ),
       SizedBox(height: compact ? AppSpacing.sm : AppSpacing.base),
@@ -546,6 +598,7 @@ class _LoginPageState extends ConsumerState<LoginPage> {
         autofillHints: const <String>[AutofillHints.password],
         decoration: InputDecoration(
           labelText: l10n.passwordLabel,
+          prefixIcon: showFieldIcons ? const Icon(Icons.lock_outline) : null,
           suffixIcon: Semantics(
             // `toggled` anuncia al lector de pantalla el estado actual
             // (mostrando/ocultando), no solo "botón" — sin esto,
@@ -621,8 +674,10 @@ class _LoginPageState extends ConsumerState<LoginPage> {
         onPressed: anyLoading ? null : _handleSubmit,
         height: ctaHeight ?? 52,
         fontSize: ctaFontSize,
+        icon: ctaIcon,
+        iconTrailing: ctaIconTrailing,
       ),
-      SizedBox(height: sectionGap),
+      SizedBox(height: bottomActionGap),
       Row(
         children: <Widget>[
           const Expanded(child: Divider()),
@@ -633,7 +688,7 @@ class _LoginPageState extends ConsumerState<LoginPage> {
           const Expanded(child: Divider()),
         ],
       ),
-      SizedBox(height: dividerGap),
+      SizedBox(height: bottomDividerGap),
       GoogleSignInButton(
         label: l10n.continueWithGoogle,
         isLoading: socialState.isLoading,
@@ -655,7 +710,7 @@ class _LoginPageState extends ConsumerState<LoginPage> {
                   ),
         ),
       ],
-      SizedBox(height: sectionGap),
+      SizedBox(height: bottomActionGap),
       Wrap(
         alignment: WrapAlignment.center,
         crossAxisAlignment: WrapCrossAlignment.center,

@@ -9,6 +9,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:mocktail/mocktail.dart';
 
 import 'package:rouvy_pro/app/theme/app_colors.dart';
+import 'package:rouvy_pro/app/theme/app_gradients.dart';
 import 'package:rouvy_pro/app/theme/app_spacing.dart';
 import 'package:rouvy_pro/core/design_system/dark_tech_buttons.dart';
 import 'package:rouvy_pro/core/error/failures.dart';
@@ -900,18 +901,91 @@ void main() {
   });
 
   testWidgets('MOBILE_CONTENT_HIERARCHY_REACHABLE_NO_OVERFLOW = PASS', (WidgetTester tester) async {
-    for (final Size size in const <Size>[Size(390, 844), Size(375, 812), Size(360, 800)]) {
+    // KORIXA-PR127-LOGIN-MOBILE-VISUAL-POLISH-20260910: barrido exacto
+    // pedido por el encargo — 360x800/390x844/430x932 como objetivo
+    // primario, más 768x1024 (tablet portrait) como chequeo de
+    // seguridad adicional. 375x812 (iPhone X/11 Pro) se conserva del
+    // barrido anterior, no pedido explícitamente pero sin costo extra.
+    for (final Size size in const <Size>[
+      Size(360, 800),
+      Size(390, 844),
+      Size(375, 812),
+      Size(430, 932),
+      Size(768, 1024),
+    ]) {
       await pumpLoginPage(tester, repository, surfaceSize: size);
-      expect(tester.takeException(), isNull, reason: 'no debe haber overflow en ${size.width.toInt()}x${size.height.toInt()}');
+      expect(tester.takeException(), isNull, reason: 'NO_RENDER_OVERFLOW en ${size.width.toInt()}x${size.height.toInt()}');
+
+      final Size heroSize = tester.getSize(find.byKey(const Key('login-hero-image')));
+      expect(heroSize, size, reason: 'MOBILE_HERO_FULL_SCREEN en ${size.width.toInt()}x${size.height.toInt()}');
 
       expect(find.text('Bienvenido de nuevo'), findsOneWidget, reason: 'TITLE_VISIBLE');
       expect(find.text('Inicia sesión para continuar tu ruta'), findsOneWidget, reason: 'SUBTITLE_VISIBLE');
       expect(find.byType(TextFormField), findsNWidgets(2), reason: 'EMAIL_VISIBLE + PASSWORD_VISIBLE');
       expect(find.text('¿Olvidaste tu contraseña?'), findsOneWidget, reason: 'FORGOT_PASSWORD_VISIBLE');
-      expect(find.byType(PrimaryGradientButton), findsOneWidget, reason: 'CTA_REACHABLE');
-      expect(find.byType(GoogleSignInButton), findsOneWidget, reason: 'GOOGLE_REACHABLE');
-      expect(find.text('Crear cuenta'), findsOneWidget, reason: 'CREATE_ACCOUNT_REACHABLE');
+
+      final Finder indicatorFinder = find.byKey(const Key('login-portrait-indicator-row'));
+      expect(indicatorFinder, findsOneWidget, reason: 'THREE_LINE_INDICATOR_PRESENT en ${size.width.toInt()}x${size.height.toInt()}');
+      final List<Container> bars = tester
+          .widgetList<Container>(find.descendant(of: indicatorFinder, matching: find.byType(Container)))
+          .toList();
+      expect(bars.length, 3, reason: 'el indicador debe mostrar exactamente 3 líneas');
+
+      expect(find.byType(PrimaryGradientButton), findsOneWidget, reason: 'LOGIN_BUTTON_PRESENT / CTA_REACHABLE');
+      expect(find.byType(GoogleSignInButton), findsOneWidget, reason: 'GOOGLE_BUTTON_PRESENT / GOOGLE_REACHABLE');
+      expect(find.text('Crear cuenta'), findsOneWidget, reason: 'CREATE_ACCOUNT_PRESENT / CREATE_ACCOUNT_REACHABLE');
     }
+  });
+
+  testWidgets('ACTIVE_INDICATOR_USES_KORIXA_GRADIENT = PASS', (WidgetTester tester) async {
+    await pumpLoginPage(tester, repository, surfaceSize: const Size(390, 844));
+
+    final Finder indicatorFinder = find.byKey(const Key('login-portrait-indicator-row'));
+    final List<Container> bars = tester
+        .widgetList<Container>(find.descendant(of: indicatorFinder, matching: find.byType(Container)))
+        .toList();
+    expect(bars.length, 3);
+
+    // El encargo pide explícitamente que la barra activa (central) use
+    // el MISMO gradiente morado→azul que el CTA principal — se compara
+    // por identidad exacta contra `AppGradients.primaryCta`, no solo
+    // "algún gradiente cualquiera".
+    final BoxDecoration leftDecoration = bars[0].decoration! as BoxDecoration;
+    final BoxDecoration centerDecoration = bars[1].decoration! as BoxDecoration;
+    final BoxDecoration rightDecoration = bars[2].decoration! as BoxDecoration;
+
+    expect(leftDecoration.gradient, isNull, reason: 'LEFT_INDICATOR_GRAY — la barra izquierda no debe tener gradiente');
+    expect(leftDecoration.color, DarkTech.border, reason: 'LEFT_INDICATOR_GRAY');
+
+    expect(centerDecoration.gradient, AppGradients.primaryCta, reason: 'CENTER_INDICATOR_PURPLE_BLUE_GRADIENT debe ser exactamente el gradiente del CTA principal');
+
+    expect(rightDecoration.gradient, isNull, reason: 'RIGHT_INDICATOR_GRAY — la barra derecha no debe tener gradiente');
+    expect(rightDecoration.color, DarkTech.border, reason: 'RIGHT_INDICATOR_GRAY');
+  });
+
+  testWidgets('MOBILE_FIELD_ICONS_PRESENT_DESKTOP_UNCHANGED = PASS', (WidgetTester tester) async {
+    await pumpLoginPage(tester, repository, surfaceSize: const Size(390, 844));
+    expect(find.byIcon(Icons.mail_outline), findsOneWidget, reason: 'ícono de correo en mobile — Material, sin dependencias nuevas');
+    expect(find.byIcon(Icons.lock_outline), findsOneWidget, reason: 'ícono de contraseña en mobile');
+
+    // Desktop no pide íconos en los campos — `showFieldIcons` default
+    // `false` no debe filtrarse a otras composiciones.
+    await pumpLoginPage(tester, repository, surfaceSize: const Size(1440, 900));
+    expect(find.byIcon(Icons.mail_outline), findsNothing, reason: 'desktop no debe ganar íconos de campo en esta tarea');
+    expect(find.byIcon(Icons.lock_outline), findsNothing);
+  });
+
+  testWidgets('MOBILE_CTA_HAS_TRAILING_ARROW_DESKTOP_UNCHANGED = PASS', (WidgetTester tester) async {
+    await pumpLoginPage(tester, repository, surfaceSize: const Size(390, 844));
+    final PrimaryGradientButton mobileCta = tester.widget(find.byType(PrimaryGradientButton));
+    expect(mobileCta.icon, Icons.arrow_forward_rounded, reason: 'el CTA de mobile debe llevar la flecha decorativa del mockup aprobado');
+    expect(mobileCta.iconTrailing, isTrue, reason: 'la flecha debe ir a la DERECHA del texto, no a la izquierda');
+    // Puramente visual — el callback sigue siendo exactamente el mismo.
+    expect(mobileCta.onPressed, isNotNull);
+
+    await pumpLoginPage(tester, repository, surfaceSize: const Size(1440, 900));
+    final PrimaryGradientButton desktopCta = tester.widget(find.byType(PrimaryGradientButton));
+    expect(desktopCta.icon, isNull, reason: 'el CTA de desktop no debe ganar la flecha en esta tarea');
   });
 
   testWidgets('MOBILE_CTA_AND_GOOGLE_SHARE_SAME_WIDTH_NO_HORIZONTAL_OVERFLOW = PASS', (WidgetTester tester) async {
