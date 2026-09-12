@@ -1487,39 +1487,37 @@ void main() {
   // ---------------------------------------------------------------------
 
   testWidgets('NORMAL_390x844_GEOMETRY_NOT_REGRESSED = PASS', (WidgetTester tester) async {
-    // KORIXA-SCREEN02-COMPACT-BLOCK-WITHOUT-MOVING-BACKGROUND: valor de
-    // referencia re-medido tras compactar los gaps internos del grupo
-    // (título↔subtítulo, subtítulo↔campos, correo↔contraseña, "olvidé mi
-    // contraseña"↔indicador, indicador↔CTA, CTA↔divisor, Google↔"crear
-    // cuenta") — el título se corre 18px MÁS ABAJO (344→362) porque el
-    // grupo ahora es 18px más compacto y sigue anclado al mismo fondo del
-    // viewport real; el fondo/hero y el piso táctil de 48 no cambiaron.
+    // KORIXA-SCREEN02-COMPACT-BLOCK-WITHOUT-MOVING-BACKGROUND (344→362) +
+    // KORIXA-SCREEN02-SLIGHT-BLOCK-DECOMPRESSION-20260911 (362→353, -9px):
+    // el dueño pidió descomprimir LEVEMENTE el bloque compactado —
+    // `_portraitCompactGap` 2→3 y `fieldSpacingGap` 4→6 suman +9px de alto
+    // real al grupo, por lo que el título (bottom-anchored) sube 9px; el
+    // fondo/hero y el piso táctil de 48 no cambiaron.
     await pumpLoginPage(tester, repository, surfaceSize: const Size(390, 844));
     final double titleTop = tester.getRect(find.byKey(const Key('login-title'))).top;
     expect(
       titleTop,
-      closeTo(362.0, 0.5),
-      reason: 'NORMAL_390x844_GEOMETRY_NOT_REGRESSED: el bloque compactado debe correrse 18px más abajo (344→362), sin mover el fondo',
+      closeTo(353.0, 0.5),
+      reason: 'NORMAL_390x844_GEOMETRY_NOT_REGRESSED: descompresión leve debe subir el título 9px (362→353), sin mover el fondo',
     );
   });
 
   testWidgets('NORMAL_HEIGHT_BOTTOM_COMPOSITION_PRESERVED = PASS', (WidgetTester tester) async {
-    // KORIXA-SCREEN02-COMPACT-BLOCK-WITHOUT-MOVING-BACKGROUND: mismo
-    // desplazamiento de +18px que 390x844 arriba, medido a 430x932 y
-    // 768x1024 (ambos siguen sin activar scroll: el contenido, ya más
-    // compacto, entra con más margen todavía).
+    // KORIXA-SCREEN02-SLIGHT-BLOCK-DECOMPRESSION-20260911: mismo
+    // desplazamiento de -9px que 390x844 arriba, medido a 430x932 y
+    // 768x1024 (ambos siguen sin activar scroll).
     await pumpLoginPage(tester, repository, surfaceSize: const Size(430, 932));
     expect(
       tester.getRect(find.byKey(const Key('login-title'))).top,
-      closeTo(458.0, 0.5),
-      reason: 'NORMAL_HEIGHT_BOTTOM_COMPOSITION_PRESERVED a 430x932 (440→458 tras compactar)',
+      closeTo(449.0, 0.5),
+      reason: 'NORMAL_HEIGHT_BOTTOM_COMPOSITION_PRESERVED a 430x932 (458→449 tras descomprimir)',
     );
 
     await pumpLoginPage(tester, repository, surfaceSize: const Size(768, 1024));
     expect(
       tester.getRect(find.byKey(const Key('login-title'))).top,
-      closeTo(550.0, 0.5),
-      reason: 'NORMAL_HEIGHT_BOTTOM_COMPOSITION_PRESERVED a 768x1024 (532→550 tras compactar)',
+      closeTo(541.0, 0.5),
+      reason: 'NORMAL_HEIGHT_BOTTOM_COMPOSITION_PRESERVED a 768x1024 (550→541 tras descomprimir)',
     );
   });
 
@@ -1669,7 +1667,7 @@ void main() {
     await pumpLoginPage(tester, repository, surfaceSize: const Size(390, 844));
     final Finder titleFinder = find.byKey(const Key('login-title'));
     final double before = tester.getRect(titleFinder).top;
-    expect(before, closeTo(362.0, 0.5), reason: 'NORMAL_390x844_TITLE_TOP_Y ≈ 362 tras compactar el bloque (KORIXA-SCREEN02-COMPACT-BLOCK-WITHOUT-MOVING-BACKGROUND)');
+    expect(before, closeTo(353.0, 0.5), reason: 'NORMAL_390x844_TITLE_TOP_Y ≈ 353 tras descomprimir levemente el bloque (KORIXA-SCREEN02-SLIGHT-BLOCK-DECOMPRESSION-20260911)');
 
     // Arrastre real hacia arriba (simula un swipe táctil) — el grupo NO
     // debe moverse en absoluto.

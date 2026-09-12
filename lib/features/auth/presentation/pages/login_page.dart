@@ -170,16 +170,22 @@ class _LoginPageState extends ConsumerState<LoginPage> {
   // KORIXA-SCREEN02-COMPACT-BLOCK-WITHOUT-MOVING-BACKGROUND: gap vertical
   // exclusivo de mobile portrait para los espacios internos MÁS chicos del
   // grupo (título↔subtítulo, subtítulo↔campos, "olvidé mi contraseña"↔
-  // indicador, indicador↔CTA, CTA↔divisor, Google↔"crear cuenta") — la
-  // mitad de `AppSpacing.xs` (4), el valor más chico que ya existía en el
-  // sistema de espaciado. El dueño pidió compactar el bloque SIN tocar el
-  // piso táctil de 48 (campos/CTA/Google, ya en ese piso, sin cambios) ni
-  // el fondo/asset del hero — bajar estos gaps es la única palanca segura
-  // que queda: reduce el alto NATURAL total del grupo (y por lo tanto,
-  // dado el anclaje al fondo del viewport real que ya usa este bloque,
-  // baja la posición del título/inicio del grupo — más "aire" escénico
-  // arriba — sin mover el fondo ni el punto de anclaje inferior).
-  static const double _portraitCompactGap = 2;
+  // indicador, indicador↔CTA, CTA↔divisor, Google↔"crear cuenta").
+  // El dueño pidió compactar el bloque SIN tocar el piso táctil de 48
+  // (campos/CTA/Google, ya en ese piso, sin cambios) ni el fondo/asset del
+  // hero — bajar estos gaps es la única palanca segura que queda: reduce
+  // el alto NATURAL total del grupo (y por lo tanto, dado el anclaje al
+  // fondo del viewport real que ya usa este bloque, baja la posición del
+  // título/inicio del grupo — más "aire" escénico arriba — sin mover el
+  // fondo ni el punto de anclaje inferior).
+  //
+  // KORIXA-SCREEN02-SLIGHT-BLOCK-DECOMPRESSION-20260911: `3` (antes `2`,
+  // la mitad de `AppSpacing.xs` = 4) — el dueño pidió descomprimir LEVEMENTE
+  // el bloque de la ronda anterior sin volver a los gaps antiguos (4) ni a
+  // 8 en correo↔contraseña; este valor sube en 1 los 7 usos de esta
+  // constante (+7px) y, combinado con el ajuste de `fieldSpacingGap` más
+  // abajo (+2px), da el total de +9px pedido explícitamente.
+  static const double _portraitCompactGap = 3;
 
   @override
   Widget build(BuildContext context) {
@@ -476,29 +482,29 @@ class _LoginPageState extends ConsumerState<LoginPage> {
                     // por las 2 veces que `contentSectionGap` lo usa más
                     // abajo.
                     // KORIXA-SCREEN02-COMPACT-BLOCK-WITHOUT-MOVING-
-                    // BACKGROUND: `_portraitCompactGap` (2, antes
-                    // `AppSpacing.xs` = 4) — el dueño pidió compactar el
-                    // bloque un poco más sin tocar fondo/hero/piso táctil;
-                    // ya no queda ningún token del sistema de espaciado más
-                    // chico que `xs`, así que este gap usa la mitad de ese
-                    // valor, exclusivo de mobile portrait.
+                    // BACKGROUND / KORIXA-SCREEN02-SLIGHT-BLOCK-
+                    // DECOMPRESSION-20260911: `_portraitCompactGap` (ver
+                    // constante — 3 desde esta ronda, 2 antes) — el dueño
+                    // pidió compactar el bloque sin tocar fondo/hero/piso
+                    // táctil, y luego descomprimirlo levemente sin volver a
+                    // los gaps originales; exclusivo de mobile portrait.
                     indicatorToCtaGap: _portraitCompactGap,
                     // KORIXA-SCREEN02-COMPACT-BLOCK-WITHOUT-MOVING-
-                    // BACKGROUND: `_portraitCompactGap` (2, antes
-                    // `AppSpacing.xs` = 4) — mismo razonamiento que
-                    // `indicatorToCtaGap` arriba; gobierna subtítulo→campos
-                    // Y "olvidé mi contraseña"→indicador a la vez (el doble
-                    // de alto ahorrado).
+                    // BACKGROUND / KORIXA-SCREEN02-SLIGHT-BLOCK-
+                    // DECOMPRESSION-20260911: `_portraitCompactGap` — mismo
+                    // razonamiento que `indicatorToCtaGap` arriba; gobierna
+                    // subtítulo→campos Y "olvidé mi contraseña"→indicador a
+                    // la vez (el doble de alto afectado).
                     contentSectionGap: _portraitCompactGap,
-                    // KORIXA-SCREEN02-COMPACT-BLOCK-WITHOUT-MOVING-
-                    // BACKGROUND: `AppSpacing.xs` (4, antes `AppSpacing.sm`
-                    // = 8) — correo→contraseña se reduce a la mitad; sigue
-                    // siendo un token real del sistema de espaciado (no el
-                    // gap ultra-chico exclusivo de este round), porque este
-                    // par de campos ya está muy cerca del piso táctil de 48
-                    // cada uno y el dueño pidió no comprometer la
-                    // legibilidad/separación entre ambos inputs.
-                    fieldSpacingGap: AppSpacing.xs,
+                    // KORIXA-SCREEN02-SLIGHT-BLOCK-DECOMPRESSION-20260911:
+                    // `6` (antes `AppSpacing.xs` = 4, y antes de eso
+                    // `AppSpacing.sm` = 8) — punto intermedio explícito
+                    // pedido por el dueño: ni el gap compactado de la ronda
+                    // anterior (4) ni el original (8). Valor literal (no un
+                    // token de `AppSpacing`) porque el sistema de espaciado
+                    // no tiene un escalón en 6 — exclusivo de este ajuste
+                    // fino de mobile portrait.
+                    fieldSpacingGap: 6,
                     // KORIXA-SCREEN02-TRUE-BOTTOM-COMPOSITION-OWNER-
                     // CORRECTION-20260911: nuevo — reduce el alto propio de
                     // cada campo (antes 56, `contentPadding` de 16 vertical
@@ -521,9 +527,8 @@ class _LoginPageState extends ConsumerState<LoginPage> {
                     // pantallas siguen usando sin cambios.
                     socialButtonHeight: 48,
                     // KORIXA-SCREEN02-COMPACT-BLOCK-WITHOUT-MOVING-
-                    // BACKGROUND: `_portraitCompactGap` (2, antes
-                    // `AppSpacing.xs` = 4) — título→subtítulo, exclusivo de
-                    // mobile portrait.
+                    // BACKGROUND: `_portraitCompactGap` — título→subtítulo,
+                    // exclusivo de mobile portrait.
                     titleToSubtitleGap: _portraitCompactGap,
                     showFieldIcons: true,
                     // KORIXA-SCREEN02-MATCH-SCREEN01-VISUAL-SYSTEM-20260910:
@@ -902,9 +907,9 @@ class _LoginPageState extends ConsumerState<LoginPage> {
     // del formulario, incluida la separación logo→título→subtítulo→
     // campos, que el encargo no pidió tocar).
     // KORIXA-SCREEN02-COMPACT-BLOCK-WITHOUT-MOVING-BACKGROUND:
-    // `_portraitCompactGap` (2, antes `AppSpacing.xs` = 4) — este gap
-    // gobierna 2 de las separaciones del grupo inferior (CTA→divisor y
-    // Google→"¿No tienes cuenta?"), así que reducirlo aporta el doble de
+    // `_portraitCompactGap` — este gap gobierna 2 de las separaciones del
+    // grupo inferior (CTA→divisor y Google→"¿No tienes cuenta?"), así que
+    // ajustarlo afecta el doble de
     // altura ahorrada. `tightenBottomActions` sigue siendo exclusivo de
     // mobile portrait (desktop/landscape nunca lo activan, siguen usando
     // `sectionGap`/`dividerGap` sin cambios).
