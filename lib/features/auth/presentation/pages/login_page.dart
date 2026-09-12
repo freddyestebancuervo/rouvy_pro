@@ -265,6 +265,18 @@ class _LoginPageState extends ConsumerState<LoginPage> {
           // landscape NO se tocan — siguen usando el archivo panorámico
           // original (`korixa_login_hero_guatape.webp`) vía
           // [_LoginHeroImage], sin cambios.
+          //
+          // KORIXA-SCREEN02-USE-APPROVED-MOBILE-HERO-ASSET-20260911: el
+          // dueño reemplazó el CONTENIDO del archivo (mismo nombre, mismas
+          // dimensiones 941×1672, copiado byte a byte desde el archivo
+          // aprobado que envió — sin recompresión ni edición) por una
+          // versión con cielo cálido/dorado de extremo a extremo (sin la
+          // franja de cielo azul del round anterior, KORIXA-SCREEN02-
+          // SUBTITLE-CONTRAST-AND-SKY-REFINEMENT-20260911). Cero cambios
+          // de código en este bloque — `imageAsset`/`alignment`/`fit` ya
+          // eran exactamente lo pedido ("sin zoom/transform adicional,
+          // asset directo"), así que esta ronda es puramente un
+          // reemplazo de archivo.
           child: _LoginHeroImage(
             imageAsset: 'assets/images/korixa_login_hero_guatape_mobile.png',
             alignment: Alignment.center,
