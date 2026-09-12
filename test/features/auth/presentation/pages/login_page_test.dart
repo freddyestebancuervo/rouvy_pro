@@ -1487,36 +1487,39 @@ void main() {
   // ---------------------------------------------------------------------
 
   testWidgets('NORMAL_390x844_GEOMETRY_NOT_REGRESSED = PASS', (WidgetTester tester) async {
-    // Valor de referencia medido en el commit inmediatamente anterior a
-    // esta corrección (`5d754ddc49fc1ee85fd5ecea9a3237d9a6a27436`) — el
-    // piso de 750 nunca debe activarse a 390x844 (750 < 844), así que el
-    // título debe seguir EXACTAMENTE en la misma posición, no solo
-    // "todavía >= 340".
+    // KORIXA-SCREEN02-COMPACT-BLOCK-WITHOUT-MOVING-BACKGROUND: valor de
+    // referencia re-medido tras compactar los gaps internos del grupo
+    // (título↔subtítulo, subtítulo↔campos, correo↔contraseña, "olvidé mi
+    // contraseña"↔indicador, indicador↔CTA, CTA↔divisor, Google↔"crear
+    // cuenta") — el título se corre 18px MÁS ABAJO (344→362) porque el
+    // grupo ahora es 18px más compacto y sigue anclado al mismo fondo del
+    // viewport real; el fondo/hero y el piso táctil de 48 no cambiaron.
     await pumpLoginPage(tester, repository, surfaceSize: const Size(390, 844));
     final double titleTop = tester.getRect(find.byKey(const Key('login-title'))).top;
     expect(
       titleTop,
-      closeTo(344.0, 0.5),
-      reason: 'NORMAL_390x844_GEOMETRY_NOT_REGRESSED: el piso de altura no debe activarse a 390x844 — geometría idéntica a la ya aprobada',
+      closeTo(362.0, 0.5),
+      reason: 'NORMAL_390x844_GEOMETRY_NOT_REGRESSED: el bloque compactado debe correrse 18px más abajo (344→362), sin mover el fondo',
     );
   });
 
   testWidgets('NORMAL_HEIGHT_BOTTOM_COMPOSITION_PRESERVED = PASS', (WidgetTester tester) async {
-    // A 430x932 y 768x1024 (ambos > el piso de 750) el piso tampoco debe
-    // activarse — mismos valores ya medidos/aprobados en rondas
-    // anteriores.
+    // KORIXA-SCREEN02-COMPACT-BLOCK-WITHOUT-MOVING-BACKGROUND: mismo
+    // desplazamiento de +18px que 390x844 arriba, medido a 430x932 y
+    // 768x1024 (ambos siguen sin activar scroll: el contenido, ya más
+    // compacto, entra con más margen todavía).
     await pumpLoginPage(tester, repository, surfaceSize: const Size(430, 932));
     expect(
       tester.getRect(find.byKey(const Key('login-title'))).top,
-      closeTo(440.0, 0.5),
-      reason: 'NORMAL_HEIGHT_BOTTOM_COMPOSITION_PRESERVED a 430x932',
+      closeTo(458.0, 0.5),
+      reason: 'NORMAL_HEIGHT_BOTTOM_COMPOSITION_PRESERVED a 430x932 (440→458 tras compactar)',
     );
 
     await pumpLoginPage(tester, repository, surfaceSize: const Size(768, 1024));
     expect(
       tester.getRect(find.byKey(const Key('login-title'))).top,
-      closeTo(532.0, 0.5),
-      reason: 'NORMAL_HEIGHT_BOTTOM_COMPOSITION_PRESERVED a 768x1024',
+      closeTo(550.0, 0.5),
+      reason: 'NORMAL_HEIGHT_BOTTOM_COMPOSITION_PRESERVED a 768x1024 (532→550 tras compactar)',
     );
   });
 
@@ -1666,7 +1669,7 @@ void main() {
     await pumpLoginPage(tester, repository, surfaceSize: const Size(390, 844));
     final Finder titleFinder = find.byKey(const Key('login-title'));
     final double before = tester.getRect(titleFinder).top;
-    expect(before, closeTo(344.0, 0.5), reason: 'NORMAL_390x844_TITLE_TOP_Y ≈ 344, referencia ya aprobada');
+    expect(before, closeTo(362.0, 0.5), reason: 'NORMAL_390x844_TITLE_TOP_Y ≈ 362 tras compactar el bloque (KORIXA-SCREEN02-COMPACT-BLOCK-WITHOUT-MOVING-BACKGROUND)');
 
     // Arrastre real hacia arriba (simula un swipe táctil) — el grupo NO
     // debe moverse en absoluto.
