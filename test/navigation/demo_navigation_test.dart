@@ -58,6 +58,12 @@ void main() {
       await tester.enterText(textFields.at(0), 'demo@ridepro.app');
       await tester.enterText(textFields.at(1), 'cualquier-cosa');
 
+      // KORIXA-SCREEN02-LOGIN-MATCH-SCREEN01-DESKTOP-SCALE-20260910: al
+      // igualar la escala visual de SCREEN_01 (logo/título/subtítulo más
+      // grandes), el CTA ya no entra en los 600px de alto por defecto del
+      // binding de test sin scroll — mismo patrón ya usado para el botón
+      // de Google en `login_page_test.dart`.
+      await tester.ensureVisible(find.text('Iniciar sesión'));
       await tester.tap(find.text('Iniciar sesión'));
       // El fake simula latencia de red (`Future.delayed`) — `pumpAndSettle`
       // espera automáticamente a que se resuelva antes de continuar.

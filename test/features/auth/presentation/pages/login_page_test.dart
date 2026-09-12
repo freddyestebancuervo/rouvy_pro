@@ -8,6 +8,9 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:mocktail/mocktail.dart';
 
+import 'package:rouvy_pro/app/theme/app_colors.dart';
+import 'package:rouvy_pro/app/theme/app_gradients.dart';
+import 'package:rouvy_pro/app/theme/app_spacing.dart';
 import 'package:rouvy_pro/core/design_system/dark_tech_buttons.dart';
 import 'package:rouvy_pro/core/error/failures.dart';
 import 'package:rouvy_pro/features/auth/domain/entities/user_entity.dart';
@@ -15,6 +18,7 @@ import 'package:rouvy_pro/features/auth/domain/usecases/login_usecase.dart';
 import 'package:rouvy_pro/features/auth/domain/usecases/sign_in_with_apple_usecase.dart';
 import 'package:rouvy_pro/features/auth/domain/usecases/sign_in_with_google_usecase.dart';
 import 'package:rouvy_pro/features/auth/presentation/pages/login_page.dart';
+import 'package:rouvy_pro/features/auth/presentation/pages/welcome_page.dart';
 import 'package:rouvy_pro/features/auth/presentation/providers/auth_providers.dart';
 import 'package:rouvy_pro/features/auth/presentation/widgets/social_sign_in_buttons.dart';
 
@@ -74,6 +78,12 @@ void main() {
       (WidgetTester tester) async {
     await pumpLoginPage(tester, repository);
 
+    // KORIXA-SCREEN02-LOGIN-MATCH-SCREEN01-DESKTOP-SCALE-20260910: al
+    // igualar la escala visual de SCREEN_01 (logo/título/subtítulo más
+    // grandes), el CTA ya no entra en los 600px de alto por defecto del
+    // binding de test sin scroll — mismo patrón ya usado para el botón
+    // de Google (ver comentario más abajo).
+    await tester.ensureVisible(find.text('Iniciar sesión'));
     await tester.tap(find.text('Iniciar sesión'));
     await tester.pumpAndSettle();
 
@@ -94,6 +104,7 @@ void main() {
 
     await tester.enterText(find.byType(TextFormField).at(0), 'rider@ridepro.com');
     await tester.enterText(find.byType(TextFormField).at(1), 'securePass123');
+    await tester.ensureVisible(find.text('Iniciar sesión'));
     await tester.tap(find.text('Iniciar sesión'));
     await tester.pump();
 
@@ -119,6 +130,7 @@ void main() {
 
     await tester.enterText(find.byType(TextFormField).at(0), 'rider@ridepro.com');
     await tester.enterText(find.byType(TextFormField).at(1), 'securePass123');
+    await tester.ensureVisible(find.text('Iniciar sesión'));
     await tester.tap(find.text('Iniciar sesión'));
     await tester.pumpAndSettle();
 
@@ -135,6 +147,7 @@ void main() {
 
     await tester.enterText(find.byType(TextFormField).at(0), 'rider@ridepro.com');
     await tester.enterText(find.byType(TextFormField).at(1), 'wrongPass1');
+    await tester.ensureVisible(find.text('Iniciar sesión'));
     await tester.tap(find.text('Iniciar sesión'));
     await tester.pumpAndSettle();
 
@@ -213,6 +226,7 @@ void main() {
   testWidgets('Olvidé mi contraseña sigue navegando a ForgotPassword', (WidgetTester tester) async {
     await pumpLoginPage(tester, repository);
 
+    await tester.ensureVisible(find.text('¿Olvidaste tu contraseña?'));
     await tester.tap(find.text('¿Olvidaste tu contraseña?'));
     await tester.pumpAndSettle();
 
@@ -291,13 +305,19 @@ void main() {
     return null;
   }
 
-  bool hasHeroImage(WidgetTester tester) {
+  // KORIXA-SCREEN02-MOBILE-BACKGROUND-ASSET-SWAP-20260911: `assetPath`
+  // agregado con default el panorámico original (desktop/phone
+  // landscape, sin cambios) — mobile portrait ahora usa un archivo
+  // dedicado (`korixa_login_hero_guatape_mobile.png`), así que sus
+  // llamadores pasan ese nombre explícitamente.
+  bool hasHeroImage(
+    WidgetTester tester, {
+    String assetPath = 'assets/images/korixa_login_hero_guatape.webp',
+  }) {
     final Iterable<Image> images = tester.widgetList<Image>(
       find.descendant(of: find.byKey(const Key('login-hero-image')), matching: find.byType(Image)),
     );
-    return images.any(
-      (Image image) => resolvedAssetName(image.image) == 'assets/images/korixa_login_hero_guatape.webp',
-    );
+    return images.any((Image image) => resolvedAssetName(image.image) == assetPath);
   }
 
   void expectExclusiveLayout(WidgetTester tester, String selectedKey) {
@@ -334,7 +354,11 @@ void main() {
     expect(tester.takeException(), isNull, reason: 'no debe haber overflow en 390x844');
 
     expectExclusiveLayout(tester, 'login-portrait-layout');
-    expect(hasHeroImage(tester), isTrue, reason: 'el hero de Guatapé debe estar presente en portrait');
+    expect(
+      hasHeroImage(tester, assetPath: 'assets/images/korixa_login_hero_guatape_mobile.png'),
+      isTrue,
+      reason: 'el hero de Guatapé (asset dedicado de mobile) debe estar presente en portrait',
+    );
 
     expect(find.byType(TextFormField), findsNWidgets(2), reason: 'email + password');
     expect(find.byType(PrimaryGradientButton), findsOneWidget);
@@ -435,7 +459,11 @@ void main() {
       expect(tester.takeException(), isNull, reason: 'no debe haber overflow en $label');
 
       expectExclusiveLayout(tester, 'login-portrait-layout');
-      expect(hasHeroImage(tester), isTrue, reason: '$label: el hero de Guatapé debe estar presente en portrait');
+      expect(
+        hasHeroImage(tester, assetPath: 'assets/images/korixa_login_hero_guatape_mobile.png'),
+        isTrue,
+        reason: '$label: el hero de Guatapé (asset dedicado de mobile) debe estar presente en portrait',
+      );
 
       final Iterable<Image> images = tester.widgetList<Image>(find.byType(Image));
       final bool hasDesktopLogo = images.any(
@@ -497,5 +525,1363 @@ void main() {
       (Image image) => resolvedAssetName(image.image) == 'assets/icons/google_logo.png',
     );
     expect(hasOfficialLogo, isTrue, reason: 'el botón de Google debe usar el asset oficial local, no un ícono aproximado');
+  });
+
+  // ---------------------------------------------------------------------
+  // KORIXA-SCREEN02-LOGIN-FULL-LANDSCAPE-VISUAL-20260910 — el hero cubre
+  // el ancho COMPLETO del viewport en desktop/phone landscape (ya no un
+  // `Expanded` recortado al 57%/44%).
+  //
+  // KORIXA-SCREEN02-LOGIN-NO-OUTER-CARD-20260910 — el panel de vidrio
+  // introducido por la tarea anterior (`BackdropFilter` + superficie
+  // translúcida) todavía se leía como "una tarjeta grande envolviendo
+  // todo". El dueño pidió quitarlo por completo: el formulario ahora
+  // vive directamente sobre la foto, sin ningún contenedor
+  // decorado/recortado envolviéndolo. Estos tests prueban ambos hechos:
+  // hero a ancho completo Y cero `BackdropFilter` en las 3 composiciones.
+  // ---------------------------------------------------------------------
+
+  testWidgets('DESKTOP_HERO_FULL_BLEED_WIDTH = PASS', (WidgetTester tester) async {
+    const Size desktopSize = Size(1440, 900);
+    await pumpLoginPage(tester, repository, surfaceSize: desktopSize);
+
+    final Size heroSize = tester.getSize(find.byKey(const Key('login-hero-image')));
+    expect(
+      heroSize.width,
+      desktopSize.width,
+      reason: 'el hero debe cubrir el ancho completo del viewport en desktop, no solo el 57% que ocupaba antes',
+    );
+  });
+
+  testWidgets('DESKTOP_NO_OUTER_CARD_AROUND_FORM = PASS', (WidgetTester tester) async {
+    await pumpLoginPage(tester, repository, surfaceSize: const Size(1440, 900));
+
+    expect(
+      find.byType(BackdropFilter),
+      findsNothing,
+      reason: 'el formulario ya no debe vivir dentro de ningún panel de vidrio/tarjeta — el dueño pidió ver todo el paisaje sin caja contenedora',
+    );
+  });
+
+  // ---------------------------------------------------------------------
+  // KORIXA-SCREEN02-LOGIN-MATCH-SCREEN01-DESKTOP-SCALE-20260910 — el
+  // dueño pidió que el bloque completo de contenido de Login en desktop
+  // tenga la MISMA escala visual ya aprobada en SCREEN_01 Welcome
+  // (`_contentMaxWidth = 680`, `_ctaWidth = 550`, altura de CTA `64`,
+  // logo `188`). Estos tests miden geometría real (`tester.getSize`),
+  // no solo presencia de widgets — una regresión que redujera el ancho
+  // de vuelta a un valor chico debe fallar aquí incluso si el widget
+  // sigue existiendo.
+  // ---------------------------------------------------------------------
+
+  testWidgets('LOGIN_DESKTOP_CONTENT_REGION_MATCHES_SCREEN01 = PASS', (WidgetTester tester) async {
+    await pumpLoginPage(tester, repository, surfaceSize: const Size(1440, 900));
+    expect(tester.takeException(), isNull, reason: 'no debe haber overflow a 1440x900');
+
+    // KORIXA-SCREEN02-LOGIN-ALIGNMENT-INDICATOR-POLISH-20260910: el
+    // dueño pidió que TODO el bloque (logo/título/subtítulo/indicador Y
+    // los controles) comparta el mismo centro sobre la columna de 550 —
+    // ya no solo los controles. La región exterior de 680 (ya aprobada
+    // en SCREEN_01) sigue existiendo como TECHO — nunca se excede — pero
+    // ya no necesita llenarse por completo, porque nada adentro pide más
+    // de 550. Este test prueba el techo (<=680, nunca un valor mayor
+    // inventado); el ancho real renderizado del bloque se prueba en
+    // `LOGIN_DESKTOP_PRIMARY_CONTROL_WIDTH_MATCHES_SCREEN01` (550).
+    final Size contentSize = tester.getSize(find.byKey(const Key('login-desktop-content-max-width')));
+    expect(
+      contentSize.width,
+      lessThanOrEqualTo(680.5),
+      reason: 'la región exterior de Login nunca debe exceder el techo ya aprobado de SCREEN_01 (680)',
+    );
+  });
+
+  testWidgets('LOGIN_DESKTOP_PRIMARY_CONTROL_WIDTH_MATCHES_SCREEN01 = PASS', (WidgetTester tester) async {
+    await pumpLoginPage(tester, repository, surfaceSize: const Size(1440, 900));
+
+    final Size controlSize = tester.getSize(find.byKey(const Key('login-desktop-control-width')));
+    expect(
+      controlSize.width,
+      closeTo(550, 0.5),
+      reason: 'campos/CTA/divisor/Google deben compartir el ancho de control ya aprobado de SCREEN_01 (550 — el mismo `_ctaWidth` de Welcome)',
+    );
+
+    // Los controles individuales (email, password, CTA, Google) deben
+    // realmente COMPARTIR ese ancho — no solo el `SizedBox` contenedor.
+    final Size emailFieldSize = tester.getSize(find.byType(TextFormField).first);
+    final Size ctaSize = tester.getSize(find.byType(PrimaryGradientButton));
+    final Size googleSize = tester.getSize(find.byType(GoogleSignInButton));
+    expect(emailFieldSize.width, closeTo(550, 0.5), reason: 'el campo de correo debe ocupar el ancho de control de 550');
+    expect(ctaSize.width, closeTo(550, 0.5), reason: 'el CTA debe ocupar el ancho de control de 550, igual que en Welcome');
+    expect(googleSize.width, closeTo(550, 0.5), reason: 'el botón de Google debe ocupar el ancho de control de 550');
+  });
+
+  testWidgets('LOGIN_DESKTOP_CTA_HEIGHT_MATCHES_SCREEN01 = PASS', (WidgetTester tester) async {
+    await pumpLoginPage(tester, repository, surfaceSize: const Size(1440, 900));
+
+    final Size ctaSize = tester.getSize(find.byType(PrimaryGradientButton));
+    expect(
+      ctaSize.height,
+      closeTo(64, 0.5),
+      reason: 'el alto del CTA de Login debe igualar el ya aprobado en SCREEN_01 Welcome (64), no el default de 52',
+    );
+  });
+
+  testWidgets('LOGIN_DESKTOP_LOGO_HEIGHT_MATCHES_SCREEN01 = PASS', (WidgetTester tester) async {
+    await pumpLoginPage(tester, repository, surfaceSize: const Size(1440, 900));
+
+    final Iterable<Image> images = tester.widgetList<Image>(find.byType(Image));
+    final Image desktopLogo = images.firstWhere(
+      (Image image) => resolvedAssetName(image.image) == 'assets/icons/korixa_logo_desktop.png',
+    );
+    expect(
+      desktopLogo.height,
+      188,
+      reason: 'el logo de Login en desktop debe igualar el alto ya aprobado en SCREEN_01 Welcome (188)',
+    );
+  });
+
+  testWidgets('LOGIN_DESKTOP_CONTENT_DOES_NOT_INVADE_CYCLIST_EXCESSIVELY = PASS', (WidgetTester tester) async {
+    const Size desktopSize = Size(1440, 900);
+    await pumpLoginPage(tester, repository, surfaceSize: desktopSize);
+
+    // El grupo de contenido sigue anclado a la derecha (`Align.centerRight`
+    // + `Padding` uniforme) — su borde derecho debe quedar cerca del
+    // borde derecho del viewport (inset intencional, `AppSpacing.xxxl`),
+    // no en el centro de la pantalla ni invadiendo al ciclista.
+    final Rect contentRect = tester.getRect(find.byKey(const Key('login-desktop-content-max-width')));
+    expect(
+      contentRect.right,
+      greaterThan(desktopSize.width * 0.6),
+      reason: 'el bloque de contenido debe quedar claramente en la mitad derecha del viewport, no centrado',
+    );
+    expect(
+      contentRect.right,
+      closeTo(desktopSize.width - AppSpacing.xxxl, 1.0),
+      reason: 'el borde derecho del bloque debe quedar a un inset intencional del borde derecho real del viewport, ni pegado ni desplazado hacia el centro',
+    );
+  });
+
+  // ---------------------------------------------------------------------
+  // KORIXA-SCREEN02-LOGIN-ALIGNMENT-INDICATOR-POLISH-20260910 — el dueño
+  // marcó en una captura anotada que el logo/título/subtítulo se veían
+  // "corridos a la derecha" respecto al formulario, y pidió agregar el
+  // mismo indicador de 3 barras de SCREEN_01 debajo de "¿Olvidaste tu
+  // contraseña?", con el CTA reposicionado más abajo. Estos tests miden
+  // geometría real (centro X, orden vertical), no solo presencia.
+  // ---------------------------------------------------------------------
+
+  testWidgets('LOGIN_DESKTOP_LOGO_CENTERED_OVER_CONTROLS = PASS', (WidgetTester tester) async {
+    await pumpLoginPage(tester, repository, surfaceSize: const Size(1440, 900));
+
+    final double columnCenterX = tester.getCenter(find.byKey(const Key('login-desktop-control-width'))).dx;
+    final double logoCenterX = tester.getCenter(find.byKey(const Key('login-logo'))).dx;
+    expect(
+      logoCenterX,
+      closeTo(columnCenterX, 1.0),
+      reason: 'el logo debe quedar centrado horizontalmente sobre la columna de 550, no corrido a la derecha',
+    );
+  });
+
+  testWidgets('LOGIN_DESKTOP_TITLE_CENTERED_OVER_CONTROLS = PASS', (WidgetTester tester) async {
+    await pumpLoginPage(tester, repository, surfaceSize: const Size(1440, 900));
+
+    final double columnCenterX = tester.getCenter(find.byKey(const Key('login-desktop-control-width'))).dx;
+    final double titleCenterX = tester.getCenter(find.byKey(const Key('login-title'))).dx;
+    expect(
+      titleCenterX,
+      closeTo(columnCenterX, 1.0),
+      reason: '"Bienvenido de nuevo" debe quedar centrado sobre la columna de 550, no alineado a la derecha respecto al formulario',
+    );
+  });
+
+  // KORIXA-SCREEN02-LOGIN-SUBTITLE-POSITION-CENTER-ACTIVE-INDICATOR-
+  // 20260910: el dueño pidió deshacer ESPECÍFICAMENTE la posición
+  // horizontal del subtítulo introducida por KORIXA-SCREEN02-LOGIN-
+  // ALIGNMENT-INDICATOR-POLISH-20260910 (el test anterior de este mismo
+  // nombre, `LOGIN_DESKTOP_SUBTITLE_CENTERED_OVER_CONTROLS`, verificaba
+  // exactamente ESE centrado — queda reemplazado por este, que prueba
+  // la posición de referencia anterior). El valor de referencia (1060.0)
+  // se midió empíricamente vía `tester.getRect`/`getCenter` en el commit
+  // `0d748ec723bd96d1260cddfdec8ff8944cc867c5` (inmediatamente antes de
+  // esa tarea), no fue adivinado de una captura.
+  testWidgets('LOGIN_DESKTOP_SUBTITLE_POSITION_MATCHES_PREVIOUS_REFERENCE = PASS', (WidgetTester tester) async {
+    await pumpLoginPage(tester, repository, surfaceSize: const Size(1440, 900));
+
+    const double previousReferenceCenterX = 1060.0;
+    final double subtitleCenterX = tester.getCenter(find.byKey(const Key('login-subtitle'))).dx;
+    expect(
+      subtitleCenterX,
+      closeTo(previousReferenceCenterX, 1.0),
+      reason:
+          '"Inicia sesión para continuar tu ruta" debe volver a la posición horizontal medida en 0d748ec (1060.0 a 1440x900), no quedar centrada sobre la columna de 550',
+    );
+
+    // El logo y el título NO deben moverse — siguen centrados sobre la
+    // columna de 550, exactamente como en KORIXA-SCREEN02-LOGIN-
+    // ALIGNMENT-INDICATOR-POLISH-20260910.
+    final double columnCenterX = tester.getCenter(find.byKey(const Key('login-desktop-control-width'))).dx;
+    final double logoCenterX = tester.getCenter(find.byKey(const Key('login-logo'))).dx;
+    final double titleCenterX = tester.getCenter(find.byKey(const Key('login-title'))).dx;
+    expect(logoCenterX, closeTo(columnCenterX, 1.0), reason: 'el logo no debe moverse en esta tarea');
+    expect(titleCenterX, closeTo(columnCenterX, 1.0), reason: 'el título no debe moverse en esta tarea');
+  });
+
+  testWidgets('LOGIN_DESKTOP_INDICATOR_MATCHES_SCREEN01_AND_IS_CENTERED = PASS', (WidgetTester tester) async {
+    await pumpLoginPage(tester, repository, surfaceSize: const Size(1440, 900));
+
+    final Finder indicatorFinder = find.byKey(const Key('login-desktop-indicator-row'));
+    expect(indicatorFinder, findsOneWidget, reason: 'el indicador de SCREEN_01 debe existir en desktop');
+
+    // KORIXA-SCREEN02-LOGIN-ALIGNMENT-INDICATOR-POLISH-20260910: mismo
+    // widget compartido que usa `_DesktopOnboardingIndicator` de Welcome
+    // (`core/design_system/dark_tech_indicators.dart`) — reusado, no
+    // aproximado. 3 barras, misma decoración activa/inactiva.
+    //
+    // KORIXA-SCREEN02-LOGIN-SUBTITLE-POSITION-CENTER-ACTIVE-INDICATOR-
+    // 20260910: a diferencia de Welcome (primera barra activa), Login
+    // pide la barra CENTRAL activa (`activeIndex: 1`) — se verifica por
+    // POSICIÓN (izquierda/centro/derecha), no solo por conteo, ya que el
+    // orden de `find.descendant` sigue el orden real de los hijos del
+    // `Row` (izquierda a derecha).
+    final List<Container> bars = tester
+        .widgetList<Container>(find.descendant(of: indicatorFinder, matching: find.byType(Container)))
+        .toList();
+    expect(bars.length, 3, reason: 'el indicador debe mostrar exactamente 3 líneas, igual que SCREEN_01');
+
+    bool isActive(Container bar) => bar.decoration is BoxDecoration && (bar.decoration! as BoxDecoration).gradient != null;
+    bool isInactive(Container bar) =>
+        bar.decoration is BoxDecoration && (bar.decoration! as BoxDecoration).color == DarkTech.border;
+
+    expect(isActive(bars[0]), isFalse, reason: 'LOGIN_LEFT_BAR_ACTIVE debe ser NO');
+    expect(isInactive(bars[0]), isTrue, reason: 'la barra izquierda debe quedar gris inactiva');
+    expect(isActive(bars[1]), isTrue, reason: 'LOGIN_CENTER_BAR_ACTIVE debe ser YES — activeIndex: 1');
+    expect(isActive(bars[2]), isFalse, reason: 'LOGIN_RIGHT_BAR_ACTIVE debe ser NO');
+    expect(isInactive(bars[2]), isTrue, reason: 'la barra derecha debe quedar gris inactiva');
+
+    final int activeCount = bars.where(isActive).length;
+    final int inactiveCount = bars.where(isInactive).length;
+    expect(activeCount, 1, reason: 'exactamente 1 línea debe quedar activa, igual que SCREEN_01');
+    expect(inactiveCount, 2, reason: 'las otras 2 líneas deben quedar en gris inactivo, igual que SCREEN_01');
+
+    final double columnCenterX = tester.getCenter(find.byKey(const Key('login-desktop-control-width'))).dx;
+    final double indicatorCenterX = tester.getCenter(indicatorFinder).dx;
+    expect(
+      indicatorCenterX,
+      closeTo(columnCenterX, 1.0),
+      reason: 'el indicador debe quedar centrado horizontalmente sobre la columna de 550',
+    );
+  });
+
+  testWidgets('LOGIN_DESKTOP_INDICATOR_BELOW_FORGOT_PASSWORD_AND_CTA_BELOW_INDICATOR = PASS',
+      (WidgetTester tester) async {
+    await pumpLoginPage(tester, repository, surfaceSize: const Size(1440, 900));
+
+    final double forgotPasswordY = tester.getCenter(find.text('¿Olvidaste tu contraseña?')).dy;
+    final double indicatorY = tester.getCenter(find.byKey(const Key('login-desktop-indicator-row'))).dy;
+    final double ctaY = tester.getCenter(find.byType(PrimaryGradientButton)).dy;
+
+    expect(
+      indicatorY,
+      greaterThan(forgotPasswordY),
+      reason: 'el indicador de SCREEN_01 debe quedar DEBAJO de "¿Olvidaste tu contraseña?"',
+    );
+    expect(
+      ctaY,
+      greaterThan(indicatorY),
+      reason: 'el CTA "Iniciar sesión" debe quedar DEBAJO del indicador, con una separación intencional',
+    );
+  });
+
+  testWidgets('PHONE_LANDSCAPE_HERO_FULL_BLEED_WIDTH = PASS', (WidgetTester tester) async {
+    const Size landscapeSize = Size(932, 430);
+    await pumpLoginPage(tester, repository, surfaceSize: landscapeSize);
+
+    final Size heroSize = tester.getSize(find.byKey(const Key('login-hero-image')));
+    expect(
+      heroSize.width,
+      landscapeSize.width,
+      reason: 'el hero debe cubrir el ancho completo del viewport en phone landscape, no solo el 44% que ocupaba antes',
+    );
+  });
+
+  testWidgets('PHONE_LANDSCAPE_NO_OUTER_CARD_AROUND_FORM = PASS', (WidgetTester tester) async {
+    await pumpLoginPage(tester, repository, surfaceSize: const Size(932, 430));
+
+    expect(
+      find.byType(BackdropFilter),
+      findsNothing,
+      reason: 'el formulario ya no debe vivir dentro de ningún panel de vidrio/tarjeta, igual que en desktop',
+    );
+  });
+
+  testWidgets('PORTRAIT_NO_OUTER_CARD_AROUND_FORM = PASS', (WidgetTester tester) async {
+    await pumpLoginPage(tester, repository, surfaceSize: const Size(390, 844));
+
+    expect(
+      find.byType(BackdropFilter),
+      findsNothing,
+      reason: 'mobile portrait nunca tuvo panel flotante, y desde KORIXA-SCREEN02-LOGIN-MOBILE-PORTRAIT-NO-LOGO-20260910 tampoco tiene un bloque opaco inferior — el formulario flota directamente sobre el hero full-bleed',
+    );
+  });
+
+  // KORIXA-SCREEN02-LOGIN-ALIGNMENT-INDICATOR-POLISH-20260910: el
+  // indicador de SCREEN_01 es específicamente para la composición de
+  // escritorio de la captura anotada del dueño — phone landscape y
+  // mobile portrait no lo reciben, sin cambio visual en ninguna de las 2.
+  testWidgets('PHONE_LANDSCAPE_NO_SCREEN01_INDICATOR = PASS (fuera de alcance de esta tarea)',
+      (WidgetTester tester) async {
+    await pumpLoginPage(tester, repository, surfaceSize: const Size(932, 430));
+    expect(find.byKey(const Key('login-desktop-indicator-row')), findsNothing);
+  });
+
+  // ---------------------------------------------------------------------
+  // KORIXA-SCREEN02-LOGIN-MOBILE-PORTRAIT-NO-LOGO-20260910 — el dueño
+  // pidió el mismo tratamiento full-bleed de desktop/phone landscape
+  // para mobile portrait, SIN el logo Korixa, con el indicador de
+  // SCREEN_01 (barra central activa) usando el tamaño MOBILE de Welcome
+  // (18/4/5), no el de desktop. Desktop y phone landscape quedan
+  // congelados — probado por regresión más abajo.
+  // ---------------------------------------------------------------------
+
+  testWidgets('MOBILE_LOGIN_LOGO_NOT_VISIBLE = PASS', (WidgetTester tester) async {
+    await pumpLoginPage(tester, repository, surfaceSize: const Size(390, 844));
+
+    expect(
+      find.byKey(const Key('login-logo')),
+      findsNothing,
+      reason: 'el dueño pidió explícitamente que mobile portrait NO muestre el logo Korixa',
+    );
+  });
+
+  testWidgets('MOBILE_HERO_FULL_BLEED = PASS', (WidgetTester tester) async {
+    const Size mobileSize = Size(390, 844);
+    await pumpLoginPage(tester, repository, surfaceSize: mobileSize);
+
+    final Size heroSize = tester.getSize(find.byKey(const Key('login-hero-image')));
+    expect(
+      heroSize,
+      mobileSize,
+      reason: 'el hero de Guatapé debe cubrir la pantalla COMPLETA en mobile portrait, no solo el 34% superior que ocupaba antes',
+    );
+  });
+
+  testWidgets('MOBILE_NO_OUTER_CARD_OR_SOLID_LOWER_PANEL = PASS', (WidgetTester tester) async {
+    await pumpLoginPage(tester, repository, surfaceSize: const Size(390, 844));
+
+    expect(find.byType(BackdropFilter), findsNothing, reason: 'sin panel de vidrio en mobile portrait');
+    // El bloque inferior opaco anterior era un `ColoredBox`/`DecoratedBox`
+    // con `DarkTech.background` sólido cubriendo ~66% de la pantalla, hijo
+    // directo de un `Expanded` dentro del `Column` de layout anterior —
+    // ese `Column`/`Expanded` ya no existen: la composición es un `Stack`
+    // con el hero a pantalla completa. No hay ningún `DecoratedBox`/
+    // `ColoredBox` de tamaño de pantalla completa con `DarkTech.background`
+    // sólido en el árbol.
+    final Iterable<DecoratedBox> solidBoxes = tester.widgetList<DecoratedBox>(find.byType(DecoratedBox)).where(
+          (DecoratedBox box) =>
+              box.decoration is BoxDecoration && (box.decoration as BoxDecoration).color == DarkTech.background,
+        );
+    expect(
+      solidBoxes,
+      isEmpty,
+      reason: 'no debe existir ningún bloque opaco sólido de fondo — el paisaje debe verse detrás de todo el formulario',
+    );
+  });
+
+  testWidgets('MOBILE_INDICATOR_MATCHES_SCREEN01_MOBILE_SIZE_AND_CENTER_ACTIVE = PASS', (WidgetTester tester) async {
+    await pumpLoginPage(tester, repository, surfaceSize: const Size(390, 844));
+
+    final Finder indicatorFinder = find.byKey(const Key('login-portrait-indicator-row'));
+    expect(indicatorFinder, findsOneWidget, reason: 'el indicador de SCREEN_01 debe existir en mobile portrait');
+
+    final List<Container> bars = tester
+        .widgetList<Container>(find.descendant(of: indicatorFinder, matching: find.byType(Container)))
+        .toList();
+    expect(bars.length, 3, reason: 'el indicador debe mostrar exactamente 3 líneas');
+
+    bool isActive(Container bar) => bar.decoration is BoxDecoration && (bar.decoration! as BoxDecoration).gradient != null;
+    bool isInactive(Container bar) =>
+        bar.decoration is BoxDecoration && (bar.decoration! as BoxDecoration).color == DarkTech.border;
+    expect(isActive(bars[0]), isFalse, reason: 'MOBILE_LEFT_BAR_ACTIVE debe ser NO');
+    expect(isInactive(bars[0]), isTrue);
+    expect(isActive(bars[1]), isTrue, reason: 'MOBILE_CENTER_BAR_ACTIVE debe ser YES — activeIndex: 1, igual que desktop');
+    expect(isActive(bars[2]), isFalse, reason: 'MOBILE_RIGHT_BAR_ACTIVE debe ser NO');
+    expect(isInactive(bars[2]), isTrue);
+
+    // Tamaño MOBILE ya aprobado de SCREEN_01 (18×4, separación 5 —
+    // `_OnboardingIndicator` de Welcome), NO el de desktop (24×4×6):
+    // ancho total = 3*18 + 2*5 = 64.
+    final Size indicatorSize = tester.getSize(indicatorFinder);
+    expect(indicatorSize.width, closeTo(64, 0.5), reason: 'el indicador debe usar el tamaño MOBILE de SCREEN_01 (18/4/5), no el de desktop');
+    expect(indicatorSize.height, closeTo(4, 0.5));
+  });
+
+  testWidgets('MOBILE_CONTENT_HIERARCHY_REACHABLE_NO_OVERFLOW = PASS', (WidgetTester tester) async {
+    // KORIXA-PR127-LOGIN-MOBILE-VISUAL-POLISH-20260910: barrido exacto
+    // pedido por el encargo — 360x800/390x844/430x932 como objetivo
+    // primario, más 768x1024 (tablet portrait) como chequeo de
+    // seguridad adicional. 375x812 (iPhone X/11 Pro) se conserva del
+    // barrido anterior, no pedido explícitamente pero sin costo extra.
+    for (final Size size in const <Size>[
+      Size(360, 800),
+      Size(390, 844),
+      Size(375, 812),
+      Size(430, 932),
+      Size(768, 1024),
+    ]) {
+      await pumpLoginPage(tester, repository, surfaceSize: size);
+      expect(tester.takeException(), isNull, reason: 'NO_RENDER_OVERFLOW en ${size.width.toInt()}x${size.height.toInt()}');
+
+      final Size heroSize = tester.getSize(find.byKey(const Key('login-hero-image')));
+      expect(heroSize, size, reason: 'MOBILE_HERO_FULL_SCREEN en ${size.width.toInt()}x${size.height.toInt()}');
+
+      expect(find.text('Bienvenido de nuevo'), findsOneWidget, reason: 'TITLE_VISIBLE');
+      expect(find.text('Inicia sesión para continuar tu ruta'), findsOneWidget, reason: 'SUBTITLE_VISIBLE');
+      expect(find.byType(TextFormField), findsNWidgets(2), reason: 'EMAIL_VISIBLE + PASSWORD_VISIBLE');
+      expect(find.text('¿Olvidaste tu contraseña?'), findsOneWidget, reason: 'FORGOT_PASSWORD_VISIBLE');
+
+      final Finder indicatorFinder = find.byKey(const Key('login-portrait-indicator-row'));
+      expect(indicatorFinder, findsOneWidget, reason: 'THREE_LINE_INDICATOR_PRESENT en ${size.width.toInt()}x${size.height.toInt()}');
+      final List<Container> bars = tester
+          .widgetList<Container>(find.descendant(of: indicatorFinder, matching: find.byType(Container)))
+          .toList();
+      expect(bars.length, 3, reason: 'el indicador debe mostrar exactamente 3 líneas');
+
+      expect(find.byType(PrimaryGradientButton), findsOneWidget, reason: 'LOGIN_BUTTON_PRESENT / CTA_REACHABLE');
+      expect(find.byType(GoogleSignInButton), findsOneWidget, reason: 'GOOGLE_BUTTON_PRESENT / GOOGLE_REACHABLE');
+      expect(find.text('Crear cuenta'), findsOneWidget, reason: 'CREATE_ACCOUNT_PRESENT / CREATE_ACCOUNT_REACHABLE');
+    }
+  });
+
+  testWidgets('ACTIVE_INDICATOR_USES_KORIXA_GRADIENT = PASS', (WidgetTester tester) async {
+    await pumpLoginPage(tester, repository, surfaceSize: const Size(390, 844));
+
+    final Finder indicatorFinder = find.byKey(const Key('login-portrait-indicator-row'));
+    final List<Container> bars = tester
+        .widgetList<Container>(find.descendant(of: indicatorFinder, matching: find.byType(Container)))
+        .toList();
+    expect(bars.length, 3);
+
+    // El encargo pide explícitamente que la barra activa (central) use
+    // el MISMO gradiente morado→azul que el CTA principal — se compara
+    // por identidad exacta contra `AppGradients.primaryCta`, no solo
+    // "algún gradiente cualquiera".
+    final BoxDecoration leftDecoration = bars[0].decoration! as BoxDecoration;
+    final BoxDecoration centerDecoration = bars[1].decoration! as BoxDecoration;
+    final BoxDecoration rightDecoration = bars[2].decoration! as BoxDecoration;
+
+    expect(leftDecoration.gradient, isNull, reason: 'LEFT_INDICATOR_GRAY — la barra izquierda no debe tener gradiente');
+    expect(leftDecoration.color, DarkTech.border, reason: 'LEFT_INDICATOR_GRAY');
+
+    expect(centerDecoration.gradient, AppGradients.primaryCta, reason: 'CENTER_INDICATOR_PURPLE_BLUE_GRADIENT debe ser exactamente el gradiente del CTA principal');
+
+    expect(rightDecoration.gradient, isNull, reason: 'RIGHT_INDICATOR_GRAY — la barra derecha no debe tener gradiente');
+    expect(rightDecoration.color, DarkTech.border, reason: 'RIGHT_INDICATOR_GRAY');
+  });
+
+  testWidgets('MOBILE_FIELD_ICONS_PRESENT_DESKTOP_UNCHANGED = PASS', (WidgetTester tester) async {
+    await pumpLoginPage(tester, repository, surfaceSize: const Size(390, 844));
+    expect(find.byIcon(Icons.mail_outline), findsOneWidget, reason: 'ícono de correo en mobile — Material, sin dependencias nuevas');
+    expect(find.byIcon(Icons.lock_outline), findsOneWidget, reason: 'ícono de contraseña en mobile');
+
+    // Desktop no pide íconos en los campos — `showFieldIcons` default
+    // `false` no debe filtrarse a otras composiciones.
+    await pumpLoginPage(tester, repository, surfaceSize: const Size(1440, 900));
+    expect(find.byIcon(Icons.mail_outline), findsNothing, reason: 'desktop no debe ganar íconos de campo en esta tarea');
+    expect(find.byIcon(Icons.lock_outline), findsNothing);
+  });
+
+  testWidgets('PRIMARY_CTA_HAS_NO_ARROW_ICON = PASS', (WidgetTester tester) async {
+    // KORIXA-SCREEN02-FINAL-APPROVED-VISUAL-LOCK-20260911: reemplaza el
+    // test homónimo `_HAS_TRAILING_ARROW` (KORIXA-PR127-LOGIN-MOBILE-
+    // VISUAL-POLISH-20260910) — el dueño fijó el diseño final aprobado y
+    // pidió explícitamente quitar la flecha decorativa: el CTA principal
+    // debe quedar solo con el texto "Iniciar sesión", sin ícono, en las
+    // 3 composiciones (mobile ya no es la excepción).
+    await pumpLoginPage(tester, repository, surfaceSize: const Size(390, 844));
+    final PrimaryGradientButton mobileCta = tester.widget(find.byType(PrimaryGradientButton));
+    expect(mobileCta.icon, isNull, reason: 'PRIMARY_CTA_ARROW_PRESENT = NO: el CTA de mobile ya no debe llevar ningún ícono');
+    expect(mobileCta.label, 'Iniciar sesión', reason: 'PRIMARY_CTA_TEXT = "Iniciar sesión", sin flecha ni texto adicional');
+    // Puramente visual — el callback sigue siendo exactamente el mismo.
+    expect(mobileCta.onPressed, isNotNull);
+
+    await pumpLoginPage(tester, repository, surfaceSize: const Size(1440, 900));
+    final PrimaryGradientButton desktopCta = tester.widget(find.byType(PrimaryGradientButton));
+    expect(desktopCta.icon, isNull, reason: 'el CTA de desktop tampoco debe llevar ícono');
+    expect(desktopCta.label, 'Iniciar sesión');
+  });
+
+  testWidgets('MOBILE_CTA_AND_GOOGLE_SHARE_SAME_WIDTH_NO_HORIZONTAL_OVERFLOW = PASS', (WidgetTester tester) async {
+    const Size mobileSize = Size(390, 844);
+    await pumpLoginPage(tester, repository, surfaceSize: mobileSize);
+
+    final Size ctaSize = tester.getSize(find.byType(PrimaryGradientButton));
+    final Size googleSize = tester.getSize(find.byType(GoogleSignInButton));
+    expect(
+      ctaSize.width,
+      closeTo(googleSize.width, 0.5),
+      reason: 'CTA y Google deben compartir el mismo ancho — coherencia visual pedida por el encargo',
+    );
+    expect(ctaSize.width, lessThan(mobileSize.width), reason: 'no debe haber overflow horizontal');
+  });
+
+  // KORIXA-SCREEN02-LOGIN-MOBILE-PORTRAIT-NO-LOGO-20260910: desktop y
+  // phone landscape quedan CONGELADOS por este encargo — regresión
+  // explícita de sus valores clave ya establecidos en tareas anteriores.
+  testWidgets('DESKTOP_FROZEN_NO_VISUAL_CHANGE = PASS', (WidgetTester tester) async {
+    const Size desktopSize = Size(1440, 900);
+    await pumpLoginPage(tester, repository, surfaceSize: desktopSize);
+
+    expect(find.byKey(const Key('login-logo')), findsOneWidget, reason: 'el logo de desktop NO debe removerse');
+    final Iterable<Image> images = tester.widgetList<Image>(find.byType(Image));
+    final Image desktopLogo = images.firstWhere(
+      (Image image) => resolvedAssetName(image.image) == 'assets/icons/korixa_logo_desktop.png',
+    );
+    expect(desktopLogo.height, 188, reason: 'LOGO_HEIGHT = 188 congelado');
+
+    final Size controlSize = tester.getSize(find.byKey(const Key('login-desktop-control-width')));
+    expect(controlSize.width, closeTo(550, 0.5), reason: 'CONTROL_WIDTH = 550 congelado');
+
+    final Size ctaSize = tester.getSize(find.byType(PrimaryGradientButton));
+    expect(ctaSize.width, closeTo(550, 0.5), reason: 'CTA width = 550 congelado');
+    expect(ctaSize.height, closeTo(64, 0.5), reason: 'CTA height = 64 congelado');
+
+    const double previousReferenceCenterX = 1060.0;
+    final double subtitleCenterX = tester.getCenter(find.byKey(const Key('login-subtitle'))).dx;
+    expect(subtitleCenterX, closeTo(previousReferenceCenterX, 1.0), reason: 'posición del subtítulo congelada');
+
+    final Finder indicatorFinder = find.byKey(const Key('login-desktop-indicator-row'));
+    final List<Container> bars = tester
+        .widgetList<Container>(find.descendant(of: indicatorFinder, matching: find.byType(Container)))
+        .toList();
+    final bool centerActive =
+        bars[1].decoration is BoxDecoration && (bars[1].decoration! as BoxDecoration).gradient != null;
+    expect(centerActive, isTrue, reason: 'indicador de desktop congelado — barra central activa');
+
+    expect(find.byType(BackdropFilter), findsNothing, reason: 'sin outer card en desktop, congelado');
+  });
+
+  testWidgets('PHONE_LANDSCAPE_FROZEN_NO_VISUAL_CHANGE = PASS', (WidgetTester tester) async {
+    await pumpLoginPage(tester, repository, surfaceSize: const Size(932, 430));
+
+    expect(find.byKey(const Key('login-logo')), findsOneWidget, reason: 'el logo de phone landscape NO debe removerse en esta tarea');
+    expect(
+      find.byKey(const Key('login-portrait-indicator-row')),
+      findsNothing,
+      reason: 'phone landscape sigue sin el indicador de SCREEN_01 — fuera de alcance de esta tarea',
+    );
+    expect(
+      find.byKey(const Key('login-desktop-indicator-row')),
+      findsNothing,
+      reason: 'phone landscape nunca tuvo el indicador de desktop',
+    );
+    expect(find.byType(BackdropFilter), findsNothing, reason: 'sin outer card en phone landscape, congelado');
+  });
+
+  // ---------------------------------------------------------------------
+  // KORIXA-SCREEN02-MATCH-SCREEN01-VISUAL-SYSTEM-20260910 — SCREEN_02
+  // mobile portrait debe heredar el sistema tipográfico/de espaciado EXACTO
+  // ya aprobado en SCREEN_01 Welcome mobile (`_MobileWelcomeContent`):
+  // título `headlineMedium` w800 centrado, subtítulo `bodyLarge` en
+  // `DarkTech.textSecondary` sin sombra, contenido acotado a 480 (para que
+  // 768×1024 no se estire ciegamente), y el mismo espaciado indicador→CTA
+  // (`AppSpacing.lg`). Desktop/phone landscape quedan fuera de alcance —
+  // ver `DESKTOP_FROZEN_NO_VISUAL_CHANGE`/`PHONE_LANDSCAPE_FROZEN_NO_
+  // VISUAL_CHANGE` más arriba, que siguen pasando sin tocarse.
+  // ---------------------------------------------------------------------
+
+  testWidgets('MOBILE_TITLE_MATCHES_SCREEN01_TYPOGRAPHY = PASS', (WidgetTester tester) async {
+    await pumpLoginPage(tester, repository, surfaceSize: const Size(390, 844));
+
+    final Text title = tester.widget(find.byKey(const Key('login-title')));
+    expect(
+      title.style?.fontWeight,
+      FontWeight.w800,
+      reason: 'TITLE_STYLE_MATCH: el título de Login mobile debe usar el mismo peso (w800) que "Conecta tu energía." en Welcome mobile',
+    );
+    expect(title.textAlign, TextAlign.center, reason: 'TITLE_STYLE_MATCH: el título debe centrarse igual que en SCREEN_01');
+
+    await pumpLoginPage(tester, repository, surfaceSize: const Size(932, 430));
+    final Text landscapeTitle = tester.widget(find.byKey(const Key('login-title')));
+    expect(
+      landscapeTitle.style?.fontWeight,
+      isNot(FontWeight.w800),
+      reason: 'phone landscape no debe ganar el peso canónico en esta tarea — fuera de alcance, sin cambios',
+    );
+  });
+
+  testWidgets('MOBILE_SUBTITLE_MATCHES_SCREEN01_TYPOGRAPHY = PASS', (WidgetTester tester) async {
+    await pumpLoginPage(tester, repository, surfaceSize: const Size(390, 844));
+
+    final Text subtitle = tester.widget(find.byKey(const Key('login-subtitle')));
+    expect(
+      subtitle.style?.fontSize,
+      16,
+      reason: 'SUBTITLE_STYLE_MATCH: el subtítulo debe usar bodyLarge (16px), el mismo tamaño base que el subtítulo de Welcome mobile',
+    );
+    // KORIXA-SCREEN02-SUBTITLE-CONTRAST-AND-SKY-REFINEMENT-20260911: el
+    // dueño pidió específicamente MÁS legibilidad que el subtítulo
+    // canónico de SCREEN_01 en esta pantalla — color mezclado 45% hacia
+    // blanco (`subtitleContrastBoost`) en vez del `DarkTech.textSecondary`
+    // puro, más una sombra suave. Ya NO se prueba igualdad exacta con
+    // SCREEN_01 en color/sombra (ver `SUBTITLE_CONTRAST_BOOST_APPLIED`
+    // más abajo para el valor exacto esperado) — el resto (tamaño,
+    // alineación) sigue igual.
+    expect(
+      subtitle.style?.color,
+      isNot(DarkTech.textSecondary),
+      reason: 'SUBTITLE_LEGIBILITY_IMPROVED: el color debe ser más claro que el gris canónico de SCREEN_01',
+    );
+    expect(subtitle.textAlign, TextAlign.center, reason: 'SUBTITLE_STYLE_MATCH: mismo alineamiento centrado que SCREEN_01');
+  });
+
+  testWidgets('SUBTITLE_CONTRAST_BOOST_APPLIED = PASS', (WidgetTester tester) async {
+    // KORIXA-SCREEN02-SUBTITLE-CONTRAST-AND-SKY-REFINEMENT-20260911:
+    // encargo — subir legibilidad del subtítulo con un ajuste sutil
+    // (más blanco + sombra suave), SIN cambiar texto/tipografía/tamaño/
+    // posición. Se prueba el valor exacto para que una regresión futura
+    // (p. ej. quitar la sombra sin querer) falle aquí explícitamente.
+    await pumpLoginPage(tester, repository, surfaceSize: const Size(390, 844));
+
+    final Text subtitle = tester.widget(find.byKey(const Key('login-subtitle')));
+    expect(
+      subtitle.data,
+      'Inicia sesión para continuar tu ruta',
+      reason: 'SUBTITLE_TEXT_UNCHANGED: el copy debe seguir siendo exactamente el mismo',
+    );
+    expect(
+      subtitle.style?.color,
+      Color.lerp(DarkTech.textSecondary, Colors.white, 0.45),
+      reason: 'el color debe ser la mezcla sutil hacia blanco pedida (45%), no un blanco puro ni el gris original',
+    );
+    expect(subtitle.style?.fontSize, 16, reason: 'la tipografía/tamaño no deben cambiar');
+    final List<Shadow>? shadows = subtitle.style?.shadows;
+    expect(shadows, isNotNull, reason: 'debe llevar una sombra suave para reforzar el contraste');
+    expect(shadows!.length, 1);
+    expect(shadows.single.blurRadius, 6, reason: 'sombra suave y discreta, no exagerada');
+    expect(shadows.single.color.a, closeTo(0.45, 0.01), reason: 'opacidad de sombra sutil');
+  });
+
+  testWidgets('MOBILE_TITLE_NO_TEXT_SHADOW_MATCHES_SCREEN01 = PASS', (WidgetTester tester) async {
+    await pumpLoginPage(tester, repository, surfaceSize: const Size(390, 844));
+
+    final Text title = tester.widget(find.byKey(const Key('login-title')));
+    expect(
+      title.style?.shadows,
+      isNull,
+      reason: 'SCREEN_01 nunca aplica sombra de texto al título, ni flotando directamente sobre la foto — confía en el mismo scrim',
+    );
+  });
+
+  testWidgets('MOBILE_CONTENT_WIDTH_MATCHES_SCREEN01_CAP = PASS', (WidgetTester tester) async {
+    await pumpLoginPage(tester, repository, surfaceSize: const Size(390, 844));
+    final Size narrowSize = tester.getSize(find.byKey(const Key('login-portrait-content-max-width')));
+    expect(
+      narrowSize.width,
+      lessThanOrEqualTo(390),
+      reason: 'a 390 de ancho el tope de 480 no debe forzar overflow — el contenido sigue acotado por el propio viewport',
+    );
+  });
+
+  testWidgets('RESPONSIVE_768x1024_CONTENT_WIDTH_SENSIBLE = PASS', (WidgetTester tester) async {
+    const Size tabletSize = Size(768, 1024);
+    await pumpLoginPage(tester, repository, surfaceSize: tabletSize);
+    expect(tester.takeException(), isNull, reason: 'no debe haber overflow en 768x1024');
+
+    // KORIXA-SCREEN02-MATCH-SCREEN01-VISUAL-SYSTEM-20260910: el encargo
+    // pide explícitamente NO "estirar ciegamente las dimensiones de
+    // teléfono" — a 768 de ancho, el mismo tope de 480 ya aprobado en
+    // SCREEN_01 (`welcome-content-max-width`) debe aplicar, en vez de
+    // dejar que el formulario ocupe los ~720px útiles del viewport.
+    final Size contentSize = tester.getSize(find.byKey(const Key('login-portrait-content-max-width')));
+    expect(
+      contentSize.width,
+      closeTo(480, 0.5),
+      reason: 'RESPONSIVE_768x1024: el contenido debe acotarse a 480 (igual que SCREEN_01), no estirarse a lo ancho completo del viewport',
+    );
+
+    final Size ctaSize = tester.getSize(find.byType(PrimaryGradientButton));
+    expect(
+      ctaSize.width,
+      lessThanOrEqualTo(480),
+      reason: 'RESPONSIVE_768x1024: el CTA no debe quedar más ancho que el tope de contenido de SCREEN_01',
+    );
+  });
+
+  testWidgets('LOGIN_CALLBACKS_UNCHANGED = PASS', (WidgetTester tester) async {
+    // KORIXA-SCREEN02-TRUE-BOTTOM-COMPOSITION-OWNER-CORRECTION-20260911:
+    // encargo PRESENTATION ONLY — prueba explícita de que el flujo
+    // completo de submit (email/password → Home) sigue intacto tras
+    // compactar la composición, a 390x844 (el tamaño de aceptación
+    // primario de esta tarea).
+    when(() => repository.login(email: 'rider@ridepro.com', password: 'securePass123'))
+        .thenAnswer((_) async => const Right(tUser));
+    await pumpLoginPage(tester, repository, surfaceSize: const Size(390, 844));
+
+    await tester.enterText(find.byType(TextFormField).at(0), 'rider@ridepro.com');
+    await tester.enterText(find.byType(TextFormField).at(1), 'securePass123');
+    await tester.ensureVisible(find.text('Iniciar sesión'));
+    await tester.tap(find.text('Iniciar sesión'));
+    await tester.pumpAndSettle();
+
+    expect(find.text('HOME'), findsOneWidget, reason: 'EMAIL_PASSWORD_BEHAVIOR_CHANGED = NO');
+  });
+
+  // ---------------------------------------------------------------------
+  // KORIXA-SCREEN02-TRUE-BOTTOM-COMPOSITION-OWNER-CORRECTION-20260911 —
+  // segunda corrección del dueño: la ronda anterior (KORIXA-SCREEN02-
+  // BOTTOM-ANCHORED-COMPOSITION-20260910, `y=220 → y=264` a 390×844) fue
+  // un cambio real pero INSUFICIENTE — el dueño pidió explícitamente NO
+  // aceptar "otro ajuste incremental" y fijó un objetivo NUMÉRICO
+  // absoluto: `TITLE_TOP_Y >= 340` a 390×844, verificado contra el valor
+  // exacto, no solo "más abajo que antes". Se logra reduciendo TODOS los
+  // gaps internos del grupo al valor más chico ya existente en el sistema
+  // de diseño (`AppSpacing.xs` = 4) y reduciendo el alto propio de
+  // campos/CTA/Google de 56/52/52 a 48 (el piso táctil mínimo pedido
+  // explícitamente, nunca por debajo) — ver comentarios en
+  // `login_page.dart` (`contentSectionGap`, `indicatorToCtaGap`,
+  // `fieldSpacingGap`, `fieldContentPadding`, `ctaHeight`,
+  // `socialButtonHeight`, `titleToSubtitleGap`) para el detalle exacto.
+  // ---------------------------------------------------------------------
+
+  testWidgets('TITLE_TOP_Y_AT_LEAST_340 = PASS', (WidgetTester tester) async {
+    // Objetivo NUMÉRICO absoluto pedido explícitamente por el dueño — NO
+    // una comparación contra el estado anterior. Rango preferido 340-390;
+    // se prueba el piso exacto (>=340), sin techo artificial.
+    await pumpLoginPage(tester, repository, surfaceSize: const Size(390, 844));
+    final double titleTop = tester.getRect(find.byKey(const Key('login-title'))).top;
+    expect(
+      titleTop,
+      greaterThanOrEqualTo(340.0),
+      reason: 'TITLE_TOP_Y_AT_LEAST_340: el título debe empezar en y>=340 a 390x844 (objetivo del dueño), no solo "más abajo que la ronda anterior"',
+    );
+  });
+
+  testWidgets('TRUE_BOTTOM_COMPOSITION_390x844 = PASS', (WidgetTester tester) async {
+    // Prueba la impresión visual completa pedida: mucho espacio escénico
+    // arriba (título en la mitad inferior real del viewport, no solo
+    // "más abajo que antes") Y el grupo completo comportándose como una
+    // sola pieza compacta (gaps entre CADA par de elementos consecutivos
+    // dentro de un rango chico y uniforme, sin ningún salto grande que
+    // lo lea como "secciones separadas").
+    const Size size = Size(390, 844);
+    await pumpLoginPage(tester, repository, surfaceSize: size);
+
+    final double titleTop = tester.getRect(find.byKey(const Key('login-title'))).top;
+    expect(
+      titleTop,
+      greaterThanOrEqualTo(size.height * 0.40),
+      reason: 'TRUE_BOTTOM_COMPOSITION_390x844: el título debe empezar en la mitad INFERIOR del viewport (>=40% del alto), igual que "Conecta tu energía." en SCREEN_01',
+    );
+
+    // El grupo título→CTA no debe tener ningún GAP (borde-a-borde, no
+    // top-a-top — un top-a-top incluiría el alto del propio elemento
+    // anterior) mayor a `AppSpacing.base` (16) entre elementos
+    // consecutivos — si lo tuviera, se leería como 2 secciones separadas
+    // en vez de UN grupo.
+    final Rect titleRect = tester.getRect(find.byKey(const Key('login-title')));
+    final Rect subtitleRect = tester.getRect(find.byKey(const Key('login-subtitle')));
+    final Rect emailRect = tester.getRect(find.byType(TextFormField).at(0));
+    final Rect indicatorRect = tester.getRect(find.byKey(const Key('login-portrait-indicator-row')));
+    final Rect ctaRect = tester.getRect(find.byType(PrimaryGradientButton));
+    expect(subtitleRect.top - titleRect.bottom, lessThanOrEqualTo(AppSpacing.base), reason: 'título→subtítulo debe leerse como parte del mismo bloque compacto');
+    expect(emailRect.top - subtitleRect.bottom, lessThanOrEqualTo(AppSpacing.base), reason: 'subtítulo→campos debe leerse como parte del mismo bloque compacto');
+    expect(ctaRect.top - indicatorRect.bottom, lessThanOrEqualTo(AppSpacing.base), reason: 'indicador→CTA debe leerse como parte del mismo bloque compacto');
+  });
+
+  testWidgets('CONTENT_GROUP_BOTTOM_ANCHORED = PASS', (WidgetTester tester) async {
+    const Size mobileSize = Size(390, 844);
+    await pumpLoginPage(tester, repository, surfaceSize: mobileSize);
+
+    final double createAccountBottom = tester.getRect(find.text('Crear cuenta')).bottom;
+    expect(
+      mobileSize.height - createAccountBottom,
+      lessThan(40),
+      reason: 'CONTENT_GROUP_BOTTOM_ANCHORED: "Crear cuenta" debe quedar cerca del borde inferior real del viewport, no flotando en el medio de la pantalla',
+    );
+  });
+
+  testWidgets('TOUCH_TARGETS_ACCESSIBLE = PASS', (WidgetTester tester) async {
+    // El encargo autoriza reducir altura de campos/CTA/Google, pero
+    // exige explícitamente no bajar de ~48px lógicos — se prueba el piso
+    // real, no solo que "se ven más chicos".
+    await pumpLoginPage(tester, repository, surfaceSize: const Size(390, 844));
+
+    final double emailHeight = tester.getSize(find.byType(TextFormField).at(0)).height;
+    final double passwordHeight = tester.getSize(find.byType(TextFormField).at(1)).height;
+    final double ctaHeight = tester.getSize(find.byType(PrimaryGradientButton)).height;
+    final double googleHeight = tester.getSize(find.byType(GoogleSignInButton)).height;
+
+    expect(emailHeight, greaterThanOrEqualTo(47.5), reason: 'TOUCH_TARGETS_ACCESSIBLE: el campo de correo no debe bajar de ~48px');
+    expect(passwordHeight, greaterThanOrEqualTo(47.5), reason: 'TOUCH_TARGETS_ACCESSIBLE: el campo de contraseña no debe bajar de ~48px');
+    expect(ctaHeight, greaterThanOrEqualTo(47.5), reason: 'TOUCH_TARGETS_ACCESSIBLE: el CTA no debe bajar de ~48px');
+    expect(googleHeight, greaterThanOrEqualTo(47.5), reason: 'TOUCH_TARGETS_ACCESSIBLE: el botón de Google no debe bajar de ~48px');
+  });
+
+  // ---------------------------------------------------------------------
+  // KORIXA-SCREEN02-INDICATOR-SPACING-POLISH-20260911: el dueño pidió que
+  // el indicador de 3 barras quede perfectamente centrado en grupo, con
+  // separación uniforme entre barras, y con más aire respecto al CTA
+  // (sin tocar ninguna otra separación del bloque). Estos tests miden
+  // geometría real, no solo confían en que `Center` "debería" centrar.
+  // ---------------------------------------------------------------------
+
+  testWidgets('MOBILE_INDICATOR_HORIZONTALLY_CENTERED = PASS', (WidgetTester tester) async {
+    const Size surfaceSize = Size(390, 844);
+    await pumpLoginPage(tester, repository, surfaceSize: surfaceSize);
+    final Rect indicatorRect = tester.getRect(find.byKey(const Key('login-portrait-indicator-row')));
+    expect(
+      indicatorRect.center.dx,
+      closeTo(surfaceSize.width / 2, 0.5),
+      reason: 'MOBILE_INDICATOR_HORIZONTALLY_CENTERED: el grupo de 3 barras debe quedar centrado en el ancho real de la pantalla',
+    );
+  });
+
+  testWidgets('MOBILE_INDICATOR_BAR_GAPS_UNIFORM = PASS', (WidgetTester tester) async {
+    await pumpLoginPage(tester, repository, surfaceSize: const Size(390, 844));
+    final Finder bars = find.descendant(
+      of: find.byKey(const Key('login-portrait-indicator-row')),
+      matching: find.byType(Container),
+    );
+    expect(bars, findsNWidgets(3), reason: 'MOBILE_INDICATOR_BAR_GAPS_UNIFORM: deben existir exactamente 3 barras');
+    final double gap01 = tester.getRect(bars.at(1)).left - tester.getRect(bars.at(0)).right;
+    final double gap12 = tester.getRect(bars.at(2)).left - tester.getRect(bars.at(1)).right;
+    expect(
+      gap01,
+      closeTo(gap12, 0.5),
+      reason: 'MOBILE_INDICATOR_BAR_GAPS_UNIFORM: la separación entre barra 1-2 debe ser igual a la separación entre barra 2-3',
+    );
+  });
+
+  testWidgets('MOBILE_INDICATOR_VERTICALLY_CENTERED_BETWEEN_FORGOT_AND_CTA = PASS', (WidgetTester tester) async {
+    // KORIXA-SCREEN02-INDICATOR-VERTICAL-CENTERING-20260912: el dueño
+    // pidió que el indicador de 3 barras quede centrado VERTICALMENTE
+    // entre "¿Olvidaste tu contraseña?" y el CTA — ni más pegado arriba
+    // ni más pegado abajo. El espacio RENDERIZADO arriba (que incluye el
+    // padding propio del `TextButton` de "olvidé mi contraseña", no solo
+    // el `SizedBox` lógico) debe medir lo mismo que el espacio
+    // renderizado abajo (que sí mapea 1:1 al `SizedBox` de
+    // `indicatorToCtaGap`, sin padding ajeno).
+    await pumpLoginPage(tester, repository, surfaceSize: const Size(390, 844));
+    final double forgotPasswordBottom = tester.getRect(find.text('¿Olvidaste tu contraseña?')).bottom;
+    final double indicatorTop = tester.getRect(find.byKey(const Key('login-portrait-indicator-row'))).top;
+    final double indicatorBottom = tester.getRect(find.byKey(const Key('login-portrait-indicator-row'))).bottom;
+    final double ctaTop = tester.getRect(find.byType(PrimaryGradientButton)).top;
+    final double gapAbove = indicatorTop - forgotPasswordBottom;
+    final double gapBelow = ctaTop - indicatorBottom;
+    expect(
+      gapAbove,
+      closeTo(gapBelow, 0.5),
+      reason: 'MOBILE_INDICATOR_VERTICALLY_CENTERED_BETWEEN_FORGOT_AND_CTA: el espacio renderizado arriba y abajo del indicador debe ser igual',
+    );
+    expect(gapAbove, closeTo(11.0, 0.5), reason: 'valor real medido: 11px arriba y abajo');
+  });
+
+  testWidgets('ALL_LOGIN_ACTIONS_REACHABLE = PASS', (WidgetTester tester) async {
+    const Size size = Size(390, 844);
+    await pumpLoginPage(tester, repository, surfaceSize: size);
+    expect(tester.takeException(), isNull, reason: 'NO_OVERFLOW en 390x844');
+
+    // Los 10 elementos del grupo, pedidos explícitamente por el encargo,
+    // deben seguir alcanzables sin scroll a este tamaño de aceptación
+    // primario.
+    expect(find.text('Bienvenido de nuevo'), findsOneWidget, reason: 'título visible');
+    expect(find.text('Inicia sesión para continuar tu ruta'), findsOneWidget, reason: 'subtítulo visible');
+    expect(find.byType(TextFormField), findsNWidgets(2), reason: 'email + password visibles');
+    expect(find.text('¿Olvidaste tu contraseña?'), findsOneWidget, reason: 'olvidé mi contraseña visible');
+    expect(find.byKey(const Key('login-portrait-indicator-row')), findsOneWidget, reason: 'indicador visible');
+    expect(find.byType(PrimaryGradientButton), findsOneWidget, reason: 'CTA visible');
+    expect(find.byType(GoogleSignInButton), findsOneWidget, reason: 'botón de Google visible');
+    expect(find.text('Crear cuenta'), findsOneWidget, reason: 'CREATE_ACCOUNT_VISIBLE');
+
+    // El scroll sigue funcionando (pedido explícito: "the content should
+    // remain scrollable when required") aunque no debería hacer falta a
+    // este tamaño.
+    await tester.ensureVisible(find.text('Crear cuenta'));
+    await tester.pumpAndSettle();
+    expect(tester.takeException(), isNull, reason: 'NO_OVERFLOW tras scrollear a Crear cuenta');
+  });
+
+  const <String, Size>{
+    '360x800': Size(360, 800),
+    '390x844': Size(390, 844),
+    '430x932': Size(430, 932),
+  }.forEach((String label, Size size) {
+    testWidgets('NO_RENDER_OVERFLOW_$label = PASS', (WidgetTester tester) async {
+      await pumpLoginPage(tester, repository, surfaceSize: size);
+      expect(tester.takeException(), isNull, reason: 'NO_RENDER_OVERFLOW en $label al pumpear');
+
+      expect(find.byType(TextFormField), findsNWidgets(2), reason: '$label: campos alcanzables');
+      expect(find.byType(PrimaryGradientButton), findsOneWidget, reason: '$label: CTA alcanzable');
+      expect(find.byType(GoogleSignInButton), findsOneWidget, reason: '$label: Google alcanzable');
+
+      // Scroll permitido en pantallas chicas (pedido explícito del
+      // encargo) — pero debe llegar a Crear cuenta sin error.
+      await tester.ensureVisible(find.text('Crear cuenta'));
+      await tester.pumpAndSettle();
+      expect(tester.takeException(), isNull, reason: 'NO_RENDER_OVERFLOW en $label tras scrollear a Crear cuenta');
+    });
+  });
+
+  testWidgets('TABLET_WIDTH_CAPPED_768x1024 = PASS', (WidgetTester tester) async {
+    const Size tabletSize = Size(768, 1024);
+    await pumpLoginPage(tester, repository, surfaceSize: tabletSize);
+    expect(tester.takeException(), isNull, reason: 'no debe haber overflow en 768x1024');
+
+    final Size contentSize = tester.getSize(find.byKey(const Key('login-portrait-content-max-width')));
+    expect(
+      contentSize.width,
+      closeTo(480, 0.5),
+      reason: 'TABLET_WIDTH_CAPPED_768x1024: el contenido debe seguir acotado a 480 (SCREEN_01), no estirado a lo ancho completo del viewport',
+    );
+
+    // La composición tablet no debe verse forzada tan abajo como el
+    // objetivo mobile (390x844) — el dueño pidió "balanced", no empujar
+    // el layout de teléfono a un viewport mucho más alto.
+    final double titleTop = tester.getRect(find.byKey(const Key('login-title'))).top;
+    expect(
+      titleTop,
+      greaterThan(tabletSize.height * 0.30),
+      reason: 'TABLET_WIDTH_CAPPED_768x1024: composición balanceada, con espacio escénico real arriba',
+    );
+  });
+
+  // ---------------------------------------------------------------------
+  // KORIXA-SCREEN02-FINAL-APPROVED-VISUAL-LOCK-20260911 — el dueño fijó
+  // el diseño final aprobado de SCREEN_02 mobile portrait. Este bloque
+  // prueba explícitamente cada criterio de aceptación enumerado en el
+  // encargo, en un solo lugar, en los 4 tamaños requeridos — no solo que
+  // cada elemento individual ya estaba probado en tests anteriores
+  // (dispersos por tarea), sino que TODOS coexisten simultáneamente en el
+  // diseño final.
+  // ---------------------------------------------------------------------
+
+  const <String, Size>{
+    '360x800': Size(360, 800),
+    '390x844': Size(390, 844),
+    '430x932': Size(430, 932),
+    '768x1024': Size(768, 1024),
+  }.forEach((String label, Size size) {
+    testWidgets('$label SCREEN02_MATCHES_APPROVED_DESIGN = PASS', (WidgetTester tester) async {
+      await pumpLoginPage(tester, repository, surfaceSize: size);
+      expect(tester.takeException(), isNull, reason: '$label: no overflow');
+
+      // BACKGROUND_GUATAPE_PRESENT
+      expect(
+        hasHeroImage(tester, assetPath: 'assets/images/korixa_login_hero_guatape_mobile.png'),
+        isTrue,
+        reason: '$label: BACKGROUND_GUATAPE_PRESENT',
+      );
+
+      // TOP_MOBILE_LOGO_PRESENT = NO
+      expect(find.byKey(const Key('login-logo')), findsNothing, reason: '$label: TOP_MOBILE_LOGO_PRESENT debe ser NO');
+
+      // TITLE_PRESENT / SUBTITLE_PRESENT
+      expect(find.text('Bienvenido de nuevo'), findsOneWidget, reason: '$label: TITLE_PRESENT');
+      expect(find.text('Inicia sesión para continuar tu ruta'), findsOneWidget, reason: '$label: SUBTITLE_PRESENT');
+
+      // EMAIL_FIELD_PRESENT / PASSWORD_FIELD_PRESENT
+      expect(find.byType(TextFormField), findsNWidgets(2), reason: '$label: EMAIL_FIELD_PRESENT + PASSWORD_FIELD_PRESENT');
+
+      // FORGOT_PASSWORD_PRESENT
+      expect(find.text('¿Olvidaste tu contraseña?'), findsOneWidget, reason: '$label: FORGOT_PASSWORD_PRESENT');
+
+      // THREE_BAR_INDICATOR_PRESENT + CENTER_BAR_PURPLE_BLUE_GRADIENT
+      final Finder indicatorFinder = find.byKey(const Key('login-portrait-indicator-row'));
+      expect(indicatorFinder, findsOneWidget, reason: '$label: THREE_BAR_INDICATOR_PRESENT');
+      final List<Container> bars = tester
+          .widgetList<Container>(find.descendant(of: indicatorFinder, matching: find.byType(Container)))
+          .toList();
+      expect(bars.length, 3, reason: '$label: el indicador debe tener exactamente 3 barras');
+      final BoxDecoration leftDecoration = bars[0].decoration! as BoxDecoration;
+      final BoxDecoration centerDecoration = bars[1].decoration! as BoxDecoration;
+      final BoxDecoration rightDecoration = bars[2].decoration! as BoxDecoration;
+      expect(leftDecoration.color, DarkTech.border, reason: '$label: barra izquierda gris');
+      expect(centerDecoration.gradient, AppGradients.primaryCta, reason: '$label: CENTER_BAR_PURPLE_BLUE_GRADIENT');
+      expect(rightDecoration.color, DarkTech.border, reason: '$label: barra derecha gris');
+
+      // PRIMARY_CTA_TEXT + PRIMARY_CTA_ARROW_PRESENT = NO
+      final PrimaryGradientButton cta = tester.widget(find.byType(PrimaryGradientButton));
+      expect(cta.label, 'Iniciar sesión', reason: '$label: PRIMARY_CTA_TEXT');
+      expect(cta.icon, isNull, reason: '$label: PRIMARY_CTA_ARROW_PRESENT debe ser NO');
+
+      // GOOGLE_BUTTON_PRESENT / CREATE_ACCOUNT_PRESENT
+      expect(find.byType(GoogleSignInButton), findsOneWidget, reason: '$label: GOOGLE_BUTTON_PRESENT');
+      expect(find.text('Crear cuenta'), findsOneWidget, reason: '$label: CREATE_ACCOUNT_PRESENT');
+
+      // BOTTOM_ANCHORED_COMPOSITION: el título nunca debe empezar en el
+      // primer tercio del viewport — sigue anclado abajo, con espacio
+      // escénico real arriba.
+      final double titleTop = tester.getRect(find.byKey(const Key('login-title'))).top;
+      expect(titleTop, greaterThan(size.height * 0.25), reason: '$label: BOTTOM_ANCHORED_COMPOSITION');
+
+      // Alcanzabilidad final — incluso si hace falta scroll en pantallas
+      // chicas, Crear cuenta y Google deben poder alcanzarse sin error.
+      await tester.ensureVisible(find.text('Crear cuenta'));
+      await tester.pumpAndSettle();
+      expect(tester.takeException(), isNull, reason: '$label: no overflow tras scrollear a Crear cuenta');
+    });
+  });
+
+  // ---------------------------------------------------------------------
+  // KORIXA-SCREEN02-MOBILE-VISUAL-VIEWPORT-BOTTOM-ANCHOR-FIX-20260911 —
+  // el dueño reportó, en un navegador móvil real, que el grupo de
+  // contenido de Login aparecía "notablemente más arriba" cuando el
+  // chrome del navegador (barra de URL) reduce el alto visual real
+  // disponible. Investigado con evidencia antes de tocar código (medición
+  // directa a 8 alturas vía un widget test desechable): con la
+  // implementación anterior (`Align(bottomCenter)` sin ningún piso de
+  // altura), el alto del grupo de contenido es prácticamente constante
+  // (~490-500px, hecho de tipografía/campos/botones de tamaño fijo) y,
+  // anclado al fondo, CUALQUIER reducción del alto de viewport se resta
+  // 1:1 del espacio escénico de arriba — matemáticamente inevitable con
+  // ESE mecanismo, y exactamente el comportamiento que el dueño pidió
+  // corregir. La corrección impone un piso de altura TOTAL
+  // (`_minPortraitCompositionHeight` = 750) para la composición: cuando
+  // el viewport real ya supera el piso (844/932/1024, geometría idéntica
+  // a antes), no cambia nada; cuando es más corto, el piso preserva un
+  // espacio escénico mínimo y el excedente se vuelve scrolleable (ya no
+  // `reverse: true` — el scroll arranca mostrando el INICIO, así que
+  // Google/Crear cuenta quedan alcanzables scrolleando hacia ABAJO,
+  // nunca ocultos scrolleando hacia arriba).
+  // ---------------------------------------------------------------------
+
+  testWidgets('NORMAL_390x844_GEOMETRY_NOT_REGRESSED = PASS', (WidgetTester tester) async {
+    // KORIXA-SCREEN02-COMPACT-BLOCK-WITHOUT-MOVING-BACKGROUND (344→362) +
+    // KORIXA-SCREEN02-SLIGHT-BLOCK-DECOMPRESSION-20260911 (362→353, -9px)
+    // + KORIXA-SCREEN02-INDICATOR-SPACING-POLISH-20260911 (353→348, -5px)
+    // + KORIXA-SCREEN02-INDICATOR-VERTICAL-CENTERING-20260912 (348→345,
+    // -3px): el dueño pidió que el indicador quede centrado verticalmente
+    // entre "olvidé mi contraseña" y el CTA — `indicatorToCtaGap` sube de
+    // `AppSpacing.sm` (8) a `11` (para igualar el espacio renderizado
+    // arriba, que ya medía 11px por el padding propio del `TextButton`),
+    // +3px de alto real al grupo; el fondo/hero y el piso táctil de 48 no
+    // cambiaron.
+    await pumpLoginPage(tester, repository, surfaceSize: const Size(390, 844));
+    final double titleTop = tester.getRect(find.byKey(const Key('login-title'))).top;
+    expect(
+      titleTop,
+      closeTo(345.0, 0.5),
+      reason: 'NORMAL_390x844_GEOMETRY_NOT_REGRESSED: centrar el indicador debe subir el título 3px (348→345), sin mover el fondo',
+    );
+  });
+
+  testWidgets('NORMAL_HEIGHT_BOTTOM_COMPOSITION_PRESERVED = PASS', (WidgetTester tester) async {
+    // KORIXA-SCREEN02-INDICATOR-VERTICAL-CENTERING-20260912: mismo
+    // desplazamiento de -3px que 390x844 arriba, medido a 430x932 y
+    // 768x1024 (ambos siguen sin activar scroll).
+    await pumpLoginPage(tester, repository, surfaceSize: const Size(430, 932));
+    expect(
+      tester.getRect(find.byKey(const Key('login-title'))).top,
+      closeTo(441.0, 0.5),
+      reason: 'NORMAL_HEIGHT_BOTTOM_COMPOSITION_PRESERVED a 430x932 (444→441 tras centrar el indicador)',
+    );
+
+    await pumpLoginPage(tester, repository, surfaceSize: const Size(768, 1024));
+    expect(
+      tester.getRect(find.byKey(const Key('login-title'))).top,
+      closeTo(533.0, 0.5),
+      reason: 'NORMAL_HEIGHT_BOTTOM_COMPOSITION_PRESERVED a 768x1024 (536→533 tras centrar el indicador)',
+    );
+  });
+
+  testWidgets('SHORT_VIEWPORT_SACRIFICES_SCENIC_SPACE_NOT_SCROLL = PASS', (WidgetTester tester) async {
+    // KORIXA-SCREEN02-FIXED-BLOCK-NO-MOVEMENT-20260911: el dueño corrigió
+    // explícitamente el criterio de la ronda anterior — la decisión de
+    // scroll ya NO debe basarse en preservar espacio escénico ni en un
+    // piso de altura artificial; debe basarse SOLO en si el contenido
+    // FUNCIONAL entra o no en el alto real. "Se sacrifica primero el
+    // paisaje visible arriba" — así que a estos 4 tamaños "cortos" el
+    // título SÍ puede (y debe) subir proporcionalmente con el viewport
+    // (nada de piso de 750 manteniéndolo artificialmente abajo), MIENTRAS
+    // el contenido real siga entrando sin desbordar.
+    for (final Size size in const <Size>[Size(360, 680), Size(390, 700), Size(390, 740), Size(430, 760)]) {
+      await pumpLoginPage(tester, repository, surfaceSize: size);
+      expect(tester.takeException(), isNull, reason: 'NO_OVERFLOW en ${size.width.toInt()}x${size.height.toInt()}');
+
+      // El contenido natural (~500px) entra en los 4 tamaños "cortos"
+      // pedidos por este encargo — el scroll debe quedar deshabilitado,
+      // no forzado, en ninguno de ellos.
+      final SingleChildScrollView scrollView = tester.widget(find.byType(SingleChildScrollView).first);
+      expect(
+        scrollView.physics,
+        isA<NeverScrollableScrollPhysics>(),
+        reason: 'SCROLL_ONLY_WHEN_CONTENT_DOES_NOT_FIT: a ${size.width.toInt()}x${size.height.toInt()} el contenido real entra, así que el scroll debe seguir deshabilitado',
+      );
+
+      expect(find.text('Crear cuenta'), findsOneWidget, reason: 'ALL_ACTIONS_REACHABLE en ${size.width.toInt()}x${size.height.toInt()}');
+    }
+  });
+
+  testWidgets('ALL_LOGIN_ACTIONS_REACHABLE_AFTER_SCROLL = PASS', (WidgetTester tester) async {
+    // El caso más extremo pedido — 360x680 — todos los controles deben
+    // seguir siendo alcanzables (con scroll si hace falta), nunca
+    // recortados/inaccesibles.
+    const Size size = Size(360, 680);
+    await pumpLoginPage(tester, repository, surfaceSize: size);
+    expect(tester.takeException(), isNull);
+
+    expect(find.text('Bienvenido de nuevo'), findsOneWidget, reason: 'título alcanzable');
+    expect(find.byType(TextFormField), findsNWidgets(2), reason: 'campos alcanzables');
+    expect(find.text('¿Olvidaste tu contraseña?'), findsOneWidget, reason: 'olvidé mi contraseña alcanzable');
+    expect(find.byKey(const Key('login-portrait-indicator-row')), findsOneWidget, reason: 'indicador alcanzable');
+
+    await tester.ensureVisible(find.byType(PrimaryGradientButton));
+    await tester.pumpAndSettle();
+    expect(tester.takeException(), isNull, reason: 'CTA alcanzable tras scroll');
+
+    await tester.ensureVisible(find.byType(GoogleSignInButton));
+    await tester.pumpAndSettle();
+    expect(tester.takeException(), isNull, reason: 'Google alcanzable tras scroll');
+
+    await tester.ensureVisible(find.text('Crear cuenta'));
+    await tester.pumpAndSettle();
+    expect(tester.takeException(), isNull, reason: 'Crear cuenta alcanzable tras scroll');
+    expect(find.text('Crear cuenta'), findsOneWidget);
+  });
+
+  const <String, Size>{
+    '360x680': Size(360, 680),
+    '390x700': Size(390, 700),
+    '390x740': Size(390, 740),
+    '430x760': Size(430, 760),
+  }.forEach((String label, Size size) {
+    testWidgets('NO_OVERFLOW_$label = PASS', (WidgetTester tester) async {
+      await pumpLoginPage(tester, repository, surfaceSize: size);
+      expect(tester.takeException(), isNull, reason: 'NO_OVERFLOW_$label al construir');
+
+      expect(find.byType(TextFormField), findsNWidgets(2));
+      expect(find.byType(PrimaryGradientButton), findsOneWidget);
+
+      await tester.ensureVisible(find.text('Crear cuenta'));
+      await tester.pumpAndSettle();
+      expect(tester.takeException(), isNull, reason: 'NO_OVERFLOW_$label tras scrollear a Crear cuenta');
+      expect(find.text('Crear cuenta'), findsOneWidget);
+    });
+  });
+
+  testWidgets('AUTH_CALLBACKS_UNCHANGED = PASS', (WidgetTester tester) async {
+    // El encargo es de layout responsivo ÚNICAMENTE — prueba explícita
+    // de que el flujo de submit sigue intacto, ahora medido en un
+    // viewport CORTO (donde el fix realmente actúa), no solo en 390x844.
+    when(() => repository.login(email: 'rider@ridepro.com', password: 'securePass123'))
+        .thenAnswer((_) async => const Right(tUser));
+    await pumpLoginPage(tester, repository, surfaceSize: const Size(390, 700));
+
+    await tester.enterText(find.byType(TextFormField).at(0), 'rider@ridepro.com');
+    await tester.enterText(find.byType(TextFormField).at(1), 'securePass123');
+    await tester.ensureVisible(find.text('Iniciar sesión'));
+    await tester.tap(find.text('Iniciar sesión'));
+    await tester.pumpAndSettle();
+
+    expect(find.text('HOME'), findsOneWidget, reason: 'AUTH_CALLBACKS_UNCHANGED: EMAIL_PASSWORD_BEHAVIOR_CHANGED = NO incluso en viewport corto');
+  });
+
+  testWidgets('SCREEN01_UNCHANGED = PASS', (WidgetTester tester) async {
+    // Este encargo solo toca `login_page.dart` (mobile portrait) — prueba
+    // de regresión explícita de que Welcome (SCREEN_01) sigue exactamente
+    // igual: mismo copy, mismo CTA, mismo indicador (tamaño/gap ya
+    // aprobados), sin ningún efecto colateral del fix de Login.
+    tester.view.physicalSize = const Size(390, 844);
+    tester.view.devicePixelRatio = 1.0;
+    addTearDown(tester.view.reset);
+
+    await tester.pumpWidget(
+      authPageHarness(initialLocation: '/welcome', welcomePage: const WelcomePage()),
+    );
+    await tester.pumpAndSettle();
+
+    expect(find.text('Conecta tu energía.'), findsOneWidget, reason: 'SCREEN01_UNCHANGED: título de Welcome intacto');
+    expect(
+      find.text('Entrena, compite y vive rutas increíbles en indoor y outdoor.'),
+      findsOneWidget,
+      reason: 'SCREEN01_UNCHANGED: subtítulo de Welcome intacto',
+    );
+    expect(find.text('Comenzar'), findsOneWidget, reason: 'SCREEN01_UNCHANGED: CTA de Welcome intacto');
+
+    final Finder indicatorFinder = find.byKey(const Key('welcome-indicator-row'));
+    expect(indicatorFinder, findsOneWidget, reason: 'SCREEN01_UNCHANGED: indicador de Welcome presente');
+    final Size indicatorSize = tester.getSize(indicatorFinder);
+    expect(indicatorSize.width, closeTo(64, 0.5), reason: 'SCREEN01_UNCHANGED: tamaño del indicador de Welcome (18/4/5) sin cambios');
+  });
+
+  // ---------------------------------------------------------------------
+  // KORIXA-SCREEN02-MOBILE-CONDITIONAL-SCROLL-STABLE-BLOCK-20260911 —
+  // evidencia de video en dispositivo real: el fondo (Guatapé/ciclista)
+  // queda quieto, pero el GRUPO DE CONTENIDO completo (título, subtítulo,
+  // campos, indicador, CTA, Google, Crear cuenta) se movía verticalmente
+  // como una capa scrolleable independiente, incluso a un alto de
+  // viewport normal donde todo ya entraba sin necesidad de scroll. Causa
+  // raíz verificada en código (no asumida): el `SingleChildScrollView`
+  // de `_buildPortrait` quedaba SIEMPRE presente y arrastrable —
+  // incluso con `maxScrollExtent == 0` un `Scrollable` sigue aceptando
+  // el gesto de arrastre, lo que en algunos navegadores produce el
+  // "rebote"/desplazamiento visible que el dueño grabó. La corrección
+  // usa `NeverScrollableScrollPhysics` cuando el contenido ya entra sin
+  // necesidad de inflar el piso de altura (`_minPortraitCompositionHeight`),
+  // desactivando el gesto de arrastre por completo — no solo clampeando
+  // la posición a 0. Estos tests simulan un arrastre real
+  // (`tester.drag`), no solo miden geometría estática, porque la
+  // regresión original nunca se habría detectado con mediciones
+  // estáticas (los tests de rondas anteriores, todos geometría post-
+  // `pumpAndSettle`, pasaron aunque el bug ya existía).
+  // ---------------------------------------------------------------------
+
+  testWidgets('NORMAL_390x844_DRAG_DOES_NOT_MOVE_CONTENT = PASS', (WidgetTester tester) async {
+    await pumpLoginPage(tester, repository, surfaceSize: const Size(390, 844));
+    final Finder titleFinder = find.byKey(const Key('login-title'));
+    final double before = tester.getRect(titleFinder).top;
+    expect(before, closeTo(345.0, 0.5), reason: 'NORMAL_390x844_TITLE_TOP_Y ≈ 345 tras centrar el indicador (KORIXA-SCREEN02-INDICATOR-VERTICAL-CENTERING-20260912)');
+
+    // Arrastre real hacia arriba (simula un swipe táctil) — el grupo NO
+    // debe moverse en absoluto.
+    await tester.drag(find.byType(SingleChildScrollView).first, const Offset(0, -300));
+    await tester.pumpAndSettle();
+
+    final double after = tester.getRect(titleFinder).top;
+    expect(
+      (after - before).abs(),
+      lessThanOrEqualTo(2.0),
+      reason: 'CONTENT_BLOCK_VERTICAL_DRIFT <= 2px: el grupo de Login no debe desplazarse con un gesto de arrastre a un alto normal',
+    );
+
+    final SingleChildScrollView scrollView = tester.widget(find.byType(SingleChildScrollView).first);
+    expect(
+      scrollView.physics,
+      isA<NeverScrollableScrollPhysics>(),
+      reason: 'SCROLL_ENABLED = NO: la física debe desactivar el gesto de arrastre por completo a 390x844',
+    );
+  });
+
+  testWidgets('NORMAL_430x932_SCROLL_DISABLED = PASS', (WidgetTester tester) async {
+    await pumpLoginPage(tester, repository, surfaceSize: const Size(430, 932));
+    final SingleChildScrollView scrollView = tester.widget(find.byType(SingleChildScrollView).first);
+    expect(scrollView.physics, isA<NeverScrollableScrollPhysics>(), reason: 'SCROLL_ENABLED = NO a 430x932');
+
+    final Finder titleFinder = find.byKey(const Key('login-title'));
+    final double before = tester.getRect(titleFinder).top;
+    await tester.drag(find.byType(SingleChildScrollView).first, const Offset(0, -300));
+    await tester.pumpAndSettle();
+    final double after = tester.getRect(titleFinder).top;
+    expect((after - before).abs(), lessThanOrEqualTo(2.0), reason: 'sin desplazamiento tras arrastre a 430x932');
+  });
+
+  testWidgets('NORMAL_360x800_SCROLL_DISABLED_IF_FITS = PASS', (WidgetTester tester) async {
+    // 360x800 > el piso de 750 → el contenido natural (~500px) entra
+    // sin inflar nada, así que el scroll debe quedar desactivado igual
+    // que a 390x844/430x932.
+    await pumpLoginPage(tester, repository, surfaceSize: const Size(360, 800));
+    final SingleChildScrollView scrollView = tester.widget(find.byType(SingleChildScrollView).first);
+    expect(scrollView.physics, isA<NeverScrollableScrollPhysics>(), reason: 'SCROLL_ENABLED = NO a 360x800 (entra sin scroll)');
+  });
+
+  testWidgets('SHORT_390x700_SCROLL_DISABLED_IF_FITS = PASS', (WidgetTester tester) async {
+    // KORIXA-SCREEN02-FIXED-BLOCK-NO-MOVEMENT-20260911: a 390x700 el
+    // contenido REAL (~500px) sigue entrando sin desbordar — el encargo
+    // pide explícitamente "permitir scroll SOLO SI REALMENTE hace falta",
+    // así que acá NO debe habilitarse (a diferencia del criterio de la
+    // ronda anterior, que lo forzaba para proteger espacio escénico).
+    await pumpLoginPage(tester, repository, surfaceSize: const Size(390, 700));
+    expect(tester.takeException(), isNull, reason: 'NO_OVERFLOW a 390x700');
+
+    final SingleChildScrollView scrollView = tester.widget(find.byType(SingleChildScrollView).first);
+    expect(
+      scrollView.physics,
+      isA<NeverScrollableScrollPhysics>(),
+      reason: 'SCROLL_ONLY_WHEN_CONTENT_DOES_NOT_FIT: a 390x700 el contenido real entra sin desbordar',
+    );
+
+    // El arrastre NO debe mover el contenido acá.
+    final Finder titleFinder = find.byKey(const Key('login-title'));
+    final double before = tester.getRect(titleFinder).top;
+    await tester.drag(find.byType(SingleChildScrollView).first, const Offset(0, -100));
+    await tester.pumpAndSettle();
+    final double after = tester.getRect(titleFinder).top;
+    expect((before - after).abs(), lessThanOrEqualTo(2.0), reason: 'a 390x700 el arrastre NO debe desplazar el contenido — cabe sin scroll');
+
+    expect(find.text('Crear cuenta'), findsOneWidget, reason: 'ALL_ACTIONS_REACHABLE a 390x700, sin necesidad de scroll');
+  });
+
+  testWidgets('SHORT_360x680_SCROLL_DISABLED_IF_FITS = PASS', (WidgetTester tester) async {
+    // 360x680 es el caso más corto pedido por el encargo — el contenido
+    // real (~500px) también entra sin desbordar ahí, así que el scroll
+    // debe quedar deshabilitado igual que en todos los demás tamaños
+    // "cortos" pedidos.
+    await pumpLoginPage(tester, repository, surfaceSize: const Size(360, 680));
+    expect(tester.takeException(), isNull, reason: 'NO_OVERFLOW a 360x680');
+
+    final SingleChildScrollView scrollView = tester.widget(find.byType(SingleChildScrollView).first);
+    expect(
+      scrollView.physics,
+      isA<NeverScrollableScrollPhysics>(),
+      reason: 'SCROLL_ONLY_WHEN_CONTENT_DOES_NOT_FIT: a 360x680 (el caso más corto pedido) el contenido real también entra',
+    );
+
+    expect(find.text('Crear cuenta'), findsOneWidget, reason: 'ALL_ACTIONS_REACHABLE a 360x680, sin necesidad de scroll');
+    expect(find.byType(GoogleSignInButton), findsOneWidget, reason: 'GOOGLE_REACHABLE a 360x680, sin necesidad de scroll');
+  });
+
+  testWidgets('EXTREME_HEIGHT_SCROLL_ENABLES_WHEN_CONTENT_GENUINELY_OVERFLOWS = PASS', (WidgetTester tester) async {
+    // KORIXA-SCREEN02-FIXED-BLOCK-NO-MOVEMENT-20260911: ningún tamaño
+    // pedido por este encargo (680-1024) llega a desbordar el contenido
+    // real (~500px) — así que TODOS quedan sin scroll. Este test prueba
+    // el otro lado del mecanismo con un alto deliberadamente extremo
+    // (más corto que cualquier dispositivo real), para confirmar que el
+    // scroll SÍ se habilita cuando el contenido genuinamente no entra —
+    // no que la física quedó fija en `NeverScrollable` sin importar el
+    // alto.
+    const Size extremeSize = Size(360, 400);
+    await pumpLoginPage(tester, repository, surfaceSize: extremeSize);
+    expect(tester.takeException(), isNull, reason: 'NO_OVERFLOW incluso en un alto extremo — debe scrollear, no desbordar');
+
+    final SingleChildScrollView scrollView = tester.widget(find.byType(SingleChildScrollView).first);
+    expect(
+      scrollView.physics,
+      isNot(isA<NeverScrollableScrollPhysics>()),
+      reason: 'SCROLL_ONLY_WHEN_CONTENT_DOES_NOT_FIT: a un alto extremo donde el contenido real (~500px) no entra, el scroll debe habilitarse',
+    );
+
+    final Finder titleFinder = find.byKey(const Key('login-title'));
+    final double before = tester.getRect(titleFinder).top;
+    await tester.drag(find.byType(SingleChildScrollView).first, const Offset(0, -80));
+    await tester.pumpAndSettle();
+    final double after = tester.getRect(titleFinder).top;
+    expect((before - after).abs(), greaterThan(2.0), reason: 'el arrastre debe desplazar el contenido cuando el scroll realmente hace falta');
+
+    await tester.ensureVisible(find.text('Crear cuenta'));
+    await tester.pumpAndSettle();
+    expect(tester.takeException(), isNull);
+    expect(find.text('Crear cuenta'), findsOneWidget, reason: 'ALL_ACTIONS_REACHABLE incluso en el alto extremo, vía scroll');
+  });
+
+  const <String, Size>{
+    '360x680': Size(360, 680),
+    '360x800': Size(360, 800),
+    '390x700': Size(390, 700),
+    '390x740': Size(390, 740),
+    '390x844': Size(390, 844),
+    '430x760': Size(430, 760),
+    '430x932': Size(430, 932),
+    '768x1024': Size(768, 1024),
+  }.forEach((String label, Size size) {
+    testWidgets('SCROLL_PHYSICS_MATCHES_NEED_$label = PASS', (WidgetTester tester) async {
+      await pumpLoginPage(tester, repository, surfaceSize: size);
+      expect(tester.takeException(), isNull, reason: 'NO_OVERFLOW en $label');
+
+      // KORIXA-SCREEN02-FIXED-BLOCK-NO-MOVEMENT-20260911: los 8 tamaños
+      // pedidos por este encargo (360x680 a 768x1024) dejan entrar el
+      // contenido REAL (~500px) sin desbordar — así que el scroll debe
+      // quedar deshabilitado en TODOS ellos, no solo en los que antes se
+      // consideraban "normales". Ver `EXTREME_HEIGHT_SCROLL_ENABLES_
+      // WHEN_CONTENT_GENUINELY_OVERFLOWS` para la prueba de que el
+      // mecanismo SÍ habilita scroll cuando de verdad hace falta.
+      final SingleChildScrollView scrollView = tester.widget(find.byType(SingleChildScrollView).first);
+      expect(
+        scrollView.physics,
+        isA<NeverScrollableScrollPhysics>(),
+        reason: '$label: SCROLL_ONLY_WHEN_CONTENT_DOES_NOT_FIT — el contenido real entra en $label, así que el scroll debe estar deshabilitado',
+      );
+
+      expect(find.text('Crear cuenta'), findsOneWidget, reason: '$label: ALL_ACTIONS_REACHABLE');
+    });
   });
 }
