@@ -1352,28 +1352,28 @@ void main() {
     );
   });
 
-  testWidgets('MOBILE_INDICATOR_MORE_AIR_BEFORE_CTA = PASS', (WidgetTester tester) async {
-    // KORIXA-SCREEN02-INDICATOR-SPACING-POLISH-20260911: el dueño pidió
-    // más aire entre el indicador y el CTA porque quedaba "pegado". El
-    // gap LÓGICO indicador→CTA (`indicatorToCtaGap`) sube de
-    // `_portraitCompactGap` (3) a `AppSpacing.sm` (8) — el gap "olvidé mi
-    // contraseña"→indicador (`contentSectionGap`) no se toca. La
-    // distancia RENDERIZADA arriba del indicador es mayor a ese gap
-    // lógico (~11px) porque incluye el padding propio del `TextButton`
-    // de "¿Olvidaste tu contraseña?" — así que en vez de exigir que el
-    // espacio de abajo supere al de arriba (que dependería de ese
-    // padding ajeno al indicador), esta prueba fija el valor real medido
-    // del gap de abajo y confirma que es notoriamente mayor que el valor
-    // anterior (3px, "pegado").
+  testWidgets('MOBILE_INDICATOR_VERTICALLY_CENTERED_BETWEEN_FORGOT_AND_CTA = PASS', (WidgetTester tester) async {
+    // KORIXA-SCREEN02-INDICATOR-VERTICAL-CENTERING-20260912: el dueño
+    // pidió que el indicador de 3 barras quede centrado VERTICALMENTE
+    // entre "¿Olvidaste tu contraseña?" y el CTA — ni más pegado arriba
+    // ni más pegado abajo. El espacio RENDERIZADO arriba (que incluye el
+    // padding propio del `TextButton` de "olvidé mi contraseña", no solo
+    // el `SizedBox` lógico) debe medir lo mismo que el espacio
+    // renderizado abajo (que sí mapea 1:1 al `SizedBox` de
+    // `indicatorToCtaGap`, sin padding ajeno).
     await pumpLoginPage(tester, repository, surfaceSize: const Size(390, 844));
+    final double forgotPasswordBottom = tester.getRect(find.text('¿Olvidaste tu contraseña?')).bottom;
+    final double indicatorTop = tester.getRect(find.byKey(const Key('login-portrait-indicator-row'))).top;
     final double indicatorBottom = tester.getRect(find.byKey(const Key('login-portrait-indicator-row'))).bottom;
     final double ctaTop = tester.getRect(find.byType(PrimaryGradientButton)).top;
+    final double gapAbove = indicatorTop - forgotPasswordBottom;
     final double gapBelow = ctaTop - indicatorBottom;
     expect(
-      gapBelow,
-      closeTo(8.0, 0.5),
-      reason: 'MOBILE_INDICATOR_MORE_AIR_BEFORE_CTA: el gap indicador→CTA debe ser 8px (antes 3px, "pegado" al botón)',
+      gapAbove,
+      closeTo(gapBelow, 0.5),
+      reason: 'MOBILE_INDICATOR_VERTICALLY_CENTERED_BETWEEN_FORGOT_AND_CTA: el espacio renderizado arriba y abajo del indicador debe ser igual',
     );
+    expect(gapAbove, closeTo(11.0, 0.5), reason: 'valor real medido: 11px arriba y abajo');
   });
 
   testWidgets('ALL_LOGIN_ACTIONS_REACHABLE = PASS', (WidgetTester tester) async {
@@ -1548,37 +1548,39 @@ void main() {
   testWidgets('NORMAL_390x844_GEOMETRY_NOT_REGRESSED = PASS', (WidgetTester tester) async {
     // KORIXA-SCREEN02-COMPACT-BLOCK-WITHOUT-MOVING-BACKGROUND (344→362) +
     // KORIXA-SCREEN02-SLIGHT-BLOCK-DECOMPRESSION-20260911 (362→353, -9px)
-    // + KORIXA-SCREEN02-INDICATOR-SPACING-POLISH-20260911 (353→348, -5px):
-    // el dueño pidió más aire entre el indicador y el CTA —
-    // `indicatorToCtaGap` sube de `_portraitCompactGap` (3) a
-    // `AppSpacing.sm` (8), +5px de alto real al grupo, por lo que el
-    // título (bottom-anchored) sube 5px más; el fondo/hero y el piso
-    // táctil de 48 no cambiaron.
+    // + KORIXA-SCREEN02-INDICATOR-SPACING-POLISH-20260911 (353→348, -5px)
+    // + KORIXA-SCREEN02-INDICATOR-VERTICAL-CENTERING-20260912 (348→345,
+    // -3px): el dueño pidió que el indicador quede centrado verticalmente
+    // entre "olvidé mi contraseña" y el CTA — `indicatorToCtaGap` sube de
+    // `AppSpacing.sm` (8) a `11` (para igualar el espacio renderizado
+    // arriba, que ya medía 11px por el padding propio del `TextButton`),
+    // +3px de alto real al grupo; el fondo/hero y el piso táctil de 48 no
+    // cambiaron.
     await pumpLoginPage(tester, repository, surfaceSize: const Size(390, 844));
     final double titleTop = tester.getRect(find.byKey(const Key('login-title'))).top;
     expect(
       titleTop,
-      closeTo(348.0, 0.5),
-      reason: 'NORMAL_390x844_GEOMETRY_NOT_REGRESSED: más aire indicador→CTA debe subir el título 5px (353→348), sin mover el fondo',
+      closeTo(345.0, 0.5),
+      reason: 'NORMAL_390x844_GEOMETRY_NOT_REGRESSED: centrar el indicador debe subir el título 3px (348→345), sin mover el fondo',
     );
   });
 
   testWidgets('NORMAL_HEIGHT_BOTTOM_COMPOSITION_PRESERVED = PASS', (WidgetTester tester) async {
-    // KORIXA-SCREEN02-INDICATOR-SPACING-POLISH-20260911: mismo
-    // desplazamiento de -5px que 390x844 arriba, medido a 430x932 y
+    // KORIXA-SCREEN02-INDICATOR-VERTICAL-CENTERING-20260912: mismo
+    // desplazamiento de -3px que 390x844 arriba, medido a 430x932 y
     // 768x1024 (ambos siguen sin activar scroll).
     await pumpLoginPage(tester, repository, surfaceSize: const Size(430, 932));
     expect(
       tester.getRect(find.byKey(const Key('login-title'))).top,
-      closeTo(444.0, 0.5),
-      reason: 'NORMAL_HEIGHT_BOTTOM_COMPOSITION_PRESERVED a 430x932 (449→444 tras dar más aire al indicador)',
+      closeTo(441.0, 0.5),
+      reason: 'NORMAL_HEIGHT_BOTTOM_COMPOSITION_PRESERVED a 430x932 (444→441 tras centrar el indicador)',
     );
 
     await pumpLoginPage(tester, repository, surfaceSize: const Size(768, 1024));
     expect(
       tester.getRect(find.byKey(const Key('login-title'))).top,
-      closeTo(536.0, 0.5),
-      reason: 'NORMAL_HEIGHT_BOTTOM_COMPOSITION_PRESERVED a 768x1024 (541→536 tras dar más aire al indicador)',
+      closeTo(533.0, 0.5),
+      reason: 'NORMAL_HEIGHT_BOTTOM_COMPOSITION_PRESERVED a 768x1024 (536→533 tras centrar el indicador)',
     );
   });
 
@@ -1728,7 +1730,7 @@ void main() {
     await pumpLoginPage(tester, repository, surfaceSize: const Size(390, 844));
     final Finder titleFinder = find.byKey(const Key('login-title'));
     final double before = tester.getRect(titleFinder).top;
-    expect(before, closeTo(348.0, 0.5), reason: 'NORMAL_390x844_TITLE_TOP_Y ≈ 348 tras dar más aire al indicador (KORIXA-SCREEN02-INDICATOR-SPACING-POLISH-20260911)');
+    expect(before, closeTo(345.0, 0.5), reason: 'NORMAL_390x844_TITLE_TOP_Y ≈ 345 tras centrar el indicador (KORIXA-SCREEN02-INDICATOR-VERTICAL-CENTERING-20260912)');
 
     // Arrastre real hacia arriba (simula un swipe táctil) — el grupo NO
     // debe moverse en absoluto.

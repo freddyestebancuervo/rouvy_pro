@@ -481,18 +481,33 @@ class _LoginPageState extends ConsumerState<LoginPage> {
                     // reducción adicional de este único gap se multiplica
                     // por las 2 veces que `contentSectionGap` lo usa más
                     // abajo.
-                    // KORIXA-SCREEN02-INDICATOR-SPACING-POLISH-20260911: el
-                    // dueño pidió específicamente MÁS aire entre el
-                    // indicador de 3 barras y el botón "Iniciar sesión" —
-                    // quedaba "pegado" con `_portraitCompactGap` (3, igual
-                    // que el gap "olvidé mi contraseña"→indicador arriba).
-                    // `AppSpacing.sm` (8) — un token real del sistema de
-                    // espaciado, no el gap ultra-chico compartido — SOLO
-                    // para esta separación puntual; `contentSectionGap`
-                    // (gap de ARRIBA del indicador, y subtítulo→campos) no
-                    // se toca, para no alterar ninguna otra separación del
-                    // bloque.
-                    indicatorToCtaGap: AppSpacing.sm,
+                    // KORIXA-SCREEN02-INDICATOR-VERTICAL-CENTERING-20260912:
+                    // `11` (antes `AppSpacing.sm` = 8) — el dueño pidió que
+                    // el indicador quede centrado VERTICALMENTE entre
+                    // "¿Olvidaste tu contraseña?" y el CTA, sin quedar más
+                    // pegado a ninguno de los dos. El `SizedBox` de este gap
+                    // mapea 1:1 al espacio renderizado (indicador→CTA,
+                    // medido: 8px con el valor anterior); el espacio
+                    // renderizado ARRIBA del indicador mide 11px con
+                    // `indicatorTopGap` sin tocar (incluye el padding
+                    // propio del `TextButton` de "olvidé mi contraseña",
+                    // que no es parte de este gap pero sí del espacio
+                    // visual real) — igualar este valor a 11 hace que
+                    // ambos espacios renderizados midan lo mismo (11px),
+                    // logrando el centrado vertical real pedido. Valor
+                    // literal porque el sistema de espaciado no tiene un
+                    // escalón en 11.
+                    indicatorToCtaGap: 11,
+                    // KORIXA-SCREEN02-INDICATOR-VERTICAL-CENTERING-20260912:
+                    // explícito (antes implícito vía `contentSectionGap`,
+                    // ver el nuevo parámetro `indicatorTopGap` en la firma
+                    // de este método) — mismo valor que antes
+                    // (`_portraitCompactGap` = 3), sin cambio de
+                    // comportamiento; solo hace posible ajustar el gap de
+                    // abajo (arriba) de forma independiente del gap
+                    // subtítulo→campos, que también usa
+                    // `contentSectionGap` y no debía tocarse.
+                    indicatorTopGap: _portraitCompactGap,
                     // KORIXA-SCREEN02-COMPACT-BLOCK-WITHOUT-MOVING-
                     // BACKGROUND / KORIXA-SCREEN02-SLIGHT-BLOCK-
                     // DECOMPRESSION-20260911: `_portraitCompactGap` — mismo
@@ -818,6 +833,18 @@ class _LoginPageState extends ConsumerState<LoginPage> {
     // subtítulo/campos/CTA/Google quedan pixel-a-pixel iguales, solo se
     // acercan entre sí).
     double? contentSectionGap,
+    // KORIXA-SCREEN02-INDICATOR-VERTICAL-CENTERING-20260912: gap
+    // EXCLUSIVO "olvidé mi contraseña"→indicador — antes esta separación
+    // compartía `contentSectionGap` con subtítulo→campos (misma
+    // constante, dos usos), así que no se podía ajustar una sin mover la
+    // otra. El dueño pidió centrar el indicador VERTICALMENTE entre
+    // "olvidé mi contraseña" y el CTA sin tocar ninguna otra separación
+    // del bloque — este parámetro nuevo, `null` por defecto, preserva
+    // `effectiveSectionGap` (mismo valor que antes) para TODO llamador
+    // que no lo pase explícitamente (incluida esta misma pantalla en
+    // rondas anteriores); mobile portrait es el único que pasa un valor
+    // propio.
+    double? indicatorTopGap,
     // KORIXA-SCREEN02-TRUE-BOTTOM-COMPOSITION-OWNER-CORRECTION-20260911:
     // 4 parámetros nuevos, todos EXCLUSIVOS de mobile portrait (`null`/
     // default preserva el comportamiento exacto de todo otro llamador) —
@@ -1089,7 +1116,7 @@ class _LoginPageState extends ConsumerState<LoginPage> {
         ),
       ),
       if (showIndicator) ...<Widget>[
-        SizedBox(height: effectiveSectionGap),
+        SizedBox(height: indicatorTopGap ?? effectiveSectionGap),
         // KORIXA-SCREEN02-LOGIN-ALIGNMENT-INDICATOR-POLISH-20260910: el
         // dueño pidió explícitamente "las 3 líneas de la pantalla 1" —
         // reusa `ThreeBarIndicator` (extraído desde `WelcomePage` a
