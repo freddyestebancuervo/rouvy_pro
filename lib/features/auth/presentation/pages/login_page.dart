@@ -481,14 +481,18 @@ class _LoginPageState extends ConsumerState<LoginPage> {
                     // reducción adicional de este único gap se multiplica
                     // por las 2 veces que `contentSectionGap` lo usa más
                     // abajo.
-                    // KORIXA-SCREEN02-COMPACT-BLOCK-WITHOUT-MOVING-
-                    // BACKGROUND / KORIXA-SCREEN02-SLIGHT-BLOCK-
-                    // DECOMPRESSION-20260911: `_portraitCompactGap` (ver
-                    // constante — 3 desde esta ronda, 2 antes) — el dueño
-                    // pidió compactar el bloque sin tocar fondo/hero/piso
-                    // táctil, y luego descomprimirlo levemente sin volver a
-                    // los gaps originales; exclusivo de mobile portrait.
-                    indicatorToCtaGap: _portraitCompactGap,
+                    // KORIXA-SCREEN02-INDICATOR-SPACING-POLISH-20260911: el
+                    // dueño pidió específicamente MÁS aire entre el
+                    // indicador de 3 barras y el botón "Iniciar sesión" —
+                    // quedaba "pegado" con `_portraitCompactGap` (3, igual
+                    // que el gap "olvidé mi contraseña"→indicador arriba).
+                    // `AppSpacing.sm` (8) — un token real del sistema de
+                    // espaciado, no el gap ultra-chico compartido — SOLO
+                    // para esta separación puntual; `contentSectionGap`
+                    // (gap de ARRIBA del indicador, y subtítulo→campos) no
+                    // se toca, para no alterar ninguna otra separación del
+                    // bloque.
+                    indicatorToCtaGap: AppSpacing.sm,
                     // KORIXA-SCREEN02-COMPACT-BLOCK-WITHOUT-MOVING-
                     // BACKGROUND / KORIXA-SCREEN02-SLIGHT-BLOCK-
                     // DECOMPRESSION-20260911: `_portraitCompactGap` — mismo

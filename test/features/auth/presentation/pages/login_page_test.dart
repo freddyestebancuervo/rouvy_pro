@@ -1317,6 +1317,65 @@ void main() {
     expect(googleHeight, greaterThanOrEqualTo(47.5), reason: 'TOUCH_TARGETS_ACCESSIBLE: el botón de Google no debe bajar de ~48px');
   });
 
+  // ---------------------------------------------------------------------
+  // KORIXA-SCREEN02-INDICATOR-SPACING-POLISH-20260911: el dueño pidió que
+  // el indicador de 3 barras quede perfectamente centrado en grupo, con
+  // separación uniforme entre barras, y con más aire respecto al CTA
+  // (sin tocar ninguna otra separación del bloque). Estos tests miden
+  // geometría real, no solo confían en que `Center` "debería" centrar.
+  // ---------------------------------------------------------------------
+
+  testWidgets('MOBILE_INDICATOR_HORIZONTALLY_CENTERED = PASS', (WidgetTester tester) async {
+    const Size surfaceSize = Size(390, 844);
+    await pumpLoginPage(tester, repository, surfaceSize: surfaceSize);
+    final Rect indicatorRect = tester.getRect(find.byKey(const Key('login-portrait-indicator-row')));
+    expect(
+      indicatorRect.center.dx,
+      closeTo(surfaceSize.width / 2, 0.5),
+      reason: 'MOBILE_INDICATOR_HORIZONTALLY_CENTERED: el grupo de 3 barras debe quedar centrado en el ancho real de la pantalla',
+    );
+  });
+
+  testWidgets('MOBILE_INDICATOR_BAR_GAPS_UNIFORM = PASS', (WidgetTester tester) async {
+    await pumpLoginPage(tester, repository, surfaceSize: const Size(390, 844));
+    final Finder bars = find.descendant(
+      of: find.byKey(const Key('login-portrait-indicator-row')),
+      matching: find.byType(Container),
+    );
+    expect(bars, findsNWidgets(3), reason: 'MOBILE_INDICATOR_BAR_GAPS_UNIFORM: deben existir exactamente 3 barras');
+    final double gap01 = tester.getRect(bars.at(1)).left - tester.getRect(bars.at(0)).right;
+    final double gap12 = tester.getRect(bars.at(2)).left - tester.getRect(bars.at(1)).right;
+    expect(
+      gap01,
+      closeTo(gap12, 0.5),
+      reason: 'MOBILE_INDICATOR_BAR_GAPS_UNIFORM: la separación entre barra 1-2 debe ser igual a la separación entre barra 2-3',
+    );
+  });
+
+  testWidgets('MOBILE_INDICATOR_MORE_AIR_BEFORE_CTA = PASS', (WidgetTester tester) async {
+    // KORIXA-SCREEN02-INDICATOR-SPACING-POLISH-20260911: el dueño pidió
+    // más aire entre el indicador y el CTA porque quedaba "pegado". El
+    // gap LÓGICO indicador→CTA (`indicatorToCtaGap`) sube de
+    // `_portraitCompactGap` (3) a `AppSpacing.sm` (8) — el gap "olvidé mi
+    // contraseña"→indicador (`contentSectionGap`) no se toca. La
+    // distancia RENDERIZADA arriba del indicador es mayor a ese gap
+    // lógico (~11px) porque incluye el padding propio del `TextButton`
+    // de "¿Olvidaste tu contraseña?" — así que en vez de exigir que el
+    // espacio de abajo supere al de arriba (que dependería de ese
+    // padding ajeno al indicador), esta prueba fija el valor real medido
+    // del gap de abajo y confirma que es notoriamente mayor que el valor
+    // anterior (3px, "pegado").
+    await pumpLoginPage(tester, repository, surfaceSize: const Size(390, 844));
+    final double indicatorBottom = tester.getRect(find.byKey(const Key('login-portrait-indicator-row'))).bottom;
+    final double ctaTop = tester.getRect(find.byType(PrimaryGradientButton)).top;
+    final double gapBelow = ctaTop - indicatorBottom;
+    expect(
+      gapBelow,
+      closeTo(8.0, 0.5),
+      reason: 'MOBILE_INDICATOR_MORE_AIR_BEFORE_CTA: el gap indicador→CTA debe ser 8px (antes 3px, "pegado" al botón)',
+    );
+  });
+
   testWidgets('ALL_LOGIN_ACTIONS_REACHABLE = PASS', (WidgetTester tester) async {
     const Size size = Size(390, 844);
     await pumpLoginPage(tester, repository, surfaceSize: size);
@@ -1488,36 +1547,38 @@ void main() {
 
   testWidgets('NORMAL_390x844_GEOMETRY_NOT_REGRESSED = PASS', (WidgetTester tester) async {
     // KORIXA-SCREEN02-COMPACT-BLOCK-WITHOUT-MOVING-BACKGROUND (344→362) +
-    // KORIXA-SCREEN02-SLIGHT-BLOCK-DECOMPRESSION-20260911 (362→353, -9px):
-    // el dueño pidió descomprimir LEVEMENTE el bloque compactado —
-    // `_portraitCompactGap` 2→3 y `fieldSpacingGap` 4→6 suman +9px de alto
-    // real al grupo, por lo que el título (bottom-anchored) sube 9px; el
-    // fondo/hero y el piso táctil de 48 no cambiaron.
+    // KORIXA-SCREEN02-SLIGHT-BLOCK-DECOMPRESSION-20260911 (362→353, -9px)
+    // + KORIXA-SCREEN02-INDICATOR-SPACING-POLISH-20260911 (353→348, -5px):
+    // el dueño pidió más aire entre el indicador y el CTA —
+    // `indicatorToCtaGap` sube de `_portraitCompactGap` (3) a
+    // `AppSpacing.sm` (8), +5px de alto real al grupo, por lo que el
+    // título (bottom-anchored) sube 5px más; el fondo/hero y el piso
+    // táctil de 48 no cambiaron.
     await pumpLoginPage(tester, repository, surfaceSize: const Size(390, 844));
     final double titleTop = tester.getRect(find.byKey(const Key('login-title'))).top;
     expect(
       titleTop,
-      closeTo(353.0, 0.5),
-      reason: 'NORMAL_390x844_GEOMETRY_NOT_REGRESSED: descompresión leve debe subir el título 9px (362→353), sin mover el fondo',
+      closeTo(348.0, 0.5),
+      reason: 'NORMAL_390x844_GEOMETRY_NOT_REGRESSED: más aire indicador→CTA debe subir el título 5px (353→348), sin mover el fondo',
     );
   });
 
   testWidgets('NORMAL_HEIGHT_BOTTOM_COMPOSITION_PRESERVED = PASS', (WidgetTester tester) async {
-    // KORIXA-SCREEN02-SLIGHT-BLOCK-DECOMPRESSION-20260911: mismo
-    // desplazamiento de -9px que 390x844 arriba, medido a 430x932 y
+    // KORIXA-SCREEN02-INDICATOR-SPACING-POLISH-20260911: mismo
+    // desplazamiento de -5px que 390x844 arriba, medido a 430x932 y
     // 768x1024 (ambos siguen sin activar scroll).
     await pumpLoginPage(tester, repository, surfaceSize: const Size(430, 932));
     expect(
       tester.getRect(find.byKey(const Key('login-title'))).top,
-      closeTo(449.0, 0.5),
-      reason: 'NORMAL_HEIGHT_BOTTOM_COMPOSITION_PRESERVED a 430x932 (458→449 tras descomprimir)',
+      closeTo(444.0, 0.5),
+      reason: 'NORMAL_HEIGHT_BOTTOM_COMPOSITION_PRESERVED a 430x932 (449→444 tras dar más aire al indicador)',
     );
 
     await pumpLoginPage(tester, repository, surfaceSize: const Size(768, 1024));
     expect(
       tester.getRect(find.byKey(const Key('login-title'))).top,
-      closeTo(541.0, 0.5),
-      reason: 'NORMAL_HEIGHT_BOTTOM_COMPOSITION_PRESERVED a 768x1024 (550→541 tras descomprimir)',
+      closeTo(536.0, 0.5),
+      reason: 'NORMAL_HEIGHT_BOTTOM_COMPOSITION_PRESERVED a 768x1024 (541→536 tras dar más aire al indicador)',
     );
   });
 
@@ -1667,7 +1728,7 @@ void main() {
     await pumpLoginPage(tester, repository, surfaceSize: const Size(390, 844));
     final Finder titleFinder = find.byKey(const Key('login-title'));
     final double before = tester.getRect(titleFinder).top;
-    expect(before, closeTo(353.0, 0.5), reason: 'NORMAL_390x844_TITLE_TOP_Y ≈ 353 tras descomprimir levemente el bloque (KORIXA-SCREEN02-SLIGHT-BLOCK-DECOMPRESSION-20260911)');
+    expect(before, closeTo(348.0, 0.5), reason: 'NORMAL_390x844_TITLE_TOP_Y ≈ 348 tras dar más aire al indicador (KORIXA-SCREEN02-INDICATOR-SPACING-POLISH-20260911)');
 
     // Arrastre real hacia arriba (simula un swipe táctil) — el grupo NO
     // debe moverse en absoluto.
