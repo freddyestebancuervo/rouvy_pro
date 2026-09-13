@@ -1,5 +1,24 @@
 # Changelog
 
+## [Unreleased] - 2026-09-13
+
+### Changed
+- **SCREEN_02 Login**: cierre visual aprobado y fusionado en PR #147 para
+  mobile portrait y Web/desktop. Mobile usa un hero dedicado de Guatapé,
+  composición full-bleed, grupo de Login bottom-anchored, indicador de 3
+  barras y CTA `Iniciar sesión` sin flecha. Web/desktop usa un hero dedicado
+  panorámico aprobado de 4096×1751 px; la integración final no añadió zoom
+  artificial ni modificó la lógica de autenticación. El asset de Web también
+  es compartido por phone landscape; mobile portrait conserva su asset
+  independiente. Ver `PROJECT_STATUS_POST147.md` para evidencia, hashes de
+  cierre, CI y límites exactos de lo probado.
+
+### Validation
+- PR #147 HEAD `f98b6b5db3785b419f8a5c0016bb8d423826a09d` cerró con los 4 checks
+  requeridos en `SUCCESS`: Flutter analyze+test, Firestore A3/A5, Backend C2
+  y Night Agent; iOS build validation e iOS simulator smoke también en
+  `SUCCESS`. Merge commit: `27f0989012e0fb0f9e9c406762eb6109d512d7ec`.
+
 ## [0.5.0] - 2026-07-30
 
 ### Added
