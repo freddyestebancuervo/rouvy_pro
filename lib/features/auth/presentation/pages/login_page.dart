@@ -297,6 +297,18 @@ class _LoginPageState extends ConsumerState<LoginPage> {
           // eran exactamente lo pedido ("sin zoom/transform adicional,
           // asset directo"), así que esta ronda es puramente un
           // reemplazo de archivo.
+          //
+          // KORIXA-FIREBASE-PREVIEW... (2026-09-12, tarea de reemplazo de
+          // asset sin TASK_ID formal en el pedido): el dueño volvió a
+          // reemplazar el CONTENIDO del archivo (mismo nombre, ahora
+          // 941×1671 — copiado byte a byte, sin recompresión/edición/
+          // recorte externo) por una versión con cielo azul diurno y el
+          // ciclista/jersey/pantaloneta con el logo KORIXA en un
+          // encuadre ligeramente distinto — sigue siendo la Piedra del
+          // Peñol/Guatapé, sin logo nuevo. Cero cambios de código: mismo
+          // `imageAsset`/`alignment: Alignment.center`/`fit: BoxFit.cover`
+          // de siempre — escala visual 1.0x, sin `Transform.scale` ni
+          // ningún otro mecanismo de zoom.
           child: _LoginHeroImage(
             imageAsset: 'assets/images/korixa_login_hero_guatape_mobile.png',
             alignment: Alignment.center,
