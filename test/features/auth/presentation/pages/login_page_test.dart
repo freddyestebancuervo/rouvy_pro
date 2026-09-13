@@ -907,11 +907,15 @@ void main() {
     expect(isActive(bars[2]), isFalse, reason: 'MOBILE_RIGHT_BAR_ACTIVE debe ser NO');
     expect(isInactive(bars[2]), isTrue);
 
-    // Tamaño MOBILE ya aprobado de SCREEN_01 (18×4, separación 5 —
-    // `_OnboardingIndicator` de Welcome), NO el de desktop (24×4×6):
-    // ancho total = 3*18 + 2*5 = 64.
+    // KORIXA-SCREEN02-FINAL-UI-MICROPOLISH-20260913: el dueño pidió
+    // barras "ligeramente más anchas" que el tamaño MOBILE original de
+    // SCREEN_01 (18×4, separación 5) — ahora 22×4, separación 5 sin
+    // cambios: ancho total = 3*22 + 2*5 = 76. Login mobile portrait
+    // vuelve a diverger intencionalmente del tamaño de Welcome en este
+    // único aspecto (ancho de barra), ver `MOBILE_INDICATOR_BARS_UNIFORM_
+    // WIDTH` para la prueba de que las 3 siguen siendo idénticas entre sí.
     final Size indicatorSize = tester.getSize(indicatorFinder);
-    expect(indicatorSize.width, closeTo(64, 0.5), reason: 'el indicador debe usar el tamaño MOBILE de SCREEN_01 (18/4/5), no el de desktop');
+    expect(indicatorSize.width, closeTo(76, 0.5), reason: 'el indicador usa el ancho de barra actualizado (22, antes 18)');
     expect(indicatorSize.height, closeTo(4, 0.5));
   });
 
@@ -1140,6 +1144,11 @@ void main() {
     // (más blanco + sombra suave), SIN cambiar texto/tipografía/tamaño/
     // posición. Se prueba el valor exacto para que una regresión futura
     // (p. ej. quitar la sombra sin querer) falle aquí explícitamente.
+    //
+    // KORIXA-SCREEN02-FINAL-UI-MICROPOLISH-20260913: 0.55 (antes 0.45,
+    // en ambos: mezcla de color y opacidad de sombra) — el dueño pidió
+    // mejorar LIGERAMENTE el contraste una vez más, sin volverlo blanco
+    // puro ni competir con el título.
     await pumpLoginPage(tester, repository, surfaceSize: const Size(390, 844));
 
     final Text subtitle = tester.widget(find.byKey(const Key('login-subtitle')));
@@ -1150,15 +1159,15 @@ void main() {
     );
     expect(
       subtitle.style?.color,
-      Color.lerp(DarkTech.textSecondary, Colors.white, 0.45),
-      reason: 'el color debe ser la mezcla sutil hacia blanco pedida (45%), no un blanco puro ni el gris original',
+      Color.lerp(DarkTech.textSecondary, Colors.white, 0.55),
+      reason: 'el color debe ser la mezcla hacia blanco pedida (55%), no un blanco puro ni el gris original',
     );
     expect(subtitle.style?.fontSize, 16, reason: 'la tipografía/tamaño no deben cambiar');
     final List<Shadow>? shadows = subtitle.style?.shadows;
     expect(shadows, isNotNull, reason: 'debe llevar una sombra suave para reforzar el contraste');
     expect(shadows!.length, 1);
     expect(shadows.single.blurRadius, 6, reason: 'sombra suave y discreta, no exagerada');
-    expect(shadows.single.color.a, closeTo(0.45, 0.01), reason: 'opacidad de sombra sutil');
+    expect(shadows.single.color.a, closeTo(0.55, 0.01), reason: 'opacidad de sombra ligeramente reforzada');
   });
 
   testWidgets('MOBILE_TITLE_NO_TEXT_SHADOW_MATCHES_SCREEN01 = PASS', (WidgetTester tester) async {
@@ -1349,6 +1358,42 @@ void main() {
       gap01,
       closeTo(gap12, 0.5),
       reason: 'MOBILE_INDICATOR_BAR_GAPS_UNIFORM: la separación entre barra 1-2 debe ser igual a la separación entre barra 2-3',
+    );
+  });
+
+  testWidgets('MOBILE_INDICATOR_BARS_UNIFORM_WIDTH = PASS', (WidgetTester tester) async {
+    // KORIXA-SCREEN02-FINAL-UI-MICROPOLISH-20260913: el dueño pidió
+    // barras "ligeramente más anchas" (22, antes 18) manteniendo
+    // dimensiones uniformes entre sí — se prueba el valor real, no solo
+    // que sean iguales entre ellas.
+    await pumpLoginPage(tester, repository, surfaceSize: const Size(390, 844));
+    final Finder bars = find.descendant(
+      of: find.byKey(const Key('login-portrait-indicator-row')),
+      matching: find.byType(Container),
+    );
+    final double width0 = tester.getRect(bars.at(0)).width;
+    final double width1 = tester.getRect(bars.at(1)).width;
+    final double width2 = tester.getRect(bars.at(2)).width;
+    expect(width0, closeTo(22.0, 0.5), reason: 'MOBILE_INDICATOR_BARS_UNIFORM_WIDTH: ancho de barra actualizado a 22 (antes 18)');
+    expect(width1, closeTo(width0, 0.5), reason: 'MOBILE_INDICATOR_BARS_UNIFORM_WIDTH: las 3 barras deben tener el mismo ancho');
+    expect(width2, closeTo(width0, 0.5), reason: 'MOBILE_INDICATOR_BARS_UNIFORM_WIDTH: las 3 barras deben tener el mismo ancho');
+  });
+
+  testWidgets('MOBILE_PASSWORD_TO_FORGOT_GAP_REDUCED = PASS', (WidgetTester tester) async {
+    // KORIXA-SCREEN02-FINAL-UI-MICROPOLISH-20260913: el dueño reportó que
+    // el espacio entre el campo de contraseña y "¿Olvidaste tu
+    // contraseña?" se veía demasiado grande — ese espacio salía
+    // enteramente del padding por defecto del `TextButton` (sin ningún
+    // `SizedBox` explícito ahí). Se redujo ese padding
+    // (`forgotPasswordButtonPadding`), bajando el espacio renderizado de
+    // 8px a 4px.
+    await pumpLoginPage(tester, repository, surfaceSize: const Size(390, 844));
+    final double passwordBottom = tester.getRect(find.byType(TextFormField).at(1)).bottom;
+    final double forgotTop = tester.getRect(find.text('¿Olvidaste tu contraseña?')).top;
+    expect(
+      forgotTop - passwordBottom,
+      closeTo(4.0, 0.5),
+      reason: 'MOBILE_PASSWORD_TO_FORGOT_GAP_REDUCED: el espacio renderizado debe bajar de 8px a 4px',
     );
   });
 
@@ -1550,37 +1595,47 @@ void main() {
     // KORIXA-SCREEN02-SLIGHT-BLOCK-DECOMPRESSION-20260911 (362→353, -9px)
     // + KORIXA-SCREEN02-INDICATOR-SPACING-POLISH-20260911 (353→348, -5px)
     // + KORIXA-SCREEN02-INDICATOR-VERTICAL-CENTERING-20260912 (348→345,
-    // -3px): el dueño pidió que el indicador quede centrado verticalmente
-    // entre "olvidé mi contraseña" y el CTA — `indicatorToCtaGap` sube de
-    // `AppSpacing.sm` (8) a `11` (para igualar el espacio renderizado
-    // arriba, que ya medía 11px por el padding propio del `TextButton`),
-    // +3px de alto real al grupo; el fondo/hero y el piso táctil de 48 no
-    // cambiaron.
+    // -3px) + KORIXA-SCREEN02-FINAL-UI-MICROPOLISH-20260913 (345→349,
+    // +4px): el dueño pidió reducir el padding del botón "olvidé mi
+    // contraseña" (~8px→4px, medido) y subir `indicatorTopGap` (3→7) para
+    // rebalancear el indicador (el espacio renderizado arriba/abajo del
+    // indicador sigue midiendo 11px/11px) — neto -4px de alto real al
+    // grupo a este ancho, por lo que el título (bottom-anchored) baja
+    // 4px; el fondo/hero y el piso táctil de 48 no cambiaron.
     await pumpLoginPage(tester, repository, surfaceSize: const Size(390, 844));
     final double titleTop = tester.getRect(find.byKey(const Key('login-title'))).top;
     expect(
       titleTop,
-      closeTo(345.0, 0.5),
-      reason: 'NORMAL_390x844_GEOMETRY_NOT_REGRESSED: centrar el indicador debe subir el título 3px (348→345), sin mover el fondo',
+      closeTo(349.0, 0.5),
+      reason: 'NORMAL_390x844_GEOMETRY_NOT_REGRESSED: reducir el padding del botón de forgot-password debe bajar el título 4px (345→349), sin mover el fondo',
     );
   });
 
   testWidgets('NORMAL_HEIGHT_BOTTOM_COMPOSITION_PRESERVED = PASS', (WidgetTester tester) async {
-    // KORIXA-SCREEN02-INDICATOR-VERTICAL-CENTERING-20260912: mismo
-    // desplazamiento de -3px que 390x844 arriba, medido a 430x932 y
-    // 768x1024 (ambos siguen sin activar scroll).
+    // KORIXA-SCREEN02-FINAL-UI-MICROPOLISH-20260913: medido (no uniforme
+    // con 390×844) — "¿Olvidaste tu contraseña?" ya envolvía a 2 líneas a
+    // 390 de ancho y a 1 línea a 430/768 ANTES de esta ronda (hecho
+    // preexistente del texto/ancho, no introducido por este cambio); el
+    // gap password→forgot y el balance del indicador (4px / 11px / 11px)
+    // sí quedan idénticos en los 3 anchos — verificado explícitamente en
+    // `MOBILE_PASSWORD_TO_FORGOT_GAP_REDUCED` y
+    // `MOBILE_INDICATOR_VERTICALLY_CENTERED_BETWEEN_FORGOT_AND_CTA` — pero
+    // el alto NATURAL del propio texto de 2 líneas vs 1 línea difiere
+    // (~20px), así que el desplazamiento total del título medido a
+    // 430×932/768×1024 (+16px) no es igual al de 390×844 (+4px). Ambos
+    // siguen sin activar scroll.
     await pumpLoginPage(tester, repository, surfaceSize: const Size(430, 932));
     expect(
       tester.getRect(find.byKey(const Key('login-title'))).top,
-      closeTo(441.0, 0.5),
-      reason: 'NORMAL_HEIGHT_BOTTOM_COMPOSITION_PRESERVED a 430x932 (444→441 tras centrar el indicador)',
+      closeTo(457.0, 0.5),
+      reason: 'NORMAL_HEIGHT_BOTTOM_COMPOSITION_PRESERVED a 430x932 (441→457 tras el micropolish, texto en 1 línea a este ancho)',
     );
 
     await pumpLoginPage(tester, repository, surfaceSize: const Size(768, 1024));
     expect(
       tester.getRect(find.byKey(const Key('login-title'))).top,
-      closeTo(533.0, 0.5),
-      reason: 'NORMAL_HEIGHT_BOTTOM_COMPOSITION_PRESERVED a 768x1024 (536→533 tras centrar el indicador)',
+      closeTo(549.0, 0.5),
+      reason: 'NORMAL_HEIGHT_BOTTOM_COMPOSITION_PRESERVED a 768x1024 (533→549 tras el micropolish, texto en 1 línea a este ancho)',
     );
   });
 
@@ -1730,7 +1785,7 @@ void main() {
     await pumpLoginPage(tester, repository, surfaceSize: const Size(390, 844));
     final Finder titleFinder = find.byKey(const Key('login-title'));
     final double before = tester.getRect(titleFinder).top;
-    expect(before, closeTo(345.0, 0.5), reason: 'NORMAL_390x844_TITLE_TOP_Y ≈ 345 tras centrar el indicador (KORIXA-SCREEN02-INDICATOR-VERTICAL-CENTERING-20260912)');
+    expect(before, closeTo(349.0, 0.5), reason: 'NORMAL_390x844_TITLE_TOP_Y ≈ 349 tras el micropolish final (KORIXA-SCREEN02-FINAL-UI-MICROPOLISH-20260913)');
 
     // Arrastre real hacia arriba (simula un swipe táctil) — el grupo NO
     // debe moverse en absoluto.
@@ -1884,4 +1939,5 @@ void main() {
       expect(find.text('Crear cuenta'), findsOneWidget, reason: '$label: ALL_ACTIONS_REACHABLE');
     });
   });
+
 }

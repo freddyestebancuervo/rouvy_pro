@@ -483,7 +483,16 @@ class _LoginPageState extends ConsumerState<LoginPage> {
                     floatingOverPhoto: false,
                     showIndicator: true,
                     indicatorKey: 'login-portrait-indicator-row',
-                    indicatorBarWidth: 18,
+                    // KORIXA-SCREEN02-FINAL-UI-MICROPOLISH-20260913: `22`
+                    // (antes `18`) — el dueño pidió que las 3 barras
+                    // fueran "ligeramente más anchas" para mejor
+                    // presencia visual; las 3 comparten este mismo valor
+                    // (`ThreeBarIndicator` las construye con un único
+                    // `barWidth`), así que las dimensiones siguen
+                    // idénticas entre sí. Alto (`indicatorBarHeight`) y
+                    // separación (`indicatorBarGap`) sin cambios — no se
+                    // pidió hacerlas más gruesas ni separarlas distinto.
+                    indicatorBarWidth: 22,
                     indicatorBarHeight: 4,
                     indicatorBarGap: 5,
                     // KORIXA-SCREEN02-TRUE-BOTTOM-COMPOSITION-OWNER-
@@ -510,16 +519,28 @@ class _LoginPageState extends ConsumerState<LoginPage> {
                     // literal porque el sistema de espaciado no tiene un
                     // escalón en 11.
                     indicatorToCtaGap: 11,
-                    // KORIXA-SCREEN02-INDICATOR-VERTICAL-CENTERING-20260912:
-                    // explícito (antes implícito vía `contentSectionGap`,
-                    // ver el nuevo parámetro `indicatorTopGap` en la firma
-                    // de este método) — mismo valor que antes
-                    // (`_portraitCompactGap` = 3), sin cambio de
-                    // comportamiento; solo hace posible ajustar el gap de
-                    // abajo (arriba) de forma independiente del gap
-                    // subtítulo→campos, que también usa
-                    // `contentSectionGap` y no debía tocarse.
-                    indicatorTopGap: _portraitCompactGap,
+                    // KORIXA-SCREEN02-FINAL-UI-MICROPOLISH-20260913: `7`
+                    // (antes `_portraitCompactGap` = 3) — sube para
+                    // REBALANCEAR el indicador tras reducir el alto del
+                    // botón "olvidé mi contraseña" (`forgotPasswordButtonPadding`
+                    // más abajo): a 390×844 (medido) el espacio renderizado
+                    // arriba del indicador (padding inferior del botón +
+                    // este gap) vuelve a medir 11px, igual que
+                    // `indicatorToCtaGap` — mismo mecanismo de rebalanceo
+                    // que la ronda anterior.
+                    indicatorTopGap: 7,
+                    // KORIXA-SCREEN02-FINAL-UI-MICROPOLISH-20260913: el
+                    // dueño reportó que el espacio entre el campo de
+                    // contraseña y "¿Olvidaste tu contraseña?" se veía
+                    // "demasiado grande"; no hay ningún `SizedBox` ahí, ese
+                    // espacio sale enteramente del padding por defecto del
+                    // `TextButton` (~8 arriba/abajo, del tema compartido).
+                    // `minimumSize: Size.zero` + `tapTargetSize:
+                    // shrinkWrap` (en el widget) evitan que Material vuelva
+                    // a inflar el alto al mínimo estándar pese al padding
+                    // más chico. No es un control con piso táctil de 48
+                    // exigido (solo campos/CTA/Google lo tienen).
+                    forgotPasswordButtonPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
                     // KORIXA-SCREEN02-COMPACT-BLOCK-WITHOUT-MOVING-
                     // BACKGROUND / KORIXA-SCREEN02-SLIGHT-BLOCK-
                     // DECOMPRESSION-20260911: `_portraitCompactGap` — mismo
@@ -857,6 +878,19 @@ class _LoginPageState extends ConsumerState<LoginPage> {
     // rondas anteriores); mobile portrait es el único que pasa un valor
     // propio.
     double? indicatorTopGap,
+    // KORIXA-SCREEN02-FINAL-UI-MICROPOLISH-20260913: EXCLUSIVO de mobile
+    // portrait — el dueño reportó que el espacio entre el campo de
+    // contraseña y "¿Olvidaste tu contraseña?" se veía "demasiado
+    // grande". No hay ningún `SizedBox` explícito ahí — ese espacio sale
+    // enteramente del alto mínimo estándar de Material que el
+    // `TextButton` aplica por defecto (tema compartido,
+    // `TextButtonThemeData` en `app_theme.dart`, sin `padding` propio).
+    // `minimumSize: Size.zero` + `tapTargetSize: shrinkWrap` (fijados
+    // junto con este padding en el call site del widget, no aquí) evitan
+    // que Material vuelva a inflar el alto al mínimo estándar pese al
+    // padding más chico. `null` preserva el estilo de tema exacto para
+    // todo llamador que no lo pase (desktop/phone landscape).
+    EdgeInsetsGeometry? forgotPasswordButtonPadding,
     // KORIXA-SCREEN02-TRUE-BOTTOM-COMPOSITION-OWNER-CORRECTION-20260911:
     // 4 parámetros nuevos, todos EXCLUSIVOS de mobile portrait (`null`/
     // default preserva el comportamiento exacto de todo otro llamador) —
@@ -1060,12 +1094,21 @@ class _LoginPageState extends ConsumerState<LoginPage> {
       // KORIXA-PR127-LOGIN-MOBILE-VISUAL-POLISH-20260910).
       style: (matchScreen01Typography ? textTheme.bodyLarge : textTheme.bodyMedium)?.copyWith(
         fontSize: subtitleFontSize,
+        // KORIXA-SCREEN02-FINAL-UI-MICROPOLISH-20260913: 0.55 (antes 0.45)
+        // — el dueño pidió mejorar LIGERAMENTE la legibilidad del
+        // subtítulo sin volverlo blanco intenso ni competir con el
+        // título ("Bienvenido de nuevo" sigue en blanco puro, w800); esta
+        // mezcla sigue leyéndose claramente "secundaria" (más tenue, sin
+        // negrita), solo un poco más de contraste sobre el cielo/fondo.
         color: subtitleContrastBoost
-            ? Color.lerp(DarkTech.textSecondary, Colors.white, 0.45)
+            ? Color.lerp(DarkTech.textSecondary, Colors.white, 0.55)
             : DarkTech.textSecondary,
         fontWeight: subtitleFontSize != null ? FontWeight.w500 : null,
+        // KORIXA-SCREEN02-FINAL-UI-MICROPOLISH-20260913: alpha 0.55 (antes
+        // 0.45) — mismo blur (6), refuerza el mismo ajuste de arriba sin
+        // crear un halo perceptible.
         shadows: subtitleContrastBoost
-            ? <Shadow>[Shadow(color: Colors.black.withValues(alpha: 0.45), blurRadius: 6)]
+            ? <Shadow>[Shadow(color: Colors.black.withValues(alpha: 0.55), blurRadius: 6)]
             : (matchScreen01Typography ? null : legibilityShadow),
       ),
     );
@@ -1124,6 +1167,13 @@ class _LoginPageState extends ConsumerState<LoginPage> {
         alignment: Alignment.centerRight,
         child: TextButton(
           onPressed: () => context.push(AppRoute.forgotPassword),
+          style: forgotPasswordButtonPadding == null
+              ? null
+              : TextButton.styleFrom(
+                  padding: forgotPasswordButtonPadding,
+                  minimumSize: Size.zero,
+                  tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                ),
           child: Text(l10n.forgotPasswordLink),
         ),
       ),
