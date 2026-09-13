@@ -1372,14 +1372,23 @@ class _LoginPageState extends ConsumerState<LoginPage> {
 /// distorsionar — este archivo ya viene encuadrado.
 ///
 /// KORIXA-SCREEN02-WEB-INTEGRATE-APPROVED-HERO-IMAGE-20260913: default
-/// cambia a `korixa_login_hero_guatape_web.png` (1926×816, copiado byte
-/// a byte del archivo aprobado por el dueño — el `.webp` original,
-/// 1672×941, queda sin usar en el repo, sin borrarlo). Sigue siendo la
-/// MISMA composición panorámica (ciclista izquierda, Piedra del Peñol
-/// centro-superior, embalse a la derecha) — solo cambia el archivo
-/// fuente. Afecta a los 2 únicos llamadores que usan este default:
-/// desktop y phone landscape (ambos "SCREEN_02 WEB" — ninguno es mobile
-/// portrait, que sigue con su propio archivo dedicado, sin tocar).
+/// cambia a `korixa_login_hero_guatape_web.png` (copiado byte a byte del
+/// archivo aprobado por el dueño — el `.webp` original, 1672×941, queda
+/// sin usar en el repo, sin borrarlo). Sigue siendo la MISMA composición
+/// panorámica (ciclista izquierda, Piedra del Peñol centro-superior,
+/// embalse a la derecha) — solo cambia el archivo fuente. Afecta a los 2
+/// únicos llamadores que usan este default: desktop y phone landscape
+/// (ambos "SCREEN_02 WEB" — ninguno es mobile portrait, que sigue con su
+/// propio archivo dedicado, sin tocar).
+///
+/// KORIXA-SCREEN02-WEB-INTEGRATE-APPROVED-HERO-IMAGE-20260914: el dueño
+/// reemplazó el CONTENIDO de este mismo archivo (mismo nombre, ahora
+/// 1918×820 — copiado byte a byte, sin recompresión/edición/recorte
+/// externo) por una foto distinta con la MISMA composición aprobada
+/// (cielo más despejado, encuadre ligeramente distinto del embalse).
+/// Cero cambios de código en este archivo — `imageAsset`/`alignment`/
+/// `fit` ya eran exactamente lo pedido (sin zoom/transform, asset
+/// directo), así que esta ronda es puramente un reemplazo de archivo.
 class _LoginHeroImage extends StatelessWidget {
   const _LoginHeroImage({
     required this.alignment,
