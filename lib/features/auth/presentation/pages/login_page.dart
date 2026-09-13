@@ -1389,6 +1389,16 @@ class _LoginPageState extends ConsumerState<LoginPage> {
 /// Cero cambios de código en este archivo — `imageAsset`/`alignment`/
 /// `fit` ya eran exactamente lo pedido (sin zoom/transform, asset
 /// directo), así que esta ronda es puramente un reemplazo de archivo.
+///
+/// KORIXA-SCREEN02-WEB-INTEGRATE-APPROVED-HERO-IMAGE-20260914B: el
+/// dueño reemplazó el CONTENIDO de este mismo archivo otra vez (mismo
+/// nombre, ahora 4096×1751 — resolución 4K real, copiado byte a byte
+/// desde `korixa_screen02_web_4096px.png`, sin recompresión/edición/
+/// recorte externo) por una versión de mayor resolución de la MISMA
+/// composición aprobada. Cero cambios de código: sigue sin existir
+/// ningún `Transform.scale`/`Matrix4`/`FittedBox` custom en este
+/// archivo — `BoxFit.cover` decide el encuadre de siempre, sin escalado
+/// artificial adicional.
 class _LoginHeroImage extends StatelessWidget {
   const _LoginHeroImage({
     required this.alignment,
