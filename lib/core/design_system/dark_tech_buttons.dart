@@ -39,6 +39,13 @@ class PrimaryGradientButton extends StatelessWidget {
     required this.onPressed,
     this.isLoading = false,
     this.icon,
+    // KORIXA-PR127-LOGIN-MOBILE-VISUAL-POLISH-20260910: `false` por
+    // defecto preserva EXACTAMENTE el comportamiento de todo llamador
+    // existente (ícono, si lo hay, antes del texto) — solo el CTA de
+    // Login mobile portrait pasa `true` para el detalle visual de una
+    // flecha a la derecha del mockup aprobado por el dueño. Puramente
+    // de presentación: no cambia `onPressed`/semántica del botón.
+    this.iconTrailing = false,
     this.height = _defaultHeight,
     this.fontSize,
     super.key,
@@ -48,6 +55,7 @@ class PrimaryGradientButton extends StatelessWidget {
   final VoidCallback? onPressed;
   final bool isLoading;
   final IconData? icon;
+  final bool iconTrailing;
   final double height;
   final double? fontSize;
 
@@ -85,7 +93,7 @@ class PrimaryGradientButton extends StatelessWidget {
                   : Row(
                       mainAxisSize: MainAxisSize.min,
                       children: <Widget>[
-                        if (icon != null) ...<Widget>[
+                        if (icon != null && !iconTrailing) ...<Widget>[
                           Icon(icon, size: 20, color: disabled ? DarkTech.disabledForeground : Colors.white),
                           const SizedBox(width: AppSpacing.sm),
                         ],
@@ -99,6 +107,10 @@ class PrimaryGradientButton extends StatelessWidget {
                                 fontWeight: fontSize != null ? FontWeight.w700 : null,
                               ),
                         ),
+                        if (icon != null && iconTrailing) ...<Widget>[
+                          const SizedBox(width: AppSpacing.sm),
+                          Icon(icon, size: 20, color: disabled ? DarkTech.disabledForeground : Colors.white),
+                        ],
                       ],
                     ),
             ),

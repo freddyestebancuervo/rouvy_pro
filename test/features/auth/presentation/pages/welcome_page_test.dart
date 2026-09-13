@@ -150,9 +150,11 @@ void main() {
     // inactivas (`DarkTech.border`, gris oscuro).
     await pumpWelcomePage(tester, surfaceSize: const Size(390, 844));
 
-    final Iterable<Container> bars = tester.widgetList<Container>(
-      find.descendant(of: find.byKey(const Key('welcome-indicator-row')), matching: find.byType(Container)),
-    );
+    final List<Container> bars = tester
+        .widgetList<Container>(
+          find.descendant(of: find.byKey(const Key('welcome-indicator-row')), matching: find.byType(Container)),
+        )
+        .toList();
     expect(bars.length, 3, reason: 'el indicador de mobile debe mostrar exactamente 3 líneas');
 
     final int activeCount = bars.where((Container bar) => bar.decoration is BoxDecoration && (bar.decoration! as BoxDecoration).gradient != null).length;
@@ -164,6 +166,15 @@ void main() {
         .length;
     expect(activeCount, 1, reason: 'exactamente 1 línea debe quedar activa/resaltada');
     expect(inactiveCount, 2, reason: 'las otras 2 líneas deben quedar en gris inactivo');
+
+    // KORIXA-SCREEN02-LOGIN-SUBTITLE-POSITION-CENTER-ACTIVE-INDICATOR-
+    // 20260910: `ThreeBarIndicator` ganó un parámetro `activeIndex` para
+    // que SCREEN_02 Login pueda activar su barra central sin tocar
+    // Welcome — este test prueba explícitamente que Welcome sigue con
+    // la PRIMERA barra activa (`activeIndex` default = 0), sin regresión.
+    final bool firstBarActive =
+        bars[0].decoration is BoxDecoration && (bars[0].decoration! as BoxDecoration).gradient != null;
+    expect(firstBarActive, isTrue, reason: 'Welcome debe conservar la primera barra activa (activeIndex: 0, sin cambios)');
   });
 
   // KORIXA-SCREEN01-CENTER-PAGE-INDICATORS-20260910: en mobile portrait
