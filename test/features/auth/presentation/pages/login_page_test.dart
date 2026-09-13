@@ -306,13 +306,17 @@ void main() {
   }
 
   // KORIXA-SCREEN02-MOBILE-BACKGROUND-ASSET-SWAP-20260911: `assetPath`
-  // agregado con default el panorámico original (desktop/phone
-  // landscape, sin cambios) — mobile portrait ahora usa un archivo
-  // dedicado (`korixa_login_hero_guatape_mobile.png`), así que sus
-  // llamadores pasan ese nombre explícitamente.
+  // agregado con default el panorámico (desktop/phone landscape) —
+  // mobile portrait usa un archivo dedicado
+  // (`korixa_login_hero_guatape_mobile.png`), así que sus llamadores
+  // pasan ese nombre explícitamente.
+  //
+  // KORIXA-SCREEN02-WEB-INTEGRATE-APPROVED-HERO-IMAGE-20260913: default
+  // actualizado a `korixa_login_hero_guatape_web.png` (antes `.webp`) —
+  // mismo mecanismo, nuevo archivo aprobado.
   bool hasHeroImage(
     WidgetTester tester, {
-    String assetPath = 'assets/images/korixa_login_hero_guatape.webp',
+    String assetPath = 'assets/images/korixa_login_hero_guatape_web.png',
   }) {
     final Iterable<Image> images = tester.widgetList<Image>(
       find.descendant(of: find.byKey(const Key('login-hero-image')), matching: find.byType(Image)),
