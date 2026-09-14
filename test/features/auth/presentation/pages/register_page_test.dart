@@ -6,6 +6,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:mocktail/mocktail.dart';
 
+import 'package:rouvy_pro/core/design_system/dark_tech_buttons.dart';
 import 'package:rouvy_pro/core/error/failures.dart';
 import 'package:rouvy_pro/features/auth/domain/usecases/register_usecase.dart';
 import 'package:rouvy_pro/features/auth/domain/usecases/sign_in_with_apple_usecase.dart';
@@ -174,6 +175,12 @@ void main() {
     // ignore: deprecated_member_use
     expect(tester.getSemantics(find.byKey(toggleKey)).hasFlag(SemanticsFlag.isToggled), isFalse);
 
+    // KORIXA-SCREEN03-WEB-MATCH-SCREEN02-DESKTOP-UI-SCALE-20260914: el
+    // bloque desktop creció (logo 188px + tipografía a escala SCREEN_02)
+    // — el toggle queda fuera del viewport de prueba por defecto
+    // (800x600) sin desplazar primero.
+    await tester.ensureVisible(find.byType(IconButton));
+    await tester.pumpAndSettle();
     await tester.tap(find.byType(IconButton));
     await tester.pumpAndSettle();
 
@@ -498,6 +505,71 @@ void main() {
     final double logoTop = tester.getTopLeft(logoFinder).dy;
     final double titleTop = tester.getTopLeft(find.byKey(const Key('register-title'))).dy;
     expect(logoTop, lessThan(titleTop), reason: 'WEB_KORIXA_LOGO_PRESENT: el logo debe quedar por encima del título');
+  });
+
+  // ---------------------------------------------------------------------
+  // KORIXA-SCREEN03-WEB-MATCH-SCREEN02-DESKTOP-UI-SCALE-20260914: SCREEN_03
+  // WEB debe consumir EXACTAMENTE la misma escala desktop ya aprobada de
+  // SCREEN_02 (`LoginPage._buildDesktop`), verificada contra el código
+  // actual: CONTENT_MAX_WIDTH=680, CONTROL_WIDTH=550, CTA_HEIGHT=64,
+  // CTA_FONT_SIZE=20, LOGO_HEIGHT=188, TITLE_FONT_SIZE=51,
+  // SUBTITLE_FONT_SIZE=24. No son números nuevos inventados.
+  // ---------------------------------------------------------------------
+
+  testWidgets('SCREEN03_DESKTOP_LOGO_MATCHES_SCREEN02_SCALE = PASS', (WidgetTester tester) async {
+    await pumpRegisterPage(tester, repository, surfaceSize: const Size(1440, 900));
+
+    final Image logo = tester.widget<Image>(find.byKey(const Key('register-desktop-logo')));
+    expect(logo.height, 188, reason: 'SCREEN03_DESKTOP_LOGO_MATCHES_SCREEN02_SCALE: mismo LOGO_HEIGHT que Login/Welcome desktop');
+  });
+
+  testWidgets('SCREEN03_DESKTOP_CONTROL_WIDTH_MATCHES_SCREEN02 = PASS', (WidgetTester tester) async {
+    await pumpRegisterPage(tester, repository, surfaceSize: const Size(1440, 900));
+
+    final SizedBox headerBox = tester.widget<SizedBox>(find.byKey(const Key('register-desktop-header-width')));
+    final SizedBox controlBox = tester.widget<SizedBox>(find.byKey(const Key('register-desktop-control-width')));
+    expect(headerBox.width, 550, reason: 'SCREEN03_DESKTOP_CONTROL_WIDTH_MATCHES_SCREEN02: mismo CONTROL_WIDTH que Login desktop');
+    expect(controlBox.width, 550);
+  });
+
+  testWidgets('SCREEN03_DESKTOP_TITLE_SCALE_MATCHES_SCREEN02 = PASS', (WidgetTester tester) async {
+    await pumpRegisterPage(tester, repository, surfaceSize: const Size(1440, 900));
+
+    final Text title = tester.widget<Text>(find.byKey(const Key('register-title')));
+    expect(title.style?.fontSize, 51, reason: 'SCREEN03_DESKTOP_TITLE_SCALE_MATCHES_SCREEN02: mismo TITLE_FONT_SIZE que Login desktop');
+  });
+
+  testWidgets('SCREEN03_DESKTOP_SUBTITLE_SCALE_MATCHES_SCREEN02 = PASS', (WidgetTester tester) async {
+    await pumpRegisterPage(tester, repository, surfaceSize: const Size(1440, 900));
+
+    final Text subtitle = tester.widget<Text>(find.byKey(const Key('register-subtitle')));
+    expect(
+      subtitle.style?.fontSize,
+      24,
+      reason: 'SCREEN03_DESKTOP_SUBTITLE_SCALE_MATCHES_SCREEN02: mismo SUBTITLE_FONT_SIZE que Login desktop',
+    );
+  });
+
+  testWidgets('SCREEN03_DESKTOP_CTA_MATCHES_SCREEN02 = PASS', (WidgetTester tester) async {
+    await pumpRegisterPage(tester, repository, surfaceSize: const Size(1440, 900));
+
+    final PrimaryGradientButton cta = tester.widget<PrimaryGradientButton>(find.byType(PrimaryGradientButton));
+    expect(cta.height, 64, reason: 'SCREEN03_DESKTOP_CTA_MATCHES_SCREEN02: mismo CTA_HEIGHT que Login desktop');
+    expect(cta.fontSize, 20, reason: 'SCREEN03_DESKTOP_CTA_MATCHES_SCREEN02: mismo CTA_FONT_SIZE que Login desktop');
+  });
+
+  testWidgets('SCREEN03_HERO_UNCHANGED = PASS', (WidgetTester tester) async {
+    // KORIXA-SCREEN03-WEB-MATCH-SCREEN02-DESKTOP-UI-SCALE-20260914: esta
+    // tarea NO debe tocar el hero (asset/fit/alignment) — bloqueado por
+    // contrato con la ronda anterior.
+    await pumpRegisterPage(tester, repository, surfaceSize: const Size(1440, 900));
+
+    final Image hero = tester.widget<Image>(
+      find.descendant(of: find.byKey(const Key('register-desktop-hero-image')), matching: find.byType(Image)),
+    );
+    expect((hero.image as AssetImage).assetName, 'assets/images/korixa_register_hero_desktop.png');
+    expect(hero.fit, BoxFit.cover);
+    expect(hero.alignment, const Alignment(0.35, 0));
   });
 
   testWidgets('WEB_PHONE_LANDSCAPE_KEEPS_LEGACY_ORIGIN_MAIN_BEHAVIOR = PASS', (WidgetTester tester) async {
