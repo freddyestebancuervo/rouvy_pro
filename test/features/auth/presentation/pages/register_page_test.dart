@@ -261,9 +261,16 @@ void main() {
   // mergear a `origin/main` al momento de esta reaplicación). Portrait y
   // phone landscape siguen exactamente el comportamiento original de
   // `origin/main` (`_buildLegacyShell`, sin cambios) — verificado
-  // explícitamente abajo. Solo desktop web (`canFitWideLayout()`) recibe
-  // el nuevo hero fotográfico (Santuario de Las Lajas) con
-  // `BoxFit.contain` — foto COMPLETA, sin crop/zoom.
+  // explícitamente abajo.
+  //
+  // KORIXA-SCREEN03-WEB-DESKTOP-HERO-PATTERN-ALIGN-WITH-SCREEN01-20260914:
+  // desktop web (`canFitWideLayout()`) usa el mismo patrón técnico ya
+  // aprobado en SCREEN_01 (`welcome_page.dart` — `StackFit.expand` +
+  // `BoxFit.cover` + alignment controlado) con un asset dedicado
+  // (`korixa_register_hero_desktop.png`) — ya NO `BoxFit.contain`, que
+  // dejaba franjas negras en viewports cuyo aspect ratio no coincidía con
+  // el de la foto. 1920x992 se agrega explícitamente porque fue el
+  // tamaño real donde el owner reportó el problema de las franjas.
   // ---------------------------------------------------------------------
 
   const List<Size> desktopWebSizes = <Size>[
@@ -272,6 +279,7 @@ void main() {
     Size(1440, 900),
     Size(1536, 864),
     Size(1920, 1080),
+    Size(1920, 992),
     Size(2560, 1440),
   ];
 
@@ -290,7 +298,7 @@ void main() {
     });
   }
 
-  testWidgets('WEB_HERO_IMAGE_CORRECT_ASSET_AND_FIT = PASS', (WidgetTester tester) async {
+  testWidgets('SCREEN03_DESKTOP_USES_COVER = PASS', (WidgetTester tester) async {
     await pumpRegisterPage(tester, repository, surfaceSize: const Size(1440, 900));
 
     final Iterable<Image> images = tester.widgetList<Image>(
@@ -300,16 +308,58 @@ void main() {
     final Image hero = images.first;
     expect(
       (hero.image as AssetImage).assetName,
-      'assets/images/korixa_register_hero_laslajas_web.png',
-      reason: 'WEB_HERO_IMAGE_CORRECT_ASSET_AND_FIT: debe usar el asset aprobado exacto',
+      'assets/images/korixa_register_hero_desktop.png',
+      reason: 'SCREEN03_DESKTOP_NEW_ASSET_PRESENT: debe usar el nuevo asset dedicado de escritorio',
     );
     expect(
       hero.fit,
-      BoxFit.contain,
-      reason: 'WEB_HERO_IMAGE_CORRECT_ASSET_AND_FIT: BoxFit.contain — la foto completa siempre visible, nunca cover/crop',
+      BoxFit.cover,
+      reason: 'SCREEN03_DESKTOP_USES_COVER: mismo patrón ya aprobado en SCREEN_01, sin franjas negras',
     );
-    expect(hero.fit, isNot(BoxFit.cover), reason: 'ausencia explícita de BoxFit.cover en este asset');
-    expect(hero.alignment, Alignment.center, reason: 'sin ajuste de encuadre artificial');
+  });
+
+  testWidgets('SCREEN03_DESKTOP_NO_CONTAIN = PASS', (WidgetTester tester) async {
+    await pumpRegisterPage(tester, repository, surfaceSize: const Size(1440, 900));
+
+    final Image hero = tester.widget<Image>(
+      find.descendant(of: find.byKey(const Key('register-desktop-hero-image')), matching: find.byType(Image)),
+    );
+    expect(hero.fit, isNot(BoxFit.contain), reason: 'SCREEN03_DESKTOP_NO_CONTAIN: ya no debe dejar franjas negras');
+    expect(hero.fit, isNot(BoxFit.fill), reason: 'sin deformación');
+  });
+
+  testWidgets('SCREEN03_DESKTOP_STACK_EXPANDS = PASS', (WidgetTester tester) async {
+    await pumpRegisterPage(tester, repository, surfaceSize: const Size(1440, 900));
+
+    final Stack layoutStack = tester.widget<Stack>(find.byKey(const Key('register-desktop-layout')));
+    expect(
+      layoutStack.fit,
+      StackFit.expand,
+      reason: 'SCREEN03_DESKTOP_STACK_EXPANDS: mismo patrón de SCREEN_01 — el hero debe ocupar todo el viewport',
+    );
+  });
+
+  testWidgets('SCREEN03_NO_BLACK_FILL_CONTAINER = PASS', (WidgetTester tester) async {
+    // Con `BoxFit.cover` no debe existir ningún relleno artificial de
+    // franjas (segundo fondo/imagen duplicada/blur) — solo debe haber UNA
+    // imagen usando el asset del hero en todo el layout desktop (otras
+    // `Image` legítimas del layout, como el ícono de Google, no cuentan
+    // como "relleno de fondo").
+    await pumpRegisterPage(tester, repository, surfaceSize: const Size(1920, 992));
+
+    final Iterable<Image> allImages = tester.widgetList<Image>(
+      find.descendant(of: find.byKey(const Key('register-desktop-layout')), matching: find.byType(Image)),
+    );
+    final int heroAssetCount = allImages.where((Image image) {
+      final ImageProvider provider = image.image;
+      final ImageProvider unwrapped = provider is ResizeImage ? provider.imageProvider : provider;
+      return unwrapped is AssetImage && unwrapped.assetName == 'assets/images/korixa_register_hero_desktop.png';
+    }).length;
+    expect(
+      heroAssetCount,
+      1,
+      reason: 'SCREEN03_NO_BLACK_FILL_CONTAINER: exactamente 1 imagen usando el asset del hero, sin duplicados',
+    );
   });
 
   testWidgets('WEB_HERO_NO_TRANSFORM_SCALE_ANCESTOR = PASS', (WidgetTester tester) async {

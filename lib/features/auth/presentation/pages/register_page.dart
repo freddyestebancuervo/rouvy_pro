@@ -148,7 +148,7 @@ class _RegisterPageState extends ConsumerState<RegisterPage> {
   }
 
   static const double _desktopContentMaxWidth = 420;
-  static const double _desktopLogoHeight = 56;
+  static const double _desktopLogoHeight = 80;
 
   /// SCREEN_03 WEB (desktop) — KORIXA-SCREEN03-WEB-FINAL-LEFT-
   /// COMPOSITION-AND-LOGO-20260914: el owner pidió mover el bloque del
@@ -223,16 +223,33 @@ class _RegisterPageState extends ConsumerState<RegisterPage> {
                               // `LoginPage._buildFormColumn` (`logoWidget`)
                               // — reimplementado aquí de forma
                               // autocontenida, sin importar nada privado
-                              // de `login_page.dart`.
-                              Image.asset(
-                                'assets/icons/korixa_logo_desktop.png',
-                                key: const Key('register-desktop-logo'),
-                                height: _desktopLogoHeight,
-                                fit: BoxFit.contain,
-                                filterQuality: FilterQuality.high,
-                                cacheHeight:
-                                    (_desktopLogoHeight * MediaQuery.of(themeContext).devicePixelRatio).round(),
-                                semanticLabel: 'Korixa',
+                              // de `login_page.dart`. KORIXA-SCREEN03-WEB-
+                              // DESKTOP-HERO-PATTERN-ALIGN-WITH-SCREEN01-
+                              // 20260914: el owner pidió más presencia
+                              // visual (56→80) y que quede centrado
+                              // respecto al ANCHO DEL BLOQUE del
+                              // formulario (420px), no respecto a toda la
+                              // pantalla — `SizedBox(width: infinity)` +
+                              // `Align.center` centra la imagen dentro del
+                              // ancho del bloque sin afectar el
+                              // `crossAxisAlignment.start` del resto del
+                              // contenido (título/campos siguen alineados
+                              // a la izquierda, sin cambios).
+                              SizedBox(
+                                width: double.infinity,
+                                child: Align(
+                                  alignment: Alignment.center,
+                                  child: Image.asset(
+                                    'assets/icons/korixa_logo_desktop.png',
+                                    key: const Key('register-desktop-logo'),
+                                    height: _desktopLogoHeight,
+                                    fit: BoxFit.contain,
+                                    filterQuality: FilterQuality.high,
+                                    cacheHeight: (_desktopLogoHeight * MediaQuery.of(themeContext).devicePixelRatio)
+                                        .round(),
+                                    semanticLabel: 'Korixa',
+                                  ),
+                                ),
                               ),
                               const SizedBox(height: AppSpacing.xl),
                               _buildStandardFormContent(
@@ -452,17 +469,37 @@ class _RegisterPageState extends ConsumerState<RegisterPage> {
   }
 }
 
-/// SCREEN_03 WEB: imagen de fondo completa, sin recorte (`BoxFit.contain`)
-/// — asset inmutable, ver `assets/images/korixa_register_hero_laslajas_web.png`.
+/// SCREEN_03 WEB — KORIXA-SCREEN03-WEB-DESKTOP-HERO-PATTERN-ALIGN-WITH-
+/// SCREEN01-20260914: mismo patrón técnico ya aprobado en SCREEN_01
+/// (`_DesktopHeroImage` en `welcome_page.dart`, NO modificado, solo
+/// auditado): asset dedicado de escritorio + `BoxFit.cover` (nunca
+/// `contain`, que dejaba franjas negras laterales/horizontales cuando el
+/// aspect ratio del viewport no coincidía con el de la foto) + alignment
+/// controlado. Asset inmutable — ver
+/// `assets/images/korixa_register_hero_desktop.png` (1672×941, mismo
+/// SHA-256 que el archivo fuente, copiado byte a byte).
+///
+/// Alignment(0.35, 0): en esta foto la ciclista (torso/casco/uniforme
+/// Korixa) está ubicada centro-derecha del encuadre y el Santuario de
+/// Las Lajas centro-izquierda; el lado izquierdo (vegetación/carretera/
+/// muro de piedra) es la zona visualmente neutra donde flota el
+/// formulario. Un sesgo hacia la derecha en el alignment prioriza qué
+/// borde se recorta cuando `BoxFit.cover` necesita cortar por diferencia
+/// de aspect ratio: sacrifica margen del lado izquierdo (neutro, ya
+/// cubierto por el degradado de contraste) en vez de arriesgar la
+/// ciclista o el Santuario — mismo razonamiento que el sesgo horizontal
+/// ya aprobado en SCREEN_01 (`Alignment(0.2, 0)`, sujeto también a la
+/// derecha del frame original), solo que aquí el sujeto está aún más
+/// hacia la derecha, así que el sesgo es mayor.
 class _RegisterWebHeroImage extends StatelessWidget {
   const _RegisterWebHeroImage();
 
   @override
   Widget build(BuildContext context) {
     return Image.asset(
-      'assets/images/korixa_register_hero_laslajas_web.png',
-      fit: BoxFit.contain,
-      alignment: Alignment.center,
+      'assets/images/korixa_register_hero_desktop.png',
+      fit: BoxFit.cover,
+      alignment: const Alignment(0.35, 0),
     );
   }
 }
