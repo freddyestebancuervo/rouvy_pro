@@ -68,6 +68,12 @@ void main() {
   testWidgets('no envía el formulario si los campos están vacíos', (WidgetTester tester) async {
     await pumpRegisterPage(tester, repository);
 
+    // KORIXA-SCREEN03-WEB-FINAL-LEFT-COMPOSITION-AND-LOGO-20260914: el
+    // logo agregado encima del título empuja el CTA un poco más abajo en
+    // el viewport de prueba por defecto (800x600) — mismo patrón ya
+    // usado en las demás pruebas de esta composición.
+    await tester.ensureVisible(find.text('Registrarme'));
+    await tester.pumpAndSettle();
     await tester.tap(find.text('Registrarme'));
     await tester.pumpAndSettle();
 
@@ -87,6 +93,8 @@ void main() {
     await pumpRegisterPage(tester, repository);
 
     await fillForm(tester, confirmPassword: 'otraClave123');
+    await tester.ensureVisible(find.text('Registrarme'));
+    await tester.pumpAndSettle();
     await tester.tap(find.text('Registrarme'));
     await tester.pumpAndSettle();
 
@@ -347,12 +355,14 @@ void main() {
     );
   });
 
-  testWidgets('WEB_NO_BORDER_RADIUS_ON_GLOBAL_SCRIM = PASS', (WidgetTester tester) async {
-    // KORIXA-SCREEN03-WEB-FINAL-COMPOSITION-CORRECTION-20260914: el
+  testWidgets('WEB_NO_GLOBAL_SCRIM_BORDER_RADIUS = PASS', (WidgetTester tester) async {
+    // KORIXA-SCREEN03-WEB-FINAL-LEFT-COMPOSITION-AND-LOGO-20260914: el
     // degradado de contraste (`register-desktop-hero-scrim`) debe ser un
     // velo que se funde con la foto, nunca una forma rectangular con
     // esquinas redondeadas/borde propio — confirma que su `BoxDecoration`
-    // no tiene `borderRadius` ni `border`.
+    // no tiene `borderRadius` ni `border`. Mismo test que la ronda
+    // anterior (antes `WEB_NO_BORDER_RADIUS_ON_GLOBAL_SCRIM`), renombrado
+    // para calzar con el nombre pedido explícitamente en esta tarea.
     await pumpRegisterPage(tester, repository, surfaceSize: const Size(1440, 900));
 
     final DecoratedBox scrim = tester.widget<DecoratedBox>(
@@ -364,33 +374,80 @@ void main() {
     expect(
       boxDecoration.borderRadius,
       isNull,
-      reason: 'WEB_NO_BORDER_RADIUS_ON_GLOBAL_SCRIM: sin esquinas redondeadas, no debe leerse como card',
+      reason: 'WEB_NO_GLOBAL_SCRIM_BORDER_RADIUS: sin esquinas redondeadas, no debe leerse como card',
     );
     expect(
       boxDecoration.border,
       isNull,
-      reason: 'WEB_NO_BORDER_RADIUS_ON_GLOBAL_SCRIM: sin borde propio, no debe leerse como card',
+      reason: 'WEB_NO_GLOBAL_SCRIM_BORDER_RADIUS: sin borde propio, no debe leerse como card',
     );
   });
 
-  testWidgets('WEB_FORM_POSITION_RIGHT = PASS', (WidgetTester tester) async {
-    // El bloque de contenido (título..footer) debe estar alineado al
-    // tercio derecho del viewport, no centrado — verificado por la
-    // posición del `ConstrainedBox` que envuelve el contenido.
+  testWidgets('WEB_LEFT_EDGE_GRADIENT_ONLY = PASS', (WidgetTester tester) async {
+    // El degradado debe nacer en el borde IZQUIERDO y desvanecerse a
+    // transparente — confirma la dirección exacta del `LinearGradient`
+    // (KORIXA-SCREEN03-WEB-FINAL-LEFT-COMPOSITION-AND-LOGO-20260914
+    // invirtió la dirección que tenía la ronda anterior).
+    await pumpRegisterPage(tester, repository, surfaceSize: const Size(1440, 900));
+
+    final DecoratedBox scrim = tester.widget<DecoratedBox>(
+      find.descendant(of: find.byKey(const Key('register-desktop-hero-scrim')), matching: find.byType(DecoratedBox)),
+    );
+    final BoxDecoration boxDecoration = scrim.decoration as BoxDecoration;
+    final LinearGradient gradient = boxDecoration.gradient! as LinearGradient;
+    expect(gradient.begin, Alignment.centerLeft, reason: 'WEB_LEFT_EDGE_GRADIENT_ONLY: debe nacer en el borde izquierdo');
+    expect(gradient.end, Alignment.centerRight);
+    expect(gradient.colors.last, Colors.transparent, reason: 'debe desvanecerse a transparente antes del centro');
+  });
+
+  testWidgets('WEB_FORM_POSITION_LEFT = PASS', (WidgetTester tester) async {
+    // El bloque de contenido (logo + título..footer) debe estar alineado
+    // al tercio izquierdo del viewport, no centrado ni a la derecha —
+    // verificado por la posición del `ConstrainedBox` que envuelve el
+    // contenido (antes `WEB_FORM_POSITION_RIGHT`, invertido en esta
+    // ronda por pedido explícito del owner).
     const Size size = Size(1440, 900);
     await pumpRegisterPage(tester, repository, surfaceSize: size);
 
     final Rect contentRect = tester.getRect(find.byKey(const Key('register-desktop-content-max-width')));
     expect(
-      contentRect.right,
-      greaterThan(size.width * 0.55),
-      reason: 'WEB_FORM_POSITION_RIGHT: el borde derecho del bloque debe estar cerca del borde derecho del viewport',
+      contentRect.left,
+      lessThan(size.width * 0.45),
+      reason: 'WEB_FORM_POSITION_LEFT: el borde izquierdo del bloque debe estar cerca del borde izquierdo del viewport',
     );
     expect(
-      contentRect.left,
-      greaterThan(size.width * 0.4),
-      reason: 'WEB_FORM_POSITION_RIGHT: el bloque no debe extenderse hacia el centro/izquierda del viewport',
+      contentRect.right,
+      lessThan(size.width * 0.6),
+      reason: 'WEB_FORM_POSITION_LEFT: el bloque no debe extenderse hacia el centro/derecha del viewport',
     );
+  });
+
+  testWidgets('WEB_KORIXA_LOGO_PRESENT = PASS', (WidgetTester tester) async {
+    // KORIXA-SCREEN03-WEB-FINAL-LEFT-COMPOSITION-AND-LOGO-20260914: el
+    // logo oficial (mismo asset que Welcome/Login desktop, sin generar ni
+    // modificar ninguno nuevo) debe estar presente, por encima del
+    // título, y con el mismo `BoxFit.contain` que preserva su aspect
+    // ratio (sin deformarlo).
+    await pumpRegisterPage(tester, repository, surfaceSize: const Size(1440, 900));
+
+    final Finder logoFinder = find.byKey(const Key('register-desktop-logo'));
+    expect(logoFinder, findsOneWidget, reason: 'WEB_KORIXA_LOGO_PRESENT: el logo debe estar presente en desktop');
+
+    final Image logo = tester.widget<Image>(logoFinder);
+    // `cacheHeight` envuelve el `AssetImage` en un `ResizeImage` (mismo
+    // patrón ya usado por `LoginPage._buildFormColumn` con
+    // `highQualityLogo`) — el asset real está un nivel más adentro.
+    final AssetImage logoProvider = (logo.image as ResizeImage).imageProvider as AssetImage;
+    expect(
+      logoProvider.assetName,
+      'assets/icons/korixa_logo_desktop.png',
+      reason: 'WEB_KORIXA_LOGO_PRESENT: debe ser el mismo logo oficial aprobado ya usado por Welcome/Login',
+    );
+    expect(logo.fit, BoxFit.contain, reason: 'sin deformar el aspect ratio original');
+
+    final double logoTop = tester.getTopLeft(logoFinder).dy;
+    final double titleTop = tester.getTopLeft(find.byKey(const Key('register-title'))).dy;
+    expect(logoTop, lessThan(titleTop), reason: 'WEB_KORIXA_LOGO_PRESENT: el logo debe quedar por encima del título');
   });
 
   testWidgets('WEB_PHONE_LANDSCAPE_KEEPS_LEGACY_ORIGIN_MAIN_BEHAVIOR = PASS', (WidgetTester tester) async {

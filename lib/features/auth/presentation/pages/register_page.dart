@@ -148,19 +148,19 @@ class _RegisterPageState extends ConsumerState<RegisterPage> {
   }
 
   static const double _desktopContentMaxWidth = 420;
+  static const double _desktopLogoHeight = 56;
 
-  /// SCREEN_03 WEB (desktop) — KORIXA-SCREEN03-WEB-FINAL-COMPOSITION-
-  /// CORRECTION-20260914: la ronda anterior (REFINEMENT) seguía leyendo
-  /// visualmente como una card — el scrim cubría el 55% derecho del
-  /// viewport con una transición abrupta (`stops: [0.45, 1.0]`) y alfa
-  /// uniforme en toda la altura, lo que se percibía como un rectángulo
-  /// oscuro sólido pese a no tener `borderRadius`/`border` propios. Esta
-  /// corrección angosta el degradado para que nazca y termine cerca del
-  /// borde derecho (`_RegisterHeroContentScrim` con 3 stops, transparente
-  /// bastante antes del centro) y reduce el ancho del bloque de contenido
-  /// (420, dentro del rango 400–430 pedido) — la fotografía completa
-  /// (Santuario de Las Lajas, `BoxFit.contain`, sin cambios de asset)
-  /// sigue siendo la protagonista.
+  /// SCREEN_03 WEB (desktop) — KORIXA-SCREEN03-WEB-FINAL-LEFT-
+  /// COMPOSITION-AND-LOGO-20260914: el owner pidió mover el bloque del
+  /// formulario del tercio derecho al tercio izquierdo (deja la ciclista
+  /// y el Santuario, que en esta foto quedan más hacia el centro/derecha,
+  /// completamente libres) y agregar el logo oficial de Korixa
+  /// (`assets/icons/korixa_logo_desktop.png` — el mismo ya aprobado y en
+  /// uso por Welcome/Login desktop, sin generar ni modificar ningún
+  /// asset nuevo) encima del título. El degradado de contraste se
+  /// invierte en el mismo movimiento (nace en el borde izquierdo, se
+  /// desvanece antes del centro) — misma técnica de 3 stops sin bordes ni
+  /// esquinas que la ronda anterior, solo con los `Alignment` invertidos.
   Widget _buildDesktopWeb(
     BuildContext context,
     AppLocalizations l10n,
@@ -194,33 +194,56 @@ class _RegisterPageState extends ConsumerState<RegisterPage> {
               // `MaterialApp` en lugar de `AppTheme.darkTech`.
               child: Builder(
                 builder: (BuildContext themeContext) {
-                  // KORIXA-SCREEN03-WEB-FINAL-COMPOSITION-CORRECTION-
-                  // 20260914: margen derecho responsive (40 en viewports
-                  // más angostos, 64 desde 1920 en adelante) — pedido
-                  // explícito de la tarea, sin introducir ningún token de
-                  // espaciado nuevo fuera de los ya existentes.
+                  // KORIXA-SCREEN03-WEB-FINAL-LEFT-COMPOSITION-AND-LOGO-
+                  // 20260914: margen izquierdo responsive (40 en
+                  // viewports más angostos, 64 desde 1920 en adelante) —
+                  // mismo mecanismo que el margen derecho de la ronda
+                  // anterior, solo que ahora es el lado izquierdo el que
+                  // recibe el valor mayor en pantallas grandes.
                   final double screenWidth = MediaQuery.of(themeContext).size.width;
-                  final double rightMargin = screenWidth >= 1920 ? 64 : AppSpacing.xxxl;
+                  final double leftMargin = screenWidth >= 1920 ? 64 : AppSpacing.xxxl;
                   return Align(
-                    alignment: Alignment.centerRight,
+                    alignment: Alignment.centerLeft,
                     child: Padding(
                       padding: EdgeInsets.only(
                         top: AppSpacing.xxxl,
                         bottom: AppSpacing.xxxl,
-                        right: rightMargin,
-                        left: AppSpacing.xxxl,
+                        left: leftMargin,
+                        right: AppSpacing.xxxl,
                       ),
                       child: ConstrainedBox(
                         key: const Key('register-desktop-content-max-width'),
                         constraints: const BoxConstraints(maxWidth: _desktopContentMaxWidth),
                         child: SingleChildScrollView(
-                          child: _buildStandardFormContent(
-                            themeContext,
-                            l10n,
-                            registerState,
-                            socialState,
-                            anyLoading,
-                            desktop: true,
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: <Widget>[
+                              // Mismo asset/patrón de decodificación de
+                              // alta calidad ya aprobado en
+                              // `LoginPage._buildFormColumn` (`logoWidget`)
+                              // — reimplementado aquí de forma
+                              // autocontenida, sin importar nada privado
+                              // de `login_page.dart`.
+                              Image.asset(
+                                'assets/icons/korixa_logo_desktop.png',
+                                key: const Key('register-desktop-logo'),
+                                height: _desktopLogoHeight,
+                                fit: BoxFit.contain,
+                                filterQuality: FilterQuality.high,
+                                cacheHeight:
+                                    (_desktopLogoHeight * MediaQuery.of(themeContext).devicePixelRatio).round(),
+                                semanticLabel: 'Korixa',
+                              ),
+                              const SizedBox(height: AppSpacing.xl),
+                              _buildStandardFormContent(
+                                themeContext,
+                                l10n,
+                                registerState,
+                                socialState,
+                                anyLoading,
+                                desktop: true,
+                              ),
+                            ],
                           ),
                         ),
                       ),
@@ -444,19 +467,18 @@ class _RegisterWebHeroImage extends StatelessWidget {
   }
 }
 
-/// Degradado MUY angosto desde el borde derecho — KORIXA-SCREEN03-WEB-
-/// FINAL-COMPOSITION-CORRECTION-20260914. La versión anterior
-/// (REFINEMENT-20260914) cubría el 55% derecho del viewport con una
-/// transición abrupta en un único salto (`stops: [0.45, 1.0]`) y alfa
-/// uniforme en toda la altura — el owner reportó que eso seguía leyéndose
-/// como una card/rectángulo oscuro pese a no tener `borderRadius` ni
-/// `border` propios. Esta versión nace en el borde derecho mismo
-/// (`begin/end` invertidos) y se desvanece a transparente con 3 stops
-/// (0.0 → 0.28 → 0.55), sin ningún salto duro perceptible, terminando
-/// bastante antes del centro del viewport — deja el Santuario y la
-/// ciclista completamente sin velo. NO es una card/panel: sin
-/// `borderRadius`, sin `border`, sin límite rectangular — es exactamente
-/// el mismo recurso ya aprobado en SCREEN_02
+/// Degradado MUY angosto desde el borde IZQUIERDO — KORIXA-SCREEN03-WEB-
+/// FINAL-LEFT-COMPOSITION-AND-LOGO-20260914: el formulario se movió del
+/// tercio derecho al tercio izquierdo, así que el degradado de contraste
+/// se invierte en el mismo movimiento — mismos 3 stops (0.0 → 0.28 →
+/// 0.55) y misma alfa que la ronda anterior (COMPOSITION-CORRECTION-
+/// 20260914, que ya lo angostó desde una versión previa que cubría el
+/// 55% del viewport y se percibía como card), solo con `begin`/`end`
+/// invertidos: nace en el borde izquierdo, se desvanece a transparente
+/// bastante antes del centro — deja el Santuario y la ciclista (que en
+/// esta foto quedan más hacia el centro/derecha) completamente sin velo.
+/// NO es una card/panel: sin `borderRadius`, sin `border`, sin límite
+/// rectangular — es exactamente el mismo recurso ya aprobado en SCREEN_02
 /// (`LoginPage._LoginHeroContentScrim`), reimplementado aquí de forma
 /// autocontenida (no se importa ni se modifica nada de `login_page.dart`).
 /// Ningún color nuevo: mismo `DarkTech.background` de siempre, solo con
@@ -469,8 +491,8 @@ class _RegisterHeroContentScrim extends StatelessWidget {
     return DecoratedBox(
       decoration: BoxDecoration(
         gradient: LinearGradient(
-          begin: Alignment.centerRight,
-          end: Alignment.centerLeft,
+          begin: Alignment.centerLeft,
+          end: Alignment.centerRight,
           colors: <Color>[
             DarkTech.background.withValues(alpha: 0.5),
             DarkTech.background.withValues(alpha: 0.22),
