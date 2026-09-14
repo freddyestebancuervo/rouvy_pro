@@ -317,6 +317,56 @@ void main() {
     expect(transformAncestors, findsNothing, reason: 'WEB_HERO_NO_TRANSFORM_SCALE_ANCESTOR: cero mecanismos de zoom');
   });
 
+  testWidgets('WEB_NO_OUTER_FORM_CARD = PASS', (WidgetTester tester) async {
+    // KORIXA-SCREEN03-WEB-UI-COMPOSITION-REFINEMENT-20260914: el dueño
+    // pidió explícitamente eliminar la gran card/panel oscuro que
+    // envolvía todo el formulario (ronda anterior usaba una
+    // `DecoratedBox` con `color`+`borderRadius` como ancestro directo del
+    // contenido) — ya no debe existir ningún `DecoratedBox`/`Container`
+    // con relleno opaco entre el hero y los campos del formulario. No es
+    // un test frágil de píxeles: solo confirma la AUSENCIA estructural de
+    // esa card, no una medida exacta.
+    await pumpRegisterPage(tester, repository, surfaceSize: const Size(1440, 900));
+
+    final Finder decoratedAncestors = find.ancestor(
+      of: find.byType(TextFormField).first,
+      matching: find.byType(DecoratedBox),
+    );
+    final Iterable<DecoratedBox> opaqueDecoratedAncestors = tester
+        .widgetList<DecoratedBox>(decoratedAncestors)
+        .where((DecoratedBox box) {
+      final Decoration decoration = box.decoration;
+      if (decoration is! BoxDecoration) return false;
+      final Color? color = decoration.color;
+      return color != null && color.a > 0.15;
+    });
+    expect(
+      opaqueDecoratedAncestors,
+      isEmpty,
+      reason: 'WEB_NO_OUTER_FORM_CARD: el formulario no debe vivir dentro de ninguna card/panel opaco',
+    );
+  });
+
+  testWidgets('WEB_FORM_POSITION_RIGHT = PASS', (WidgetTester tester) async {
+    // El bloque de contenido (título..footer) debe estar alineado al
+    // tercio derecho del viewport, no centrado — verificado por la
+    // posición del `ConstrainedBox` que envuelve el contenido.
+    const Size size = Size(1440, 900);
+    await pumpRegisterPage(tester, repository, surfaceSize: size);
+
+    final Rect contentRect = tester.getRect(find.byKey(const Key('register-desktop-content-max-width')));
+    expect(
+      contentRect.right,
+      greaterThan(size.width * 0.55),
+      reason: 'WEB_FORM_POSITION_RIGHT: el borde derecho del bloque debe estar cerca del borde derecho del viewport',
+    );
+    expect(
+      contentRect.left,
+      greaterThan(size.width * 0.4),
+      reason: 'WEB_FORM_POSITION_RIGHT: el bloque no debe extenderse hacia el centro/izquierda del viewport',
+    );
+  });
+
   testWidgets('WEB_PHONE_LANDSCAPE_KEEPS_LEGACY_ORIGIN_MAIN_BEHAVIOR = PASS', (WidgetTester tester) async {
     // Landscape angosto (mismo criterio que Login phone landscape: ancho
     // suficiente pero alto corto) — debe seguir usando exactamente

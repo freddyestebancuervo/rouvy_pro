@@ -147,11 +147,23 @@ class _RegisterPageState extends ConsumerState<RegisterPage> {
     );
   }
 
-  /// SCREEN_03 WEB (desktop). Fondo con la imagen de fondo completa
-  /// (Santuario de Las Lajas) sin recortar (`BoxFit.contain`), más un
-  /// panel translúcido detrás del formulario para legibilidad — ajuste
-  /// mínimo, no modifica el asset. Autocontenido: no depende de ninguna
-  /// estructura mobile-portrait.
+  static const double _desktopContentMaxWidth = 460;
+
+  /// SCREEN_03 WEB (desktop) — KORIXA-SCREEN03-WEB-UI-COMPOSITION-
+  /// REFINEMENT-20260914: reemplaza el panel/card oscuro grande que
+  /// envolvía todo el formulario (ronda anterior) por una composición
+  /// "flotando sobre la foto", en línea con el lenguaje visual ya
+  /// aprobado de SCREEN_02 (`LoginPage._buildDesktop`): la fotografía
+  /// completa (Santuario de Las Lajas) sin recortar (`BoxFit.contain`,
+  /// sin cambios de asset/alineación) queda como protagonista; el
+  /// formulario se ubica en el tercio derecho, sin card visible, con
+  /// legibilidad resuelta mediante un scrim horizontal MUY sutil
+  /// (transparente en el centro/izquierda, donde está la ciclista y el
+  /// Santuario — oscurece solo gradualmente hacia el borde derecho,
+  /// donde flota el formulario) más sombra de texto en título/subtítulo/
+  /// texto secundario — mismo recurso que ya usa Login, reimplementado
+  /// aquí de forma autocontenida (no se importa nada privado de
+  /// `login_page.dart`, no se modifica ese archivo).
   Widget _buildDesktopWeb(
     BuildContext context,
     AppLocalizations l10n,
@@ -174,6 +186,10 @@ class _RegisterPageState extends ConsumerState<RegisterPage> {
               key: Key('register-desktop-hero-image'),
               child: ExcludeSemantics(child: _RegisterWebHeroImage()),
             ),
+            const Positioned.fill(
+              key: Key('register-desktop-hero-scrim'),
+              child: ExcludeSemantics(child: _RegisterHeroContentScrim()),
+            ),
             SafeArea(
               // KORIXA-UI-SCREEN-BATCH-01A: `themeContext` desde un
               // `Builder` insertado DEBAJO del `Theme` de arriba — evita
@@ -181,29 +197,20 @@ class _RegisterPageState extends ConsumerState<RegisterPage> {
               // `MaterialApp` en lugar de `AppTheme.darkTech`.
               child: Builder(
                 builder: (BuildContext themeContext) => Align(
-                  alignment: Alignment.center,
+                  alignment: Alignment.centerRight,
                   child: Padding(
                     padding: const EdgeInsets.all(AppSpacing.xxxl),
                     child: ConstrainedBox(
                       key: const Key('register-desktop-content-max-width'),
-                      constraints: const BoxConstraints(maxWidth: 420),
-                      child: DecoratedBox(
-                        key: const Key('register-desktop-legibility-panel'),
-                        decoration: BoxDecoration(
-                          color: DarkTech.surface.withValues(alpha: 0.82),
-                          borderRadius: BorderRadius.circular(24),
-                        ),
-                        child: Padding(
-                          padding: const EdgeInsets.all(AppSpacing.xl),
-                          child: SingleChildScrollView(
-                            child: _buildStandardFormContent(
-                              themeContext,
-                              l10n,
-                              registerState,
-                              socialState,
-                              anyLoading,
-                            ),
-                          ),
+                      constraints: const BoxConstraints(maxWidth: _desktopContentMaxWidth),
+                      child: SingleChildScrollView(
+                        child: _buildStandardFormContent(
+                          themeContext,
+                          l10n,
+                          registerState,
+                          socialState,
+                          anyLoading,
+                          desktop: true,
                         ),
                       ),
                     ),
@@ -220,25 +227,58 @@ class _RegisterPageState extends ConsumerState<RegisterPage> {
   /// Contenido del formulario, idéntico en orden/lógica al original de
   /// `origin/main` — extraído a un método para poder reusarlo desde
   /// `_buildLegacyShell` y `_buildDesktopWeb` sin duplicar código.
+  ///
+  /// [desktop] (`false` por defecto): preserva el comportamiento EXACTO
+  /// de siempre para `_buildLegacyShell` (portrait/phone landscape, sin
+  /// cambios) — KORIXA-SCREEN03-WEB-UI-COMPOSITION-REFINEMENT-20260914
+  /// solo pidió refinar la composición WEB (desktop), nunca tocar mobile/
+  /// phone landscape. `true` (solo desde `_buildDesktopWeb`) da al
+  /// título/subtítulo/texto-secundario mayor jerarquía y una sombra de
+  /// legibilidad — el formulario ya no vive dentro de una card opaca, así
+  /// que necesita ese recurso para leerse sobre la foto, igual que ya
+  /// hace `LoginPage._buildFormColumn` con `floatingOverPhoto: true`.
+  /// Campos, botón, textos y lógica siguen siendo exactamente los mismos
+  /// widgets en el mismo orden — no hay ninguna rama de comportamiento
+  /// funcional aquí, solo de estilo tipográfico.
   Widget _buildStandardFormContent(
     BuildContext themeContext,
     AppLocalizations l10n,
     AsyncValue<void> registerState,
     AsyncValue<void> socialState,
-    bool anyLoading,
-  ) {
+    bool anyLoading, {
+    bool desktop = false,
+  }) {
     final TextTheme textTheme = Theme.of(themeContext).textTheme;
+    final List<Shadow>? legibilityShadow = desktop
+        ? <Shadow>[Shadow(color: Colors.black.withValues(alpha: 0.65), blurRadius: 10)]
+        : null;
     return Form(
           key: _formKey,
           autovalidateMode: AutovalidateMode.onUserInteraction,
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: <Widget>[
-              Text(l10n.registerTitle, style: textTheme.headlineMedium),
+              Text(
+                l10n.registerTitle,
+                key: const Key('register-title'),
+                style: textTheme.headlineMedium?.copyWith(
+                  fontSize: desktop ? 40 : null,
+                  fontWeight: desktop ? FontWeight.w800 : null,
+                  color: desktop ? DarkTech.textPrimary : null,
+                  letterSpacing: desktop ? -0.5 : null,
+                  height: desktop ? 1.08 : null,
+                  shadows: legibilityShadow,
+                ),
+              ),
               const SizedBox(height: AppSpacing.sm),
               Text(
                 l10n.registerSubtitle,
-                style: textTheme.bodyMedium?.copyWith(color: DarkTech.textSecondary),
+                key: const Key('register-subtitle'),
+                style: textTheme.bodyMedium?.copyWith(
+                  color: DarkTech.textSecondary,
+                  fontSize: desktop ? 17 : null,
+                  shadows: legibilityShadow,
+                ),
               ),
               const SizedBox(height: AppSpacing.xl),
               TextFormField(
@@ -299,8 +339,12 @@ class _RegisterPageState extends ConsumerState<RegisterPage> {
               const SizedBox(height: AppSpacing.md),
               Text(
                 l10n.termsAcceptText,
+                key: const Key('register-terms-text'),
                 textAlign: TextAlign.center,
-                style: textTheme.bodySmall?.copyWith(color: DarkTech.textSecondary),
+                style: textTheme.bodySmall?.copyWith(
+                  color: DarkTech.textSecondary,
+                  shadows: legibilityShadow,
+                ),
               ),
               const SizedBox(height: AppSpacing.lg),
               Row(
@@ -308,7 +352,12 @@ class _RegisterPageState extends ConsumerState<RegisterPage> {
                   const Expanded(child: Divider()),
                   Padding(
                     padding: const EdgeInsets.symmetric(horizontal: AppSpacing.md),
-                    child: Text(l10n.orDividerText, style: textTheme.bodySmall),
+                    child: Text(
+                      l10n.orDividerText,
+                      style: textTheme.bodySmall?.copyWith(
+                        shadows: legibilityShadow,
+                      ),
+                    ),
                   ),
                   const Expanded(child: Divider()),
                 ],
@@ -340,10 +389,26 @@ class _RegisterPageState extends ConsumerState<RegisterPage> {
                 alignment: WrapAlignment.center,
                 crossAxisAlignment: WrapCrossAlignment.center,
                 children: <Widget>[
-                  Text(l10n.hasAccountText),
+                  Text(
+                    l10n.hasAccountText,
+                    style: desktop
+                        ? textTheme.bodyMedium?.copyWith(color: DarkTech.textSecondary, shadows: legibilityShadow)
+                        : null,
+                  ),
                   TextButton(
                     onPressed: () => context.go(AppRoute.login),
-                    child: Text(l10n.loginLink),
+                    // Sin `color` explícito: el acento cyan/azul de marca
+                    // (`DarkTech.interactiveText`, vía `TextButtonThemeData`
+                    // ya existente y compartido con todo el resto de la
+                    // app) sigue aplicándose solo; en desktop se agrega
+                    // únicamente `fontWeight`/sombra para legibilidad
+                    // sobre la foto, sin pisar ese color de marca.
+                    child: Text(
+                      l10n.loginLink,
+                      style: desktop
+                          ? TextStyle(fontWeight: FontWeight.w700, shadows: legibilityShadow)
+                          : null,
+                    ),
                   ),
                 ],
               ),
@@ -364,6 +429,34 @@ class _RegisterWebHeroImage extends StatelessWidget {
       'assets/images/korixa_register_hero_laslajas_web.png',
       fit: BoxFit.contain,
       alignment: Alignment.center,
+    );
+  }
+}
+
+/// Scrim horizontal MUY sutil detrás del formulario — KORIXA-SCREEN03-
+/// WEB-UI-COMPOSITION-REFINEMENT-20260914. NO es una card/panel: es un
+/// degradado con alfa, transparente en el centro/izquierda (donde están
+/// la ciclista y el Santuario, que deben verse sin ningún velo) y que
+/// oscurece solo gradualmente hacia el borde derecho, donde flota el
+/// formulario — mismo recurso ya aprobado en SCREEN_02
+/// (`LoginPage._LoginHeroContentScrim`), reimplementado aquí de forma
+/// autocontenida y con sus propios `stops` (no se importa ni se modifica
+/// nada de `login_page.dart`). Ningún color nuevo: mismo
+/// `DarkTech.background` de siempre, solo con alfa.
+class _RegisterHeroContentScrim extends StatelessWidget {
+  const _RegisterHeroContentScrim();
+
+  @override
+  Widget build(BuildContext context) {
+    return DecoratedBox(
+      decoration: BoxDecoration(
+        gradient: LinearGradient(
+          begin: Alignment.centerLeft,
+          end: Alignment.centerRight,
+          colors: <Color>[Colors.transparent, DarkTech.background.withValues(alpha: 0.55)],
+          stops: const <double>[0.45, 1.0],
+        ),
+      ),
     );
   }
 }
