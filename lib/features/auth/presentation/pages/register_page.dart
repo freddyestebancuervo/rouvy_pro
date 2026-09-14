@@ -147,23 +147,20 @@ class _RegisterPageState extends ConsumerState<RegisterPage> {
     );
   }
 
-  static const double _desktopContentMaxWidth = 460;
+  static const double _desktopContentMaxWidth = 420;
 
-  /// SCREEN_03 WEB (desktop) — KORIXA-SCREEN03-WEB-UI-COMPOSITION-
-  /// REFINEMENT-20260914: reemplaza el panel/card oscuro grande que
-  /// envolvía todo el formulario (ronda anterior) por una composición
-  /// "flotando sobre la foto", en línea con el lenguaje visual ya
-  /// aprobado de SCREEN_02 (`LoginPage._buildDesktop`): la fotografía
-  /// completa (Santuario de Las Lajas) sin recortar (`BoxFit.contain`,
-  /// sin cambios de asset/alineación) queda como protagonista; el
-  /// formulario se ubica en el tercio derecho, sin card visible, con
-  /// legibilidad resuelta mediante un scrim horizontal MUY sutil
-  /// (transparente en el centro/izquierda, donde está la ciclista y el
-  /// Santuario — oscurece solo gradualmente hacia el borde derecho,
-  /// donde flota el formulario) más sombra de texto en título/subtítulo/
-  /// texto secundario — mismo recurso que ya usa Login, reimplementado
-  /// aquí de forma autocontenida (no se importa nada privado de
-  /// `login_page.dart`, no se modifica ese archivo).
+  /// SCREEN_03 WEB (desktop) — KORIXA-SCREEN03-WEB-FINAL-COMPOSITION-
+  /// CORRECTION-20260914: la ronda anterior (REFINEMENT) seguía leyendo
+  /// visualmente como una card — el scrim cubría el 55% derecho del
+  /// viewport con una transición abrupta (`stops: [0.45, 1.0]`) y alfa
+  /// uniforme en toda la altura, lo que se percibía como un rectángulo
+  /// oscuro sólido pese a no tener `borderRadius`/`border` propios. Esta
+  /// corrección angosta el degradado para que nazca y termine cerca del
+  /// borde derecho (`_RegisterHeroContentScrim` con 3 stops, transparente
+  /// bastante antes del centro) y reduce el ancho del bloque de contenido
+  /// (420, dentro del rango 400–430 pedido) — la fotografía completa
+  /// (Santuario de Las Lajas, `BoxFit.contain`, sin cambios de asset)
+  /// sigue siendo la protagonista.
   Widget _buildDesktopWeb(
     BuildContext context,
     AppLocalizations l10n,
@@ -196,26 +193,40 @@ class _RegisterPageState extends ConsumerState<RegisterPage> {
               // que `Theme.of(context)` resuelva el tema ambiente del
               // `MaterialApp` en lugar de `AppTheme.darkTech`.
               child: Builder(
-                builder: (BuildContext themeContext) => Align(
-                  alignment: Alignment.centerRight,
-                  child: Padding(
-                    padding: const EdgeInsets.all(AppSpacing.xxxl),
-                    child: ConstrainedBox(
-                      key: const Key('register-desktop-content-max-width'),
-                      constraints: const BoxConstraints(maxWidth: _desktopContentMaxWidth),
-                      child: SingleChildScrollView(
-                        child: _buildStandardFormContent(
-                          themeContext,
-                          l10n,
-                          registerState,
-                          socialState,
-                          anyLoading,
-                          desktop: true,
+                builder: (BuildContext themeContext) {
+                  // KORIXA-SCREEN03-WEB-FINAL-COMPOSITION-CORRECTION-
+                  // 20260914: margen derecho responsive (40 en viewports
+                  // más angostos, 64 desde 1920 en adelante) — pedido
+                  // explícito de la tarea, sin introducir ningún token de
+                  // espaciado nuevo fuera de los ya existentes.
+                  final double screenWidth = MediaQuery.of(themeContext).size.width;
+                  final double rightMargin = screenWidth >= 1920 ? 64 : AppSpacing.xxxl;
+                  return Align(
+                    alignment: Alignment.centerRight,
+                    child: Padding(
+                      padding: EdgeInsets.only(
+                        top: AppSpacing.xxxl,
+                        bottom: AppSpacing.xxxl,
+                        right: rightMargin,
+                        left: AppSpacing.xxxl,
+                      ),
+                      child: ConstrainedBox(
+                        key: const Key('register-desktop-content-max-width'),
+                        constraints: const BoxConstraints(maxWidth: _desktopContentMaxWidth),
+                        child: SingleChildScrollView(
+                          child: _buildStandardFormContent(
+                            themeContext,
+                            l10n,
+                            registerState,
+                            socialState,
+                            anyLoading,
+                            desktop: true,
+                          ),
                         ),
                       ),
                     ),
-                  ),
-                ),
+                  );
+                },
               ),
             ),
           ],
@@ -433,16 +444,23 @@ class _RegisterWebHeroImage extends StatelessWidget {
   }
 }
 
-/// Scrim horizontal MUY sutil detrás del formulario — KORIXA-SCREEN03-
-/// WEB-UI-COMPOSITION-REFINEMENT-20260914. NO es una card/panel: es un
-/// degradado con alfa, transparente en el centro/izquierda (donde están
-/// la ciclista y el Santuario, que deben verse sin ningún velo) y que
-/// oscurece solo gradualmente hacia el borde derecho, donde flota el
-/// formulario — mismo recurso ya aprobado en SCREEN_02
+/// Degradado MUY angosto desde el borde derecho — KORIXA-SCREEN03-WEB-
+/// FINAL-COMPOSITION-CORRECTION-20260914. La versión anterior
+/// (REFINEMENT-20260914) cubría el 55% derecho del viewport con una
+/// transición abrupta en un único salto (`stops: [0.45, 1.0]`) y alfa
+/// uniforme en toda la altura — el owner reportó que eso seguía leyéndose
+/// como una card/rectángulo oscuro pese a no tener `borderRadius` ni
+/// `border` propios. Esta versión nace en el borde derecho mismo
+/// (`begin/end` invertidos) y se desvanece a transparente con 3 stops
+/// (0.0 → 0.28 → 0.55), sin ningún salto duro perceptible, terminando
+/// bastante antes del centro del viewport — deja el Santuario y la
+/// ciclista completamente sin velo. NO es una card/panel: sin
+/// `borderRadius`, sin `border`, sin límite rectangular — es exactamente
+/// el mismo recurso ya aprobado en SCREEN_02
 /// (`LoginPage._LoginHeroContentScrim`), reimplementado aquí de forma
-/// autocontenida y con sus propios `stops` (no se importa ni se modifica
-/// nada de `login_page.dart`). Ningún color nuevo: mismo
-/// `DarkTech.background` de siempre, solo con alfa.
+/// autocontenida (no se importa ni se modifica nada de `login_page.dart`).
+/// Ningún color nuevo: mismo `DarkTech.background` de siempre, solo con
+/// alfa.
 class _RegisterHeroContentScrim extends StatelessWidget {
   const _RegisterHeroContentScrim();
 
@@ -451,10 +469,14 @@ class _RegisterHeroContentScrim extends StatelessWidget {
     return DecoratedBox(
       decoration: BoxDecoration(
         gradient: LinearGradient(
-          begin: Alignment.centerLeft,
-          end: Alignment.centerRight,
-          colors: <Color>[Colors.transparent, DarkTech.background.withValues(alpha: 0.55)],
-          stops: const <double>[0.45, 1.0],
+          begin: Alignment.centerRight,
+          end: Alignment.centerLeft,
+          colors: <Color>[
+            DarkTech.background.withValues(alpha: 0.5),
+            DarkTech.background.withValues(alpha: 0.22),
+            Colors.transparent,
+          ],
+          stops: const <double>[0.0, 0.28, 0.55],
         ),
       ),
     );

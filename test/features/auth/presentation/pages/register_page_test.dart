@@ -347,6 +347,32 @@ void main() {
     );
   });
 
+  testWidgets('WEB_NO_BORDER_RADIUS_ON_GLOBAL_SCRIM = PASS', (WidgetTester tester) async {
+    // KORIXA-SCREEN03-WEB-FINAL-COMPOSITION-CORRECTION-20260914: el
+    // degradado de contraste (`register-desktop-hero-scrim`) debe ser un
+    // velo que se funde con la foto, nunca una forma rectangular con
+    // esquinas redondeadas/borde propio — confirma que su `BoxDecoration`
+    // no tiene `borderRadius` ni `border`.
+    await pumpRegisterPage(tester, repository, surfaceSize: const Size(1440, 900));
+
+    final DecoratedBox scrim = tester.widget<DecoratedBox>(
+      find.descendant(of: find.byKey(const Key('register-desktop-hero-scrim')), matching: find.byType(DecoratedBox)),
+    );
+    final Decoration decoration = scrim.decoration;
+    expect(decoration, isA<BoxDecoration>());
+    final BoxDecoration boxDecoration = decoration as BoxDecoration;
+    expect(
+      boxDecoration.borderRadius,
+      isNull,
+      reason: 'WEB_NO_BORDER_RADIUS_ON_GLOBAL_SCRIM: sin esquinas redondeadas, no debe leerse como card',
+    );
+    expect(
+      boxDecoration.border,
+      isNull,
+      reason: 'WEB_NO_BORDER_RADIUS_ON_GLOBAL_SCRIM: sin borde propio, no debe leerse como card',
+    );
+  });
+
   testWidgets('WEB_FORM_POSITION_RIGHT = PASS', (WidgetTester tester) async {
     // El bloque de contenido (título..footer) debe estar alineado al
     // tercio derecho del viewport, no centrado — verificado por la
