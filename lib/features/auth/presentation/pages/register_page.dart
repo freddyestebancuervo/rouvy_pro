@@ -22,13 +22,20 @@ import '../widgets/social_sign_in_buttons.dart';
 
 /// KORIXA-SCREEN03-REGISTER-MOBILE-VISUAL-IMPLEMENTATION-20260913: solo
 /// mobile portrait recibe la composición nueva alineada con SCREEN_02
-/// (hero fotográfico + bloque bottom-anchored) — desktop y phone
-/// landscape SIGUEN exactamente con `DarkTechAuthShell` (sin cambios),
-/// esta ronda no los toca. Deliberadamente NO reusa ningún widget
-/// privado de `login_page.dart` (`_LoginHeroImage` etc.) — SCREEN_02
-/// está LOCKED y no se toca ni se refactoriza para compartir código con
-/// esta pantalla; el hero/scrim de acá son una implementación mínima
-/// propia de este archivo.
+/// (hero fotográfico + bloque bottom-anchored). Deliberadamente NO reusa
+/// ningún widget privado de `login_page.dart` (`_LoginHeroImage` etc.) —
+/// SCREEN_02 está LOCKED y no se toca ni se refactoriza para compartir
+/// código con esta pantalla; el hero/scrim de acá son una implementación
+/// mínima propia de este archivo.
+///
+/// KORIXA-SCREEN03-WEB-FINAL-BACKGROUND-ASSET-INTEGRATION-20260913:
+/// desktop web (`canFitWideLayout()`, mismo criterio que Login) recibe su
+/// propio hero fotográfico (Santuario de Las Lajas,
+/// `korixa_register_hero_laslajas_web.png`) con `BoxFit.contain` — la
+/// foto se ve COMPLETA, sin crop, aunque queden franjas de
+/// `DarkTech.background` sólido a los lados/arriba/abajo. Phone landscape
+/// (landscape angosto) sigue exactamente con `DarkTechAuthShell`, sin
+/// cambios — fuera de alcance.
 class RegisterPage extends ConsumerStatefulWidget {
   const RegisterPage({super.key});
 
@@ -145,14 +152,18 @@ class _RegisterPageState extends ConsumerState<RegisterPage> {
     // usan Welcome/Login (`KorixaViewportInfo`, sin estado, sin efectos
     // secundarios — reusarla acá no puede regresionar SCREEN_01/02).
     // Portrait (mobile Y tablet portrait, mismo criterio que Login) recibe
-    // la composición nueva; cualquier viewport landscape (desktop o
-    // phone landscape) sigue exactamente con `DarkTechAuthShell` —
-    // ninguno de los dos se rediseña en esta ronda.
+    // la composición mobile; un viewport landscape ANCHO (mismo criterio
+    // `canFitWideLayout()` que Login desktop) recibe la composición WEB
+    // nueva de esta ronda; phone landscape (landscape angosto) sigue
+    // exactamente con `DarkTechAuthShell`, sin cambios — fuera de alcance.
     return LayoutBuilder(
       builder: (BuildContext context, BoxConstraints constraints) {
         final KorixaViewportInfo viewport = KorixaViewportInfo(width: constraints.maxWidth, height: constraints.maxHeight);
         if (viewport.isPortrait) {
           return _buildMobilePortrait(context, l10n, registerState, socialState, anyLoading);
+        }
+        if (viewport.canFitWideLayout()) {
+          return _buildDesktopWeb(context, l10n, registerState, socialState, anyLoading);
         }
         return _buildLegacyShell(context, l10n, registerState, socialState, anyLoading);
       },
@@ -160,8 +171,8 @@ class _RegisterPageState extends ConsumerState<RegisterPage> {
   }
 
   /// Composición EXACTA que ya tenía `RegisterPage` antes de esta tarea —
-  /// sin ningún cambio — para desktop y phone landscape, fuera de alcance
-  /// esta ronda.
+  /// sin ningún cambio — ahora exclusiva de phone landscape (landscape
+  /// angosto), fuera de alcance esta ronda.
   Widget _buildLegacyShell(
     BuildContext context,
     AppLocalizations l10n,
@@ -174,131 +185,236 @@ class _RegisterPageState extends ConsumerState<RegisterPage> {
       appBar: AppBar(),
       // KORIXA-UI-SCREEN-BATCH-01A: `themeContext`, no el `context` de
       // `build` — ver el docblock de `DarkTechAuthShell`.
-      builder: (BuildContext themeContext) {
-        final TextTheme textTheme = Theme.of(themeContext).textTheme;
-        return Form(
-          key: _formKey,
-          autovalidateMode: AutovalidateMode.onUserInteraction,
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.stretch,
-            children: <Widget>[
-              Text(l10n.registerTitle, style: textTheme.headlineMedium),
-              const SizedBox(height: AppSpacing.sm),
-              Text(
-                l10n.registerSubtitle,
-                style: textTheme.bodyMedium?.copyWith(color: DarkTech.textSecondary),
-              ),
-              const SizedBox(height: AppSpacing.xl),
-              TextFormField(
-                controller: _nameController,
-                textInputAction: TextInputAction.next,
-                autofillHints: const <String>[AutofillHints.name],
-                decoration: InputDecoration(labelText: l10n.nameLabel),
-                validator: (String? value) => Validators.name(value).message(l10n),
-              ),
-              const SizedBox(height: AppSpacing.base),
-              TextFormField(
-                controller: _emailController,
-                keyboardType: TextInputType.emailAddress,
-                textInputAction: TextInputAction.next,
-                autofillHints: const <String>[AutofillHints.email],
-                decoration: InputDecoration(labelText: l10n.emailLabel),
-                validator: (String? value) => Validators.email(value).message(l10n),
-              ),
-              const SizedBox(height: AppSpacing.base),
-              TextFormField(
-                controller: _passwordController,
-                obscureText: _obscurePassword,
-                textInputAction: TextInputAction.next,
-                autofillHints: const <String>[AutofillHints.newPassword],
-                decoration: InputDecoration(
-                  labelText: l10n.passwordLabel,
-                  suffixIcon: Semantics(
-                    key: const Key('register-password-visibility-semantics'),
-                    label: _obscurePassword ? l10n.showPasswordAction : l10n.hidePasswordAction,
-                    toggled: !_obscurePassword,
-                    child: IconButton(
-                      tooltip: _obscurePassword ? l10n.showPasswordAction : l10n.hidePasswordAction,
-                      icon: Icon(_obscurePassword ? Icons.visibility_outlined : Icons.visibility_off_outlined),
-                      onPressed: () => setState(() => _obscurePassword = !_obscurePassword),
+      builder: (BuildContext themeContext) =>
+          _buildStandardFormContent(themeContext, l10n, registerState, socialState, anyLoading),
+    );
+  }
+
+  /// KORIXA-SCREEN03-WEB-FINAL-BACKGROUND-ASSET-INTEGRATION-20260913:
+  /// composición WEB nueva — hero fotográfico aprobado (Santuario de Las
+  /// Lajas) detrás del MISMO contenido de formulario que ya tenía Register
+  /// (extraído sin cambios a `_buildStandardFormContent`, reusado también
+  /// por `_buildLegacyShell`). El asset se muestra con `BoxFit.contain`:
+  /// prioridad absoluta a mostrar la foto COMPLETA, sin crop/zoom/
+  /// deformación — el espacio residual (letterbox) se resuelve con el
+  /// mismo `DarkTech.background` sólido de siempre, nunca recortando la
+  /// imagen para "llenar" el viewport.
+  Widget _buildDesktopWeb(
+    BuildContext context,
+    AppLocalizations l10n,
+    AsyncValue<void> registerState,
+    AsyncValue<void> socialState,
+    bool anyLoading,
+  ) {
+    return Theme(
+      data: AppTheme.darkTech,
+      child: Scaffold(
+        backgroundColor: DarkTech.background,
+        body: Stack(
+          key: const Key('register-desktop-layout'),
+          fit: StackFit.expand,
+          children: <Widget>[
+            // `DecoratedBox` sólido primero — el espacio que el hero deja
+            // libre (letterbox, inevitable cuando el aspect ratio del
+            // asset no coincide con el del viewport) queda en este mismo
+            // fondo oscuro ya aprobado, nunca en negro "por defecto" sin
+            // relación con el resto del sistema visual.
+            const Positioned.fill(
+              child: DecoratedBox(decoration: BoxDecoration(color: DarkTech.background)),
+            ),
+            const Positioned.fill(
+              key: Key('register-desktop-hero-image'),
+              child: ExcludeSemantics(child: _RegisterWebHeroImage()),
+            ),
+            SafeArea(
+              // KORIXA-UI-SCREEN-BATCH-01A (mismo defecto ya documentado en
+              // `DarkTechAuthShell`): el `context` recibido como parámetro
+              // de este método viene del `LayoutBuilder` de `build()`, POR
+              // ENCIMA del `Theme(data: AppTheme.darkTech)` de arriba —
+              // cualquier `Theme.of(context)` con ESE context resolvería el
+              // tema AMBIENTE de `MaterialApp`, no Dark Tech. Este `Builder`
+              // da un context NUEVO, ya por debajo del `Theme` insertado
+              // acá, para que `_buildStandardFormContent` resuelva Dark
+              // Tech correctamente.
+              child: Builder(
+                builder: (BuildContext themeContext) => Align(
+                  alignment: Alignment.center,
+                  child: Padding(
+                    padding: const EdgeInsets.all(AppSpacing.xxxl),
+                    child: ConstrainedBox(
+                      key: const Key('register-desktop-content-max-width'),
+                      constraints: const BoxConstraints(maxWidth: 420),
+                      // KORIXA-SCREEN03-WEB-FINAL-BACKGROUND-ASSET-
+                      // INTEGRATION-20260913: ajuste MÍNIMO estrictamente
+                      // necesario para mantener el formulario legible
+                      // sobre la foto (`BoxFit.contain` deja partes muy
+                      // claras del cielo/carretera directamente detrás del
+                      // texto, sin ningún scrim) — un panel sólido
+                      // semitransparente detrás del formulario, NUNCA
+                      // sobre la imagen en sí (la imagen no se toca; este
+                      // panel vive en una capa separada del `Stack`,
+                      // encima de la foto pero sin modificarla). Ni
+                      // texto/campos/orden/copy cambian.
+                      child: DecoratedBox(
+                        key: const Key('register-desktop-legibility-panel'),
+                        decoration: BoxDecoration(
+                          color: DarkTech.surface.withValues(alpha: 0.82),
+                          borderRadius: BorderRadius.circular(24),
+                        ),
+                        child: Padding(
+                          padding: const EdgeInsets.all(AppSpacing.xl),
+                          child: SingleChildScrollView(
+                            child:
+                                _buildStandardFormContent(themeContext, l10n, registerState, socialState, anyLoading),
+                          ),
+                        ),
+                      ),
                     ),
                   ),
                 ),
-                validator: (String? value) => Validators.password(value).message(l10n),
               ),
-              const SizedBox(height: AppSpacing.base),
-              TextFormField(
-                controller: _confirmPasswordController,
-                obscureText: _obscurePassword,
-                textInputAction: TextInputAction.done,
-                decoration: InputDecoration(labelText: l10n.confirmPasswordLabel),
-                onFieldSubmitted: (_) => _handleSubmit(),
-                validator: (String? value) => Validators.confirmPassword(
-                  _passwordController.text,
-                  value,
-                ).message(l10n),
-              ),
-              const SizedBox(height: AppSpacing.lg),
-              PrimaryGradientButton(
-                label: l10n.registerButton,
-                isLoading: registerState.isLoading,
-                onPressed: anyLoading ? null : _handleSubmit,
-              ),
-              const SizedBox(height: AppSpacing.md),
-              Text(
-                l10n.termsAcceptText,
-                textAlign: TextAlign.center,
-                style: textTheme.bodySmall?.copyWith(color: DarkTech.textSecondary),
-              ),
-              const SizedBox(height: AppSpacing.lg),
-              Row(
-                children: <Widget>[
-                  const Expanded(child: Divider()),
-                  Padding(
-                    padding: const EdgeInsets.symmetric(horizontal: AppSpacing.md),
-                    child: Text(l10n.orDividerText, style: textTheme.bodySmall),
-                  ),
-                  const Expanded(child: Divider()),
-                ],
-              ),
-              const SizedBox(height: AppSpacing.lg),
-              GoogleSignInButton(
-                label: l10n.continueWithGoogle,
-                isLoading: socialState.isLoading,
-                onPressed: anyLoading
-                    ? null
-                    : () => _handleSocialSignIn(
-                          ref.read(socialAuthControllerProvider.notifier).signInWithGoogle,
-                        ),
-              ),
-              if (_isApplePlatform) ...<Widget>[
-                const SizedBox(height: AppSpacing.md),
-                AppleSignInButton(
-                  label: l10n.continueWithApple,
-                  isLoading: socialState.isLoading,
-                  onPressed: anyLoading
-                      ? null
-                      : () => _handleSocialSignIn(
-                            ref.read(socialAuthControllerProvider.notifier).signInWithApple,
-                          ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  /// Contenido de formulario EXACTO que `RegisterPage` ya tenía antes de
+  /// esta tarea — mismo texto/orden/lógica, sin ningún cambio — extraído a
+  /// un método propio para que `_buildLegacyShell` (phone landscape) y
+  /// `_buildDesktopWeb` (nuevo, esta ronda) lo compartan sin duplicar el
+  /// árbol de widgets. Ningún archivo compartido del sistema de diseño se
+  /// tocó para esto — es un refactor puramente interno de este archivo.
+  Widget _buildStandardFormContent(
+    BuildContext themeContext,
+    AppLocalizations l10n,
+    AsyncValue<void> registerState,
+    AsyncValue<void> socialState,
+    bool anyLoading,
+  ) {
+    final TextTheme textTheme = Theme.of(themeContext).textTheme;
+    return Form(
+      key: _formKey,
+      autovalidateMode: AutovalidateMode.onUserInteraction,
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: <Widget>[
+          Text(l10n.registerTitle, style: textTheme.headlineMedium),
+          const SizedBox(height: AppSpacing.sm),
+          Text(
+            l10n.registerSubtitle,
+            style: textTheme.bodyMedium?.copyWith(color: DarkTech.textSecondary),
+          ),
+          const SizedBox(height: AppSpacing.xl),
+          TextFormField(
+            controller: _nameController,
+            textInputAction: TextInputAction.next,
+            autofillHints: const <String>[AutofillHints.name],
+            decoration: InputDecoration(labelText: l10n.nameLabel),
+            validator: (String? value) => Validators.name(value).message(l10n),
+          ),
+          const SizedBox(height: AppSpacing.base),
+          TextFormField(
+            controller: _emailController,
+            keyboardType: TextInputType.emailAddress,
+            textInputAction: TextInputAction.next,
+            autofillHints: const <String>[AutofillHints.email],
+            decoration: InputDecoration(labelText: l10n.emailLabel),
+            validator: (String? value) => Validators.email(value).message(l10n),
+          ),
+          const SizedBox(height: AppSpacing.base),
+          TextFormField(
+            controller: _passwordController,
+            obscureText: _obscurePassword,
+            textInputAction: TextInputAction.next,
+            autofillHints: const <String>[AutofillHints.newPassword],
+            decoration: InputDecoration(
+              labelText: l10n.passwordLabel,
+              suffixIcon: Semantics(
+                key: const Key('register-password-visibility-semantics'),
+                label: _obscurePassword ? l10n.showPasswordAction : l10n.hidePasswordAction,
+                toggled: !_obscurePassword,
+                child: IconButton(
+                  tooltip: _obscurePassword ? l10n.showPasswordAction : l10n.hidePasswordAction,
+                  icon: Icon(_obscurePassword ? Icons.visibility_outlined : Icons.visibility_off_outlined),
+                  onPressed: () => setState(() => _obscurePassword = !_obscurePassword),
                 ),
-              ],
-              const SizedBox(height: AppSpacing.lg),
-              Wrap(
-                alignment: WrapAlignment.center,
-                crossAxisAlignment: WrapCrossAlignment.center,
-                children: <Widget>[
-                  Text(l10n.hasAccountText),
-                  TextButton(
-                    onPressed: () => context.go(AppRoute.login),
-                    child: Text(l10n.loginLink),
-                  ),
-                ],
+              ),
+            ),
+            validator: (String? value) => Validators.password(value).message(l10n),
+          ),
+          const SizedBox(height: AppSpacing.base),
+          TextFormField(
+            controller: _confirmPasswordController,
+            obscureText: _obscurePassword,
+            textInputAction: TextInputAction.done,
+            decoration: InputDecoration(labelText: l10n.confirmPasswordLabel),
+            onFieldSubmitted: (_) => _handleSubmit(),
+            validator: (String? value) => Validators.confirmPassword(
+              _passwordController.text,
+              value,
+            ).message(l10n),
+          ),
+          const SizedBox(height: AppSpacing.lg),
+          PrimaryGradientButton(
+            label: l10n.registerButton,
+            isLoading: registerState.isLoading,
+            onPressed: anyLoading ? null : _handleSubmit,
+          ),
+          const SizedBox(height: AppSpacing.md),
+          Text(
+            l10n.termsAcceptText,
+            textAlign: TextAlign.center,
+            style: textTheme.bodySmall?.copyWith(color: DarkTech.textSecondary),
+          ),
+          const SizedBox(height: AppSpacing.lg),
+          Row(
+            children: <Widget>[
+              const Expanded(child: Divider()),
+              Padding(
+                padding: const EdgeInsets.symmetric(horizontal: AppSpacing.md),
+                child: Text(l10n.orDividerText, style: textTheme.bodySmall),
+              ),
+              const Expanded(child: Divider()),
+            ],
+          ),
+          const SizedBox(height: AppSpacing.lg),
+          GoogleSignInButton(
+            label: l10n.continueWithGoogle,
+            isLoading: socialState.isLoading,
+            onPressed: anyLoading
+                ? null
+                : () => _handleSocialSignIn(
+                      ref.read(socialAuthControllerProvider.notifier).signInWithGoogle,
+                    ),
+          ),
+          if (_isApplePlatform) ...<Widget>[
+            const SizedBox(height: AppSpacing.md),
+            AppleSignInButton(
+              label: l10n.continueWithApple,
+              isLoading: socialState.isLoading,
+              onPressed: anyLoading
+                  ? null
+                  : () => _handleSocialSignIn(
+                        ref.read(socialAuthControllerProvider.notifier).signInWithApple,
+                      ),
+            ),
+          ],
+          const SizedBox(height: AppSpacing.lg),
+          Wrap(
+            alignment: WrapAlignment.center,
+            crossAxisAlignment: WrapCrossAlignment.center,
+            children: <Widget>[
+              Text(l10n.hasAccountText),
+              TextButton(
+                onPressed: () => context.go(AppRoute.login),
+                child: Text(l10n.loginLink),
               ),
             ],
           ),
-        );
-      },
+        ],
+      ),
     );
   }
 
@@ -570,6 +686,29 @@ class _RegisterHeroImage extends StatelessWidget {
     return Image.asset(
       'assets/images/korixa_login_hero_guatape_mobile.png',
       fit: BoxFit.cover,
+      alignment: Alignment.center,
+    );
+  }
+}
+
+/// KORIXA-SCREEN03-WEB-FINAL-BACKGROUND-ASSET-INTEGRATION-20260913: hero
+/// WEB definitivo de Register (Santuario de Las Lajas) — asset aprobado,
+/// copiado byte a byte, `korixa_register_hero_laslajas_web.png`, sin
+/// recorte/regenerar/filtro/reencuadre. Deliberadamente `BoxFit.contain`
+/// (NO `.cover`): el encargo exige mostrar la foto COMPLETA sin importar
+/// que el aspect ratio del viewport no coincida — el espacio residual
+/// (letterbox) lo resuelve el `DecoratedBox` sólido detrás en
+/// `_buildDesktopWeb`, la imagen en sí nunca se recorta ni se estira para
+/// "llenar" el viewport. Sin `Transform.scale`/`Matrix4`/ningún
+/// mecanismo de zoom.
+class _RegisterWebHeroImage extends StatelessWidget {
+  const _RegisterWebHeroImage();
+
+  @override
+  Widget build(BuildContext context) {
+    return Image.asset(
+      'assets/images/korixa_register_hero_laslajas_web.png',
+      fit: BoxFit.contain,
       alignment: Alignment.center,
     );
   }
