@@ -6,8 +6,10 @@ import 'package:go_router/go_router.dart';
 import '../../../../app/router/app_router.dart';
 import '../../../../app/theme/app_colors.dart';
 import '../../../../app/theme/app_spacing.dart';
+import '../../../../app/theme/app_theme.dart';
 import '../../../../core/design_system/dark_tech_buttons.dart';
 import '../../../../core/error/failures.dart';
+import '../../../../core/responsive/korixa_viewport.dart';
 import '../../../../core/utils/validation_l10n.dart';
 import '../../../../core/utils/validators.dart';
 import '../../../../l10n/generated/app_localizations.dart';
@@ -15,6 +17,14 @@ import '../providers/register_controller.dart';
 import '../providers/social_auth_controller.dart';
 import '../widgets/dark_tech_auth_shell.dart';
 import '../widgets/social_sign_in_buttons.dart';
+
+// KORIXA-SCREEN03-WEB-CLEAN-BRANCH-REAPPLICATION-20260913: esta página
+// se bifurca en desktop-web (`_buildDesktopWeb`) vs. el comportamiento
+// original de `origin/main` (`_buildLegacyShell`, sin cambios) para
+// portrait y phone landscape. NO existe aquí ninguna rama mobile-portrait
+// dedicada — esa pertenece a otra rama (SCREEN_03 MOBILE) que a la fecha
+// de esta reaplicación seguía sin mergear a `origin/main`. Mantener esta
+// página libre de esa dependencia es intencional.
 
 class RegisterPage extends ConsumerStatefulWidget {
   const RegisterPage({super.key});
@@ -98,14 +108,127 @@ class _RegisterPageState extends ConsumerState<RegisterPage> {
 
     final bool anyLoading = registerState.isLoading || socialState.isLoading;
 
+    return LayoutBuilder(
+      builder: (BuildContext context, BoxConstraints constraints) {
+        final KorixaViewportInfo viewport = KorixaViewportInfo(
+          width: constraints.maxWidth,
+          height: constraints.maxHeight,
+        );
+        if (viewport.canFitWideLayout()) {
+          return _buildDesktopWeb(context, l10n, registerState, socialState, anyLoading);
+        }
+        return _buildLegacyShell(context, l10n, registerState, socialState, anyLoading);
+      },
+    );
+  }
+
+  /// Comportamiento ORIGINAL de `origin/main`, sin cambios: portrait y
+  /// phone landscape (todo lo que no cumpla `canFitWideLayout()`) siguen
+  /// pasando exactamente por aquí.
+  Widget _buildLegacyShell(
+    BuildContext context,
+    AppLocalizations l10n,
+    AsyncValue<void> registerState,
+    AsyncValue<void> socialState,
+    bool anyLoading,
+  ) {
     return DarkTechAuthShell(
       maxWidth: 420,
       appBar: AppBar(),
       // KORIXA-UI-SCREEN-BATCH-01A: `themeContext`, no el `context` de
       // `build` — ver el docblock de `DarkTechAuthShell`.
-      builder: (BuildContext themeContext) {
-        final TextTheme textTheme = Theme.of(themeContext).textTheme;
-        return Form(
+      builder: (BuildContext themeContext) => _buildStandardFormContent(
+        themeContext,
+        l10n,
+        registerState,
+        socialState,
+        anyLoading,
+      ),
+    );
+  }
+
+  /// SCREEN_03 WEB (desktop). Fondo con la imagen de fondo completa
+  /// (Santuario de Las Lajas) sin recortar (`BoxFit.contain`), más un
+  /// panel translúcido detrás del formulario para legibilidad — ajuste
+  /// mínimo, no modifica el asset. Autocontenido: no depende de ninguna
+  /// estructura mobile-portrait.
+  Widget _buildDesktopWeb(
+    BuildContext context,
+    AppLocalizations l10n,
+    AsyncValue<void> registerState,
+    AsyncValue<void> socialState,
+    bool anyLoading,
+  ) {
+    return Theme(
+      data: AppTheme.darkTech,
+      child: Scaffold(
+        backgroundColor: DarkTech.background,
+        body: Stack(
+          key: const Key('register-desktop-layout'),
+          fit: StackFit.expand,
+          children: <Widget>[
+            const Positioned.fill(
+              child: DecoratedBox(decoration: BoxDecoration(color: DarkTech.background)),
+            ),
+            const Positioned.fill(
+              key: Key('register-desktop-hero-image'),
+              child: ExcludeSemantics(child: _RegisterWebHeroImage()),
+            ),
+            SafeArea(
+              // KORIXA-UI-SCREEN-BATCH-01A: `themeContext` desde un
+              // `Builder` insertado DEBAJO del `Theme` de arriba — evita
+              // que `Theme.of(context)` resuelva el tema ambiente del
+              // `MaterialApp` en lugar de `AppTheme.darkTech`.
+              child: Builder(
+                builder: (BuildContext themeContext) => Align(
+                  alignment: Alignment.center,
+                  child: Padding(
+                    padding: const EdgeInsets.all(AppSpacing.xxxl),
+                    child: ConstrainedBox(
+                      key: const Key('register-desktop-content-max-width'),
+                      constraints: const BoxConstraints(maxWidth: 420),
+                      child: DecoratedBox(
+                        key: const Key('register-desktop-legibility-panel'),
+                        decoration: BoxDecoration(
+                          color: DarkTech.surface.withValues(alpha: 0.82),
+                          borderRadius: BorderRadius.circular(24),
+                        ),
+                        child: Padding(
+                          padding: const EdgeInsets.all(AppSpacing.xl),
+                          child: SingleChildScrollView(
+                            child: _buildStandardFormContent(
+                              themeContext,
+                              l10n,
+                              registerState,
+                              socialState,
+                              anyLoading,
+                            ),
+                          ),
+                        ),
+                      ),
+                    ),
+                  ),
+                ),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  /// Contenido del formulario, idéntico en orden/lógica al original de
+  /// `origin/main` — extraído a un método para poder reusarlo desde
+  /// `_buildLegacyShell` y `_buildDesktopWeb` sin duplicar código.
+  Widget _buildStandardFormContent(
+    BuildContext themeContext,
+    AppLocalizations l10n,
+    AsyncValue<void> registerState,
+    AsyncValue<void> socialState,
+    bool anyLoading,
+  ) {
+    final TextTheme textTheme = Theme.of(themeContext).textTheme;
+    return Form(
           key: _formKey,
           autovalidateMode: AutovalidateMode.onUserInteraction,
           child: Column(
@@ -227,7 +350,20 @@ class _RegisterPageState extends ConsumerState<RegisterPage> {
             ],
           ),
         );
-      },
+  }
+}
+
+/// SCREEN_03 WEB: imagen de fondo completa, sin recorte (`BoxFit.contain`)
+/// — asset inmutable, ver `assets/images/korixa_register_hero_laslajas_web.png`.
+class _RegisterWebHeroImage extends StatelessWidget {
+  const _RegisterWebHeroImage();
+
+  @override
+  Widget build(BuildContext context) {
+    return Image.asset(
+      'assets/images/korixa_register_hero_laslajas_web.png',
+      fit: BoxFit.contain,
+      alignment: Alignment.center,
     );
   }
 }

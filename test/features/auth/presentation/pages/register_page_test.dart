@@ -29,7 +29,18 @@ void main() {
         signInWithAppleUseCaseProvider.overrideWithValue(SignInWithAppleUseCase(repo)),
       ];
 
-  Future<void> pumpRegisterPage(WidgetTester tester, MockAuthRepository repo) async {
+  // KORIXA-SCREEN03-WEB-CLEAN-BRANCH-REAPPLICATION-20260913: `surfaceSize`
+  // opcional — `null` preserva el tamaño de superficie por defecto del
+  // binding de test (800x600), que `KorixaViewportInfo.canFitWideLayout()`
+  // clasifica como ancho y por lo tanto ejercita `_buildDesktopWeb`. Los
+  // tests WEB_* de abajo pasan tamaños desktop explícitos; el test de
+  // phone landscape pasa un tamaño angosto-en-alto explícito.
+  Future<void> pumpRegisterPage(WidgetTester tester, MockAuthRepository repo, {Size? surfaceSize}) async {
+    if (surfaceSize != null) {
+      tester.view.physicalSize = surfaceSize;
+      tester.view.devicePixelRatio = 1.0;
+      addTearDown(tester.view.reset);
+    }
     await tester.pumpWidget(
       authPageHarness(
         initialLocation: '/register',
@@ -103,6 +114,13 @@ void main() {
 
     await pumpRegisterPage(tester, repository);
     await fillForm(tester);
+    // KORIXA-SCREEN03-WEB-CLEAN-BRANCH-REAPPLICATION-20260913: el viewport
+    // de prueba por defecto (800x600) ejercita la composición desktop web
+    // nueva, cuyo panel de legibilidad agrega algo más de alto que el
+    // shell anterior — mismo patrón ya usado más abajo para "Inicia
+    // sesión"/Google.
+    await tester.ensureVisible(find.text('Registrarme'));
+    await tester.pumpAndSettle();
     await tester.tap(find.text('Registrarme'));
     await tester.pump();
 
@@ -123,6 +141,8 @@ void main() {
 
     await pumpRegisterPage(tester, repository);
     await fillForm(tester);
+    await tester.ensureVisible(find.text('Registrarme'));
+    await tester.pumpAndSettle();
     await tester.tap(find.text('Registrarme'));
     await tester.pumpAndSettle();
 
@@ -218,10 +238,171 @@ void main() {
 
     await pumpRegisterPage(tester, repository);
     await fillForm(tester);
+    await tester.ensureVisible(find.text('Registrarme'));
+    await tester.pumpAndSettle();
     await tester.tap(find.text('Registrarme'));
     await tester.pumpAndSettle();
 
     expect(find.text('Este correo ya está registrado.'), findsOneWidget);
     expect(find.text('EMAIL_VERIFICATION'), findsNothing);
+  });
+
+  // ---------------------------------------------------------------------
+  // KORIXA-SCREEN03-WEB-CLEAN-BRANCH-REAPPLICATION-20260913: esta rama NO
+  // contiene la composición mobile-portrait (pertenece a otra rama, sin
+  // mergear a `origin/main` al momento de esta reaplicación). Portrait y
+  // phone landscape siguen exactamente el comportamiento original de
+  // `origin/main` (`_buildLegacyShell`, sin cambios) — verificado
+  // explícitamente abajo. Solo desktop web (`canFitWideLayout()`) recibe
+  // el nuevo hero fotográfico (Santuario de Las Lajas) con
+  // `BoxFit.contain` — foto COMPLETA, sin crop/zoom.
+  // ---------------------------------------------------------------------
+
+  const List<Size> desktopWebSizes = <Size>[
+    Size(1280, 720),
+    Size(1366, 768),
+    Size(1440, 900),
+    Size(1536, 864),
+    Size(1920, 1080),
+    Size(2560, 1440),
+  ];
+
+  for (final Size size in desktopWebSizes) {
+    final String label = '${size.width.toInt()}x${size.height.toInt()}';
+    testWidgets('WEB_${label}_NO_OVERFLOW = PASS', (WidgetTester tester) async {
+      await pumpRegisterPage(tester, repository, surfaceSize: size);
+
+      expect(tester.takeException(), isNull, reason: 'WEB_${label}_NO_OVERFLOW: no debe haber overflow');
+      expect(
+        find.byKey(const Key('register-desktop-layout')),
+        findsOneWidget,
+        reason: 'WEB_${label}_NO_OVERFLOW: debe usar la composición desktop web nueva',
+      );
+      expect(find.text('Registrarme'), findsOneWidget, reason: 'el formulario debe seguir siendo usable');
+    });
+  }
+
+  testWidgets('WEB_HERO_IMAGE_CORRECT_ASSET_AND_FIT = PASS', (WidgetTester tester) async {
+    await pumpRegisterPage(tester, repository, surfaceSize: const Size(1440, 900));
+
+    final Iterable<Image> images = tester.widgetList<Image>(
+      find.descendant(of: find.byKey(const Key('register-desktop-hero-image')), matching: find.byType(Image)),
+    );
+    expect(images.length, 1);
+    final Image hero = images.first;
+    expect(
+      (hero.image as AssetImage).assetName,
+      'assets/images/korixa_register_hero_laslajas_web.png',
+      reason: 'WEB_HERO_IMAGE_CORRECT_ASSET_AND_FIT: debe usar el asset aprobado exacto',
+    );
+    expect(
+      hero.fit,
+      BoxFit.contain,
+      reason: 'WEB_HERO_IMAGE_CORRECT_ASSET_AND_FIT: BoxFit.contain — la foto completa siempre visible, nunca cover/crop',
+    );
+    expect(hero.fit, isNot(BoxFit.cover), reason: 'ausencia explícita de BoxFit.cover en este asset');
+    expect(hero.alignment, Alignment.center, reason: 'sin ajuste de encuadre artificial');
+  });
+
+  testWidgets('WEB_HERO_NO_TRANSFORM_SCALE_ANCESTOR = PASS', (WidgetTester tester) async {
+    // Ausencia estructural de cualquier `Transform` como ancestro directo
+    // del hero — el `find.ancestor` no encuentra ninguno, confirmando que
+    // no hay zoom artificial aplicado al asset.
+    await pumpRegisterPage(tester, repository, surfaceSize: const Size(1440, 900));
+
+    final Finder transformAncestors = find.ancestor(
+      of: find.byKey(const Key('register-desktop-hero-image')),
+      matching: find.byType(Transform),
+    );
+    expect(transformAncestors, findsNothing, reason: 'WEB_HERO_NO_TRANSFORM_SCALE_ANCESTOR: cero mecanismos de zoom');
+  });
+
+  testWidgets('WEB_PHONE_LANDSCAPE_KEEPS_LEGACY_ORIGIN_MAIN_BEHAVIOR = PASS', (WidgetTester tester) async {
+    // Landscape angosto (mismo criterio que Login phone landscape: ancho
+    // suficiente pero alto corto) — debe seguir usando exactamente
+    // `DarkTechAuthShell` (comportamiento original de `origin/main`), sin
+    // el hero nuevo ni la composición desktop.
+    await pumpRegisterPage(tester, repository, surfaceSize: const Size(932, 430));
+
+    expect(tester.takeException(), isNull);
+    expect(
+      find.byKey(const Key('register-desktop-layout')),
+      findsNothing,
+      reason: 'phone landscape NO debe usar la composición desktop nueva',
+    );
+    expect(find.text('Registrarme'), findsOneWidget);
+  });
+
+  testWidgets('PORTRAIT_KEEPS_LEGACY_ORIGIN_MAIN_BEHAVIOR = PASS', (WidgetTester tester) async {
+    // Esta rama no incluye ninguna composición mobile-portrait dedicada —
+    // portrait cae exactamente en el mismo `DarkTechAuthShell` original
+    // que phone landscape, sin cambios respecto a `origin/main`.
+    await pumpRegisterPage(tester, repository, surfaceSize: const Size(390, 844));
+
+    expect(tester.takeException(), isNull);
+    expect(
+      find.byKey(const Key('register-desktop-layout')),
+      findsNothing,
+      reason: 'portrait NO debe usar la composición desktop nueva en esta rama',
+    );
+    expect(find.text('Registrarme'), findsOneWidget);
+  });
+
+  testWidgets('WEB_DESKTOP_no envía el formulario si los campos están vacíos', (WidgetTester tester) async {
+    await pumpRegisterPage(tester, repository, surfaceSize: const Size(1440, 900));
+
+    await tester.tap(find.text('Registrarme'));
+    await tester.pumpAndSettle();
+
+    expect(find.text('Ingresa tu nombre'), findsOneWidget);
+    expect(find.text('Ingresa tu correo electrónico'), findsOneWidget);
+    verifyNever(
+      () => repository.register(
+        email: any(named: 'email'),
+        password: any(named: 'password'),
+        displayName: any(named: 'displayName'),
+      ),
+    );
+  });
+
+  testWidgets('WEB_DESKTOP_navega a EMAIL_VERIFICATION cuando el registro es exitoso', (WidgetTester tester) async {
+    when(
+      () => repository.register(
+        email: 'rider@ridepro.com',
+        password: 'securePass123',
+        displayName: 'Rider Demo',
+      ),
+    ).thenAnswer((_) async => const Right(tUser));
+
+    await pumpRegisterPage(tester, repository, surfaceSize: const Size(1440, 900));
+    await fillForm(tester);
+    await tester.tap(find.text('Registrarme'));
+    await tester.pumpAndSettle();
+
+    expect(find.text('EMAIL_VERIFICATION'), findsOneWidget);
+  });
+
+  testWidgets('WEB_DESKTOP_Google Sign-In navega a Home cuando el proveedor social tiene éxito',
+      (WidgetTester tester) async {
+    when(() => repository.signInWithGoogle()).thenAnswer((_) async => const Right(tUser));
+
+    await pumpRegisterPage(tester, repository, surfaceSize: const Size(1440, 900));
+    await tester.ensureVisible(find.byType(GoogleSignInButton));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byType(GoogleSignInButton));
+    await tester.pumpAndSettle();
+
+    expect(find.text('HOME'), findsOneWidget);
+  });
+
+  testWidgets('WEB_DESKTOP_Iniciar sesión (link) navega a Login', (WidgetTester tester) async {
+    await pumpRegisterPage(tester, repository, surfaceSize: const Size(1440, 900));
+
+    await tester.ensureVisible(find.text('Inicia sesión'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Inicia sesión'));
+    await tester.pumpAndSettle();
+
+    expect(find.text('LOGIN'), findsOneWidget);
   });
 }
