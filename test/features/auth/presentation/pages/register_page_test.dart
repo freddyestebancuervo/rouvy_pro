@@ -588,19 +588,253 @@ void main() {
     expect(find.text('Registrarme'), findsOneWidget);
   });
 
-  testWidgets('PORTRAIT_KEEPS_LEGACY_ORIGIN_MAIN_BEHAVIOR = PASS', (WidgetTester tester) async {
-    // Esta rama no incluye ninguna composición mobile-portrait dedicada —
-    // portrait cae exactamente en el mismo `DarkTechAuthShell` original
-    // que phone landscape, sin cambios respecto a `origin/main`.
+  // ---------------------------------------------------------------------
+  // KORIXA-SCREEN03-MOBILE-PORTRAIT-NO-LOGO-IMPLEMENTATION-20260914: mockup
+  // aprobado por el owner — fondo full-screen dedicado (ciclista + Santuario
+  // de Las Lajas), SIN logo, SIN card exterior. Portrait (`isPortrait`, no
+  // `canFitWideLayout()`) ya NO cae en `_buildLegacyShell` — tiene su
+  // propia composición nueva.
+  // ---------------------------------------------------------------------
+
+  const List<Size> mobilePortraitSizes = <Size>[
+    Size(360, 640),
+    Size(360, 680),
+    Size(390, 700),
+    Size(390, 844),
+    Size(412, 915),
+    Size(430, 932),
+  ];
+
+  for (final Size size in mobilePortraitSizes) {
+    final String label = '${size.width.toInt()}x${size.height.toInt()}';
+    testWidgets('MOBILE_${label}_NO_OVERFLOW = PASS', (WidgetTester tester) async {
+      await pumpRegisterPage(tester, repository, surfaceSize: size);
+
+      expect(tester.takeException(), isNull, reason: 'MOBILE_${label}_NO_OVERFLOW: no debe haber overflow');
+      expect(
+        find.byKey(const Key('register-mobile-layout')),
+        findsOneWidget,
+        reason: 'MOBILE_${label}_NO_OVERFLOW: debe usar la composición mobile portrait nueva',
+      );
+      expect(find.text('Registrarme'), findsOneWidget, reason: 'CTA visible');
+      expect(find.text('Continuar con Google'), findsOneWidget, reason: 'Google visible');
+      expect(find.text('¿Ya tienes cuenta?'), findsOneWidget, reason: 'footer visible');
+      expect(find.text('Crea tu cuenta'), findsOneWidget, reason: 'título visible');
+    });
+  }
+
+  testWidgets('MOBILE_PORTRAIT_USES_NEW_APPROVED_LAYOUT = PASS', (WidgetTester tester) async {
     await pumpRegisterPage(tester, repository, surfaceSize: const Size(390, 844));
 
-    expect(tester.takeException(), isNull);
+    expect(find.byKey(const Key('register-mobile-layout')), findsOneWidget);
+    expect(find.byKey(const Key('register-mobile-hero-image')), findsOneWidget);
     expect(
       find.byKey(const Key('register-desktop-layout')),
       findsNothing,
-      reason: 'portrait NO debe usar la composición desktop nueva en esta rama',
+      reason: 'mobile portrait NO debe usar la composición desktop',
     );
-    expect(find.text('Registrarme'), findsOneWidget);
+  });
+
+  testWidgets('MOBILE_PORTRAIT_NO_LOGO = PASS', (WidgetTester tester) async {
+    // Requisito explícito del owner: NO logo en mobile portrait.
+    await pumpRegisterPage(tester, repository, surfaceSize: const Size(390, 844));
+
+    expect(
+      find.byKey(const Key('register-desktop-logo')),
+      findsNothing,
+      reason: 'MOBILE_PORTRAIT_NO_LOGO: no debe existir ningún logo en la composición mobile',
+    );
+    expect(
+      find.byWidgetPredicate(
+        (Widget widget) =>
+            widget is Image && (widget.image is AssetImage) && (widget.image as AssetImage).assetName.contains('korixa_logo'),
+      ),
+      findsNothing,
+      reason: 'MOBILE_PORTRAIT_NO_LOGO: ninguna imagen con el logo de Korixa debe estar presente (el ícono de Google sí es esperado)',
+    );
+  });
+
+  testWidgets('MOBILE_PORTRAIT_NO_FAKE_STATUS_BAR = PASS', (WidgetTester tester) async {
+    // El mockup muestra una barra de estado tipo iPhone (9:41, señal,
+    // batería) — es solo referencia visual, NUNCA debe implementarse como
+    // UI real: no debe existir ningún texto "9:41" hardcodeado en el árbol.
+    await pumpRegisterPage(tester, repository, surfaceSize: const Size(390, 844));
+
+    expect(find.text('9:41'), findsNothing, reason: 'MOBILE_PORTRAIT_NO_FAKE_STATUS_BAR: ninguna barra de estado falsa');
+    expect(tester.widget<Scaffold>(find.byType(Scaffold).first).body, isNotNull);
+    expect(find.byType(SafeArea), findsWidgets, reason: 'debe usar SafeArea real, no una barra dibujada a mano');
+  });
+
+  testWidgets('MOBILE_PORTRAIT_HERO_IMAGE_CORRECT = PASS', (WidgetTester tester) async {
+    await pumpRegisterPage(tester, repository, surfaceSize: const Size(390, 844));
+
+    final Image hero = tester.widget<Image>(
+      find.descendant(of: find.byKey(const Key('register-mobile-hero-image')), matching: find.byType(Image)),
+    );
+    expect(
+      (hero.image as AssetImage).assetName,
+      'assets/images/korixa_register_hero_mobile.png',
+      reason: 'MOBILE_PORTRAIT_HERO_IMAGE_CORRECT: asset dedicado de mobile, distinto del de escritorio',
+    );
+    expect(hero.fit, BoxFit.cover);
+  });
+
+  testWidgets('MOBILE_PORTRAIT_NO_OUTER_CARD = PASS', (WidgetTester tester) async {
+    await pumpRegisterPage(tester, repository, surfaceSize: const Size(390, 844));
+
+    final Finder decoratedAncestors = find.ancestor(
+      of: find.byType(TextFormField).first,
+      matching: find.byType(DecoratedBox),
+    );
+    final Iterable<DecoratedBox> opaqueDecoratedAncestors = tester
+        .widgetList<DecoratedBox>(decoratedAncestors)
+        .where((DecoratedBox box) {
+      final Decoration decoration = box.decoration;
+      if (decoration is! BoxDecoration) return false;
+      final Color? color = decoration.color;
+      return color != null && color.a > 0.15;
+    });
+    expect(
+      opaqueDecoratedAncestors,
+      isEmpty,
+      reason: 'MOBILE_PORTRAIT_NO_OUTER_CARD: el formulario no debe vivir dentro de ninguna card/panel opaco',
+    );
+  });
+
+  testWidgets('MOBILE_PORTRAIT_ALL_FIELDS_PRESENT = PASS', (WidgetTester tester) async {
+    await pumpRegisterPage(tester, repository, surfaceSize: const Size(390, 844));
+
+    expect(find.byType(TextFormField), findsNWidgets(4));
+    expect(find.text('Nombre'), findsOneWidget);
+    expect(find.text('Correo electrónico'), findsOneWidget);
+    expect(find.text('Contraseña'), findsOneWidget);
+    expect(find.text('Confirmar contraseña'), findsOneWidget);
+    expect(find.text('Empieza a entrenar en minutos'), findsOneWidget);
+  });
+
+  testWidgets('MOBILE_PORTRAIT_no envía el formulario si los campos están vacíos', (WidgetTester tester) async {
+    await pumpRegisterPage(tester, repository, surfaceSize: const Size(390, 844));
+
+    await tester.tap(find.text('Registrarme'));
+    await tester.pumpAndSettle();
+
+    expect(find.text('Ingresa tu nombre'), findsOneWidget);
+    expect(find.text('Ingresa tu correo electrónico'), findsOneWidget);
+    verifyNever(
+      () => repository.register(
+        email: any(named: 'email'),
+        password: any(named: 'password'),
+        displayName: any(named: 'displayName'),
+      ),
+    );
+  });
+
+  testWidgets('MOBILE_PORTRAIT_muestra un spinner mientras el registro está en curso', (WidgetTester tester) async {
+    when(
+      () => repository.register(
+        email: any(named: 'email'),
+        password: any(named: 'password'),
+        displayName: any(named: 'displayName'),
+      ),
+    ).thenAnswer((_) async {
+      await Future<void>.delayed(const Duration(milliseconds: 200));
+      return const Right(tUser);
+    });
+
+    await pumpRegisterPage(tester, repository, surfaceSize: const Size(390, 844));
+    await fillForm(tester);
+    await tester.tap(find.text('Registrarme'));
+    await tester.pump();
+
+    expect(find.byType(CircularProgressIndicator), findsOneWidget);
+
+    await tester.pumpAndSettle();
+  });
+
+  testWidgets('MOBILE_PORTRAIT_navega a EMAIL_VERIFICATION cuando el registro es exitoso',
+      (WidgetTester tester) async {
+    when(
+      () => repository.register(
+        email: 'rider@ridepro.com',
+        password: 'securePass123',
+        displayName: 'Rider Demo',
+      ),
+    ).thenAnswer((_) async => const Right(tUser));
+
+    await pumpRegisterPage(tester, repository, surfaceSize: const Size(390, 844));
+    await fillForm(tester);
+    await tester.tap(find.text('Registrarme'));
+    await tester.pumpAndSettle();
+
+    expect(find.text('EMAIL_VERIFICATION'), findsOneWidget);
+  });
+
+  testWidgets('MOBILE_PORTRAIT_toggle de visibilidad de contraseña mantiene su semántica',
+      (WidgetTester tester) async {
+    final SemanticsHandle handle = tester.ensureSemantics();
+
+    await pumpRegisterPage(tester, repository, surfaceSize: const Size(390, 844));
+
+    final Finder passwordEditable =
+        find.descendant(of: find.byType(TextFormField).at(2), matching: find.byType(EditableText));
+    expect(tester.widget<EditableText>(passwordEditable).obscureText, isTrue);
+
+    const Key toggleKey = Key('register-password-visibility-semantics');
+    // ignore: deprecated_member_use
+    expect(tester.getSemantics(find.byKey(toggleKey)).hasFlag(SemanticsFlag.isToggled), isFalse);
+
+    await tester.tap(find.byType(IconButton));
+    await tester.pumpAndSettle();
+
+    expect(tester.widget<EditableText>(passwordEditable).obscureText, isFalse);
+    // ignore: deprecated_member_use
+    expect(tester.getSemantics(find.byKey(toggleKey)).hasFlag(SemanticsFlag.isToggled), isTrue);
+
+    handle.dispose();
+  });
+
+  testWidgets('MOBILE_PORTRAIT_Iniciar sesión (link) navega a Login', (WidgetTester tester) async {
+    await pumpRegisterPage(tester, repository, surfaceSize: const Size(390, 844));
+
+    await tester.ensureVisible(find.text('Inicia sesión'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Inicia sesión'));
+    await tester.pumpAndSettle();
+
+    expect(find.text('LOGIN'), findsOneWidget);
+  });
+
+  testWidgets('MOBILE_PORTRAIT_Google Sign-In navega a Home cuando el proveedor social tiene éxito',
+      (WidgetTester tester) async {
+    when(() => repository.signInWithGoogle()).thenAnswer((_) async => const Right(tUser));
+
+    await pumpRegisterPage(tester, repository, surfaceSize: const Size(390, 844));
+    await tester.ensureVisible(find.byType(GoogleSignInButton));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byType(GoogleSignInButton));
+    await tester.pumpAndSettle();
+
+    expect(find.text('HOME'), findsOneWidget);
+  });
+
+  testWidgets('MOBILE_PORTRAIT_muestra un SnackBar con el mensaje de error cuando el registro falla',
+      (WidgetTester tester) async {
+    const AuthFailure failure = AuthFailure('Este correo ya está registrado.');
+    when(
+      () => repository.register(
+        email: any(named: 'email'),
+        password: any(named: 'password'),
+        displayName: any(named: 'displayName'),
+      ),
+    ).thenAnswer((_) async => const Left(failure));
+
+    await pumpRegisterPage(tester, repository, surfaceSize: const Size(390, 844));
+    await fillForm(tester);
+    await tester.tap(find.text('Registrarme'));
+    await tester.pumpAndSettle();
+
+    expect(find.text('Este correo ya está registrado.'), findsOneWidget);
+    expect(find.text('EMAIL_VERIFICATION'), findsNothing);
   });
 
   testWidgets('WEB_DESKTOP_no envía el formulario si los campos están vacíos', (WidgetTester tester) async {

@@ -5,6 +5,7 @@ import 'package:go_router/go_router.dart';
 
 import '../../../../app/router/app_router.dart';
 import '../../../../app/theme/app_colors.dart';
+import '../../../../app/theme/app_gradients.dart';
 import '../../../../app/theme/app_spacing.dart';
 import '../../../../app/theme/app_theme.dart';
 import '../../../../core/design_system/dark_tech_buttons.dart';
@@ -116,6 +117,13 @@ class _RegisterPageState extends ConsumerState<RegisterPage> {
         );
         if (viewport.canFitWideLayout()) {
           return _buildDesktopWeb(context, l10n, registerState, socialState, anyLoading);
+        }
+        // KORIXA-SCREEN03-MOBILE-PORTRAIT-NO-LOGO-IMPLEMENTATION-20260914:
+        // nueva rama, solo para portrait — phone landscape/tablet angosto
+        // (`canFitWideLayout() == false && isPortrait == false`) sigue
+        // exactamente por `_buildLegacyShell`, sin cambios.
+        if (viewport.isPortrait) {
+          return _buildMobilePortrait(context, l10n, registerState, socialState, anyLoading);
         }
         return _buildLegacyShell(context, l10n, registerState, socialState, anyLoading);
       },
@@ -242,6 +250,259 @@ class _RegisterPageState extends ConsumerState<RegisterPage> {
             ),
           ],
         ),
+      ),
+    );
+  }
+
+  /// SCREEN_03 MOBILE PORTRAIT — KORIXA-SCREEN03-MOBILE-PORTRAIT-NO-LOGO-
+  /// IMPLEMENTATION-20260914: mockup aprobado por el owner. Fondo
+  /// full-screen con el asset dedicado de mobile (ciclista + Santuario de
+  /// Las Lajas, encuadre vertical — distinto archivo del hero de
+  /// escritorio, no un recorte automático de este) + `AppGradients.
+  /// imageScrimBottom` (mismo scrim compartido ya usado en otras
+  /// pantallas emocionales de la app, NO inventado aquí) para legibilidad
+  /// — SIN logo, SIN card/panel exterior envolviendo el formulario. Cada
+  /// campo conserva su propio fondo oscuro individual (heredado del tema
+  /// compartido `AppTheme.darkTech.inputDecorationTheme`), no hay ningún
+  /// `DecoratedBox`/`Container` opaco de por medio. `SafeArea` maneja el
+  /// notch/status bar real del dispositivo — no se dibuja ninguna barra
+  /// de estado falsa (esa franja en el mockup es solo referencia visual
+  /// del diseño, no parte de esta implementación).
+  Widget _buildMobilePortrait(
+    BuildContext context,
+    AppLocalizations l10n,
+    AsyncValue<void> registerState,
+    AsyncValue<void> socialState,
+    bool anyLoading,
+  ) {
+    return Theme(
+      data: AppTheme.darkTech,
+      child: Scaffold(
+        backgroundColor: DarkTech.background,
+        body: Stack(
+          key: const Key('register-mobile-layout'),
+          fit: StackFit.expand,
+          children: <Widget>[
+            const Positioned.fill(
+              key: Key('register-mobile-hero-image'),
+              child: ExcludeSemantics(child: _RegisterMobileHeroImage()),
+            ),
+            const Positioned.fill(
+              key: Key('register-mobile-hero-scrim'),
+              child: ExcludeSemantics(
+                child: DecoratedBox(decoration: BoxDecoration(gradient: AppGradients.imageScrimBottom)),
+              ),
+            ),
+            SafeArea(
+              // KORIXA-UI-SCREEN-BATCH-01A: `themeContext`, no el `context`
+              // de `build` — mismo motivo que en `_buildDesktopWeb`.
+              child: Builder(
+                builder: (BuildContext themeContext) => Padding(
+                  padding: const EdgeInsets.fromLTRB(AppSpacing.xl, AppSpacing.lg, AppSpacing.xl, AppSpacing.lg),
+                  // Scroll seguro: si el contenido no cabe en pantallas
+                  // bajas, se desplaza — nunca se achican campos/botones
+                  // silenciosamente para forzar que quepan.
+                  child: LayoutBuilder(
+                    builder: (BuildContext context, BoxConstraints constraints) => SingleChildScrollView(
+                      child: ConstrainedBox(
+                        constraints: BoxConstraints(minHeight: constraints.maxHeight),
+                        child: Column(
+                          mainAxisAlignment: MainAxisAlignment.end,
+                          crossAxisAlignment: CrossAxisAlignment.stretch,
+                          children: <Widget>[
+                            _buildMobileFormContent(
+                              themeContext,
+                              l10n,
+                              registerState,
+                              socialState,
+                              anyLoading,
+                            ),
+                          ],
+                        ),
+                      ),
+                    ),
+                  ),
+                ),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  /// Contenido del formulario para SCREEN_03 MOBILE PORTRAIT — mismos
+  /// campos/lógica/orden que el resto de la pantalla, con tratamiento
+  /// visual propio del mockup aprobado: título/subtítulo centrados,
+  /// íconos a la izquierda dentro de cada campo, sombra de legibilidad
+  /// (el formulario flota sobre la foto, sin card detrás).
+  Widget _buildMobileFormContent(
+    BuildContext themeContext,
+    AppLocalizations l10n,
+    AsyncValue<void> registerState,
+    AsyncValue<void> socialState,
+    bool anyLoading,
+  ) {
+    final TextTheme textTheme = Theme.of(themeContext).textTheme;
+    final List<Shadow> legibilityShadow = <Shadow>[
+      Shadow(color: Colors.black.withValues(alpha: 0.65), blurRadius: 10),
+    ];
+
+    return Form(
+      key: _formKey,
+      autovalidateMode: AutovalidateMode.onUserInteraction,
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: <Widget>[
+          Text(
+            l10n.registerTitle,
+            key: const Key('register-title'),
+            textAlign: TextAlign.center,
+            style: textTheme.headlineMedium?.copyWith(
+              fontWeight: FontWeight.w800,
+              color: DarkTech.textPrimary,
+              shadows: legibilityShadow,
+            ),
+          ),
+          const SizedBox(height: AppSpacing.sm),
+          Text(
+            l10n.registerSubtitle,
+            key: const Key('register-subtitle'),
+            textAlign: TextAlign.center,
+            style: textTheme.bodyLarge?.copyWith(
+              color: DarkTech.textSecondary,
+              shadows: legibilityShadow,
+            ),
+          ),
+          const SizedBox(height: AppSpacing.xl),
+          TextFormField(
+            controller: _nameController,
+            textInputAction: TextInputAction.next,
+            autofillHints: const <String>[AutofillHints.name],
+            decoration: InputDecoration(
+              labelText: l10n.nameLabel,
+              prefixIcon: const Icon(Icons.person_outline),
+            ),
+            validator: (String? value) => Validators.name(value).message(l10n),
+          ),
+          const SizedBox(height: AppSpacing.base),
+          TextFormField(
+            controller: _emailController,
+            keyboardType: TextInputType.emailAddress,
+            textInputAction: TextInputAction.next,
+            autofillHints: const <String>[AutofillHints.email],
+            decoration: InputDecoration(
+              labelText: l10n.emailLabel,
+              prefixIcon: const Icon(Icons.mail_outline),
+            ),
+            validator: (String? value) => Validators.email(value).message(l10n),
+          ),
+          const SizedBox(height: AppSpacing.base),
+          TextFormField(
+            controller: _passwordController,
+            obscureText: _obscurePassword,
+            textInputAction: TextInputAction.next,
+            autofillHints: const <String>[AutofillHints.newPassword],
+            decoration: InputDecoration(
+              labelText: l10n.passwordLabel,
+              prefixIcon: const Icon(Icons.lock_outline),
+              suffixIcon: Semantics(
+                key: const Key('register-password-visibility-semantics'),
+                label: _obscurePassword ? l10n.showPasswordAction : l10n.hidePasswordAction,
+                toggled: !_obscurePassword,
+                child: IconButton(
+                  tooltip: _obscurePassword ? l10n.showPasswordAction : l10n.hidePasswordAction,
+                  icon: Icon(_obscurePassword ? Icons.visibility_outlined : Icons.visibility_off_outlined),
+                  onPressed: () => setState(() => _obscurePassword = !_obscurePassword),
+                ),
+              ),
+            ),
+            validator: (String? value) => Validators.password(value).message(l10n),
+          ),
+          const SizedBox(height: AppSpacing.base),
+          TextFormField(
+            controller: _confirmPasswordController,
+            obscureText: _obscurePassword,
+            textInputAction: TextInputAction.done,
+            decoration: InputDecoration(
+              labelText: l10n.confirmPasswordLabel,
+              prefixIcon: const Icon(Icons.lock_outline),
+            ),
+            onFieldSubmitted: (_) => _handleSubmit(),
+            validator: (String? value) => Validators.confirmPassword(
+              _passwordController.text,
+              value,
+            ).message(l10n),
+          ),
+          const SizedBox(height: AppSpacing.lg),
+          PrimaryGradientButton(
+            label: l10n.registerButton,
+            isLoading: registerState.isLoading,
+            onPressed: anyLoading ? null : _handleSubmit,
+          ),
+          const SizedBox(height: AppSpacing.md),
+          Text(
+            l10n.termsAcceptText,
+            key: const Key('register-terms-text'),
+            textAlign: TextAlign.center,
+            style: textTheme.bodySmall?.copyWith(color: DarkTech.textSecondary, shadows: legibilityShadow),
+          ),
+          const SizedBox(height: AppSpacing.lg),
+          Row(
+            children: <Widget>[
+              const Expanded(child: Divider()),
+              Padding(
+                padding: const EdgeInsets.symmetric(horizontal: AppSpacing.md),
+                child: Text(l10n.orDividerText, style: textTheme.bodySmall?.copyWith(shadows: legibilityShadow)),
+              ),
+              const Expanded(child: Divider()),
+            ],
+          ),
+          const SizedBox(height: AppSpacing.lg),
+          GoogleSignInButton(
+            label: l10n.continueWithGoogle,
+            isLoading: socialState.isLoading,
+            onPressed: anyLoading
+                ? null
+                : () => _handleSocialSignIn(
+                      ref.read(socialAuthControllerProvider.notifier).signInWithGoogle,
+                    ),
+          ),
+          if (_isApplePlatform) ...<Widget>[
+            const SizedBox(height: AppSpacing.md),
+            AppleSignInButton(
+              label: l10n.continueWithApple,
+              isLoading: socialState.isLoading,
+              onPressed: anyLoading
+                  ? null
+                  : () => _handleSocialSignIn(
+                        ref.read(socialAuthControllerProvider.notifier).signInWithApple,
+                      ),
+            ),
+          ],
+          const SizedBox(height: AppSpacing.lg),
+          Wrap(
+            alignment: WrapAlignment.center,
+            crossAxisAlignment: WrapCrossAlignment.center,
+            children: <Widget>[
+              Text(
+                l10n.hasAccountText,
+                style: textTheme.bodyMedium?.copyWith(color: DarkTech.textSecondary, shadows: legibilityShadow),
+              ),
+              TextButton(
+                onPressed: () => context.go(AppRoute.login),
+                // Sin `color` explícito: el acento cyan/azul de marca
+                // (`DarkTech.interactiveText`, vía `TextButtonThemeData`)
+                // sigue aplicándose solo — únicamente se agrega sombra
+                // para legibilidad sobre la foto.
+                child: Text(
+                  l10n.loginLink,
+                  style: TextStyle(fontWeight: FontWeight.w700, shadows: legibilityShadow),
+                ),
+              ),
+            ],
+          ),
+        ],
       ),
     );
   }
@@ -681,6 +942,31 @@ class _RegisterHeroContentScrim extends StatelessWidget {
           stops: const <double>[0.0, 0.28, 0.55],
         ),
       ),
+    );
+  }
+}
+
+/// SCREEN_03 MOBILE PORTRAIT — KORIXA-SCREEN03-MOBILE-PORTRAIT-NO-LOGO-
+/// IMPLEMENTATION-20260914: asset DEDICADO de encuadre vertical (937×1678)
+/// — no es un recorte automático del hero de escritorio
+/// (`korixa_register_hero_desktop.png`, 1672×941, 16:9): un `BoxFit.cover`
+/// de esa foto panorámica sobre un viewport móvil angosto solo dejaría
+/// visible una franja de ~26% de su ancho, mostrando la ciclista O el
+/// Santuario, nunca ambos — el owner aprobó un mockup que muestra los dos
+/// juntos, por lo que se generó/copió un archivo dedicado para este
+/// encuadre. `BoxFit.cover` + `Alignment.center`: el aspect ratio del
+/// asset (≈0.558) ya es muy cercano al de los 6 tamaños de validación
+/// requeridos (0.45–0.56), así que el recorte real que introduce `cover`
+/// es mínimo en cualquiera de ellos.
+class _RegisterMobileHeroImage extends StatelessWidget {
+  const _RegisterMobileHeroImage();
+
+  @override
+  Widget build(BuildContext context) {
+    return Image.asset(
+      'assets/images/korixa_register_hero_mobile.png',
+      fit: BoxFit.cover,
+      alignment: Alignment.center,
     );
   }
 }
