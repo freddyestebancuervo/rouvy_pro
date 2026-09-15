@@ -572,18 +572,23 @@ void main() {
     expect(hero.alignment, const Alignment(0.35, 0));
   });
 
-  testWidgets('WEB_PHONE_LANDSCAPE_KEEPS_LEGACY_ORIGIN_MAIN_BEHAVIOR = PASS', (WidgetTester tester) async {
-    // Landscape angosto (mismo criterio que Login phone landscape: ancho
-    // suficiente pero alto corto) — debe seguir usando exactamente
-    // `DarkTechAuthShell` (comportamiento original de `origin/main`), sin
-    // el hero nuevo ni la composición desktop.
+  testWidgets('WEB_PHONE_LANDSCAPE_NEVER_USES_DESKTOP_COMPOSITION = PASS', (WidgetTester tester) async {
+    // KORIXA-SCREEN03-PHONE-COMPACT-LANDSCAPE-IMPLEMENTATION-20260915:
+    // este test se llamaba "...KEEPS_LEGACY_ORIGIN_MAIN_BEHAVIOR" y
+    // afirmaba (incorrectamente, a partir de esta tarea) que 932x430
+    // seguía usando `DarkTechAuthShell` — ya NO es así, ahora usa
+    // `_buildPhoneLandscape` (ver `REGISTER_PHONE_LANDSCAPE_932x430` más
+    // abajo, que sí verifica la composición nueva explícitamente por
+    // key). Se conserva este test, renombrado y con la aserción que
+    // sigue siendo válida: landscape angosto NUNCA debe caer en la
+    // composición de escritorio.
     await pumpRegisterPage(tester, repository, surfaceSize: const Size(932, 430));
 
     expect(tester.takeException(), isNull);
     expect(
       find.byKey(const Key('register-desktop-layout')),
       findsNothing,
-      reason: 'phone landscape NO debe usar la composición desktop nueva',
+      reason: 'phone landscape NO debe usar la composición desktop',
     );
     expect(find.text('Registrarme'), findsOneWidget);
   });
@@ -622,6 +627,137 @@ void main() {
       expect(find.text('Crea tu cuenta'), findsOneWidget, reason: 'título visible');
     });
   }
+
+  // ---------------------------------------------------------------------
+  // KORIXA-SCREEN03-PHONE-COMPACT-LANDSCAPE-IMPLEMENTATION-20260915:
+  // cierra la brecha identificada por KORIXA-LANDSCAPE-FIRST-ARCHITECTURE-
+  // AUDIT-20260915 — un teléfono horizontal (`isCompactLandscape`) ya no
+  // cae en `_buildLegacyShell`.
+  // ---------------------------------------------------------------------
+
+  const List<Size> phoneLandscapeSizes = <Size>[
+    Size(740, 360),
+    Size(812, 375),
+    Size(844, 390),
+    Size(915, 412),
+    Size(932, 430),
+  ];
+
+  for (final Size size in phoneLandscapeSizes) {
+    final String label = '${size.width.toInt()}x${size.height.toInt()}';
+    testWidgets('REGISTER_PHONE_LANDSCAPE_$label = PASS', (WidgetTester tester) async {
+      await pumpRegisterPage(tester, repository, surfaceSize: size);
+
+      expect(tester.takeException(), isNull, reason: 'REGISTER_PHONE_LANDSCAPE_$label: no debe haber overflow');
+      expect(
+        find.byKey(const Key('register-landscape-layout')),
+        findsOneWidget,
+        reason: 'REGISTER_PHONE_LANDSCAPE_$label: debe usar la composición phone-landscape nueva, no el shell genérico',
+      );
+      expect(find.text('Registrarme'), findsOneWidget, reason: 'CTA visible');
+      expect(find.text('Continuar con Google'), findsOneWidget, reason: 'Google visible');
+      expect(find.text('Crea tu cuenta'), findsOneWidget, reason: 'título visible');
+    });
+  }
+
+  testWidgets('REGISTER_COMPACT_LANDSCAPE_NO_OVERFLOW = PASS', (WidgetTester tester) async {
+    // textScale 1.3 — caso de accesibilidad explícito pedido por la tarea,
+    // sobre el tamaño más angosto de los 5 requeridos.
+    tester.platformDispatcher.textScaleFactorTestValue = 1.3;
+    addTearDown(tester.platformDispatcher.clearTextScaleFactorTestValue);
+
+    await pumpRegisterPage(tester, repository, surfaceSize: const Size(844, 390));
+
+    expect(
+      tester.takeException(),
+      isNull,
+      reason: 'REGISTER_COMPACT_LANDSCAPE_NO_OVERFLOW: sin overflow, incluso con textScale 1.3',
+    );
+    expect(find.byKey(const Key('register-landscape-layout')), findsOneWidget);
+  });
+
+  testWidgets('REGISTER_COMPACT_LANDSCAPE_SAFE_AREA = PASS', (WidgetTester tester) async {
+    await pumpRegisterPage(tester, repository, surfaceSize: const Size(844, 390));
+
+    expect(find.byType(SafeArea), findsWidgets, reason: 'REGISTER_COMPACT_LANDSCAPE_SAFE_AREA: debe usar SafeArea real');
+    expect(find.text('9:41'), findsNothing, reason: 'ninguna barra de estado falsa dibujada a mano');
+  });
+
+  testWidgets('REGISTER_COMPACT_LANDSCAPE_CTA_REACHABLE = PASS', (WidgetTester tester) async {
+    await pumpRegisterPage(tester, repository, surfaceSize: const Size(844, 390));
+
+    await tester.ensureVisible(find.text('Registrarme'));
+    await tester.pumpAndSettle();
+    expect(find.text('Registrarme'), findsOneWidget);
+
+    await tester.tap(find.text('Registrarme'));
+    await tester.pumpAndSettle();
+
+    // Sin llenar el formulario: debe disparar validación, no un error de
+    // hit-test — confirma que el CTA es real y tocable, no solo visible.
+    expect(find.text('Ingresa tu nombre'), findsOneWidget);
+  });
+
+  testWidgets('REGISTER_COMPACT_LANDSCAPE_ALL_FIELDS_REACHABLE = PASS', (WidgetTester tester) async {
+    await pumpRegisterPage(tester, repository, surfaceSize: const Size(844, 390));
+
+    final Finder fields = find.byType(TextFormField);
+    expect(fields, findsNWidgets(4));
+
+    for (int i = 0; i < 4; i++) {
+      await tester.ensureVisible(fields.at(i));
+      await tester.pumpAndSettle();
+      await tester.enterText(fields.at(i), 'x');
+    }
+
+    expect(tester.takeException(), isNull, reason: 'REGISTER_COMPACT_LANDSCAPE_ALL_FIELDS_REACHABLE: los 4 campos deben ser alcanzables y editables');
+  });
+
+  testWidgets('REGISTER_COMPACT_LANDSCAPE_KEYBOARD_OPEN_CTA_REACHABLE = PASS', (WidgetTester tester) async {
+    await pumpRegisterPage(tester, repository, surfaceSize: const Size(844, 390));
+
+    // Simula el teclado abierto: ~55-65% del alto disponible, coherente
+    // con el cálculo aritmético documentado en la auditoría previa
+    // (KORIXA-LANDSCAPE-FIRST-ARCHITECTURE-AUDIT-20260915, Sección 9).
+    tester.view.viewInsets = const FakeViewPadding(bottom: 230);
+    addTearDown(() => tester.view.resetViewInsets());
+    await tester.pumpAndSettle();
+
+    expect(tester.takeException(), isNull, reason: 'sin overflow con teclado simulado abierto');
+
+    // El campo enfocado debe seguir siendo alcanzable/editable.
+    final Finder nameField = find.byType(TextFormField).first;
+    await tester.ensureVisible(nameField);
+    await tester.pumpAndSettle();
+    await tester.enterText(nameField, 'Rider Demo');
+    expect(tester.takeException(), isNull);
+
+    // El CTA debe seguir siendo alcanzable vía scroll, no permanentemente
+    // oculto detrás del teclado.
+    await tester.ensureVisible(find.text('Registrarme'));
+    await tester.pumpAndSettle();
+    expect(find.text('Registrarme'), findsOneWidget, reason: 'REGISTER_COMPACT_LANDSCAPE_KEYBOARD_OPEN_CTA_REACHABLE');
+  });
+
+  testWidgets('REGISTER_PORTRAIT_UNCHANGED = PASS', (WidgetTester tester) async {
+    // Regresión: portrait sigue exactamente igual después de introducir
+    // la rama de landscape — mismo layout, mismo comportamiento.
+    await pumpRegisterPage(tester, repository, surfaceSize: const Size(390, 844));
+
+    expect(find.byKey(const Key('register-mobile-layout')), findsOneWidget);
+    expect(find.byKey(const Key('register-landscape-layout')), findsNothing);
+    expect(find.byKey(const Key('register-desktop-layout')), findsNothing);
+  });
+
+  testWidgets('REGISTER_DESKTOP_UNCHANGED = PASS', (WidgetTester tester) async {
+    // Regresión: desktop sigue exactamente igual después de introducir
+    // la rama de landscape.
+    await pumpRegisterPage(tester, repository, surfaceSize: const Size(1440, 900));
+
+    expect(find.byKey(const Key('register-desktop-layout')), findsOneWidget);
+    expect(find.byKey(const Key('register-landscape-layout')), findsNothing);
+    expect(find.byKey(const Key('register-mobile-layout')), findsNothing);
+  });
 
   testWidgets('MOBILE_PORTRAIT_USES_NEW_APPROVED_LAYOUT = PASS', (WidgetTester tester) async {
     await pumpRegisterPage(tester, repository, surfaceSize: const Size(390, 844));

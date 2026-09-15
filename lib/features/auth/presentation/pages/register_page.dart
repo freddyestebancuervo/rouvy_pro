@@ -118,13 +118,27 @@ class _RegisterPageState extends ConsumerState<RegisterPage> {
         if (viewport.canFitWideLayout()) {
           return _buildDesktopWeb(context, l10n, registerState, socialState, anyLoading);
         }
-        // KORIXA-SCREEN03-MOBILE-PORTRAIT-NO-LOGO-IMPLEMENTATION-20260914:
-        // nueva rama, solo para portrait — phone landscape/tablet angosto
-        // (`canFitWideLayout() == false && isPortrait == false`) sigue
-        // exactamente por `_buildLegacyShell`, sin cambios.
         if (viewport.isPortrait) {
           return _buildMobilePortrait(context, l10n, registerState, socialState, anyLoading);
         }
+        // KORIXA-SCREEN03-PHONE-COMPACT-LANDSCAPE-IMPLEMENTATION-20260915:
+        // cierra la brecha identificada por KORIXA-LANDSCAPE-FIRST-
+        // ARCHITECTURE-AUDIT-20260915 — un teléfono horizontal (844×390,
+        // 915×412, 932×430: `isCompactLandscape == true`) ya NO cae en
+        // `_buildLegacyShell` (el shell genérico sin foto, previo a todo
+        // el rediseño de SCREEN_03). `isCompactLandscape` es el mismo
+        // criterio que `WelcomePage`/`LoginPage` ya usan localmente
+        // (`isLandscape && !canFitWideLayout()`), ahora promovido a
+        // `KorixaViewportInfo` para no duplicarlo por tercera vez.
+        if (viewport.isCompactLandscape) {
+          return _buildPhoneLandscape(context, l10n, registerState, socialState, anyLoading);
+        }
+        // Red de seguridad teórica: `KorixaViewportInfo`'s propio test de
+        // barrido (`korixa_viewport_test.dart`) prueba que desktop/
+        // phone-landscape/portrait son exhaustivos y mutuamente
+        // excluyentes — esta rama no debería ser alcanzable nunca, pero
+        // se conserva el shell original como fallback explícito en vez
+        // de un `throw`, coherente con el resto de la app.
         return _buildLegacyShell(context, l10n, registerState, socialState, anyLoading);
       },
     );
@@ -507,15 +521,129 @@ class _RegisterPageState extends ConsumerState<RegisterPage> {
     );
   }
 
+  /// SCREEN_03 PHONE COMPACT LANDSCAPE — KORIXA-SCREEN03-PHONE-COMPACT-
+  /// LANDSCAPE-IMPLEMENTATION-20260915: cierra la brecha identificada por
+  /// la auditoría KORIXA-LANDSCAPE-FIRST-ARCHITECTURE-AUDIT-20260915 —
+  /// hasta ahora, un teléfono horizontal (844×390, 915×412, 932×430,
+  /// `isCompactLandscape == true`) caía en `_buildLegacyShell` (el shell
+  /// genérico sin foto, previo a todo el rediseño de SCREEN_03).
+  ///
+  /// Patrón arquitectónico reutilizado de `WelcomePage`/`LoginPage`
+  /// (auditadas READ-ONLY, sin modificar ninguna de las dos):
+  /// `StackFit.expand` + hero fullscreen + scrim + panel de contenido
+  /// alineado a un lado con ancho PROPORCIONAL al viewport (nunca un
+  /// número fijo de escritorio) — igual que `LoginPage._buildPhoneLandscape`
+  /// (`panelWidth = (width * 0.56).clamp(260, 380)`).
+  ///
+  /// Hero: reusa el MISMO asset ya aprobado de escritorio
+  /// (`_RegisterWebHeroImage`, `korixa_register_hero_desktop.png`, sin
+  /// modificar ni un byte) — mismo precedente que
+  /// `LoginPage._LoginHeroImage`, que también reusa su asset de
+  /// escritorio (`korixa_login_hero_guatape_web.png`) para su propio
+  /// `_buildPhoneLandscape`, solo cambiando el `alignment`. El aspect
+  /// ratio del asset (1672×941 ≈ 1.78) frente a los aspect ratios de los
+  /// viewports landscape requeridos (≈2.05–2.22) bajo `BoxFit.cover`
+  /// produce un recorte vertical calculado de ~6–10% (matemática directa:
+  /// p. ej. a 932×430, escala por ancho = 0.5575, alto escalado = 524.6,
+  /// recorte total = 94.6px ≈ 47px por lado sobre 941px de alto original)
+  /// — un recorte menor, no destructivo, así que NO se solicita un asset
+  /// nuevo (Sección 6 de la tarea: "usar únicamente un asset existente si
+  /// visualmente funciona correctamente"). El mismo `Alignment(0.35, 0)`
+  /// ya aprobado para desktop (protege a la ciclista) se mantiene sin
+  /// cambios — no hay razón para otro alignment dado que el recorte ya es
+  /// mínimo.
+  ///
+  /// Panel alineado a la IZQUIERDA (`centerLeft`), reusando el MISMO
+  /// scrim de escritorio (`_RegisterHeroContentScrim`, sin modificar) —
+  /// continuidad visual exacta con la versión WEB ya aprobada, tal como
+  /// pide la Sección 5 de la tarea ("que se perciba como la versión WEB
+  /// de Korixa"). Contenido: reusa `_buildMobileFormContent` completo
+  /// (mismos textos/orden/lógica/íconos/sombra de legibilidad ya
+  /// aprobados en mobile portrait) — sin inventar un tercer tratamiento
+  /// visual para los mismos campos.
+  ///
+  /// Teclado (Sección 7 de la tarea): NINGÚN mecanismo manual de
+  /// `FocusNode`/`ensureVisible` — innecesario. `Scaffold.
+  /// resizeToAvoidBottomInset` (default `true`, sin override en ningún
+  /// Scaffold de esta pantalla) ya reduce el alto disponible cuando el
+  /// teclado aparece, y `EditableText` internamente invoca
+  /// `Scrollable.ensureVisible` al enfocar un campo SIEMPRE que exista un
+  /// `Scrollable` ancestro — que este `SingleChildScrollView` ya provee.
+  /// Es el mecanismo mínimo correcto: agregar código manual encima sería
+  /// redundante con este comportamiento ya incorporado de Flutter.
+  Widget _buildPhoneLandscape(
+    BuildContext context,
+    AppLocalizations l10n,
+    AsyncValue<void> registerState,
+    AsyncValue<void> socialState,
+    bool anyLoading,
+  ) {
+    return Theme(
+      data: AppTheme.darkTech,
+      child: Scaffold(
+        backgroundColor: DarkTech.background,
+        body: Stack(
+          key: const Key('register-landscape-layout'),
+          fit: StackFit.expand,
+          children: <Widget>[
+            const Positioned.fill(
+              key: Key('register-landscape-hero-image'),
+              child: ExcludeSemantics(child: _RegisterWebHeroImage()),
+            ),
+            const Positioned.fill(
+              key: Key('register-landscape-hero-scrim'),
+              child: ExcludeSemantics(child: _RegisterHeroContentScrim()),
+            ),
+            SafeArea(
+              // KORIXA-UI-SCREEN-BATCH-01A: `themeContext`, no el
+              // `context` de `build` — mismo motivo que en las demás
+              // composiciones.
+              child: Builder(
+                builder: (BuildContext themeContext) {
+                  // Ancho proporcional al viewport — mismo mecanismo que
+                  // `LoginPage._buildPhoneLandscape`, nunca un número fijo
+                  // de escritorio. 0.46 (vs. el 0.56 de Login, que solo
+                  // tiene 2 campos) deja el hero más dominante, coherente
+                  // con la composición pedida en la Sección 5 ("HERO
+                  // dominante, REGISTER FORM compacto y usable").
+                  final double panelWidth = (MediaQuery.of(themeContext).size.width * 0.46).clamp(280.0, 400.0);
+                  return Align(
+                    alignment: Alignment.centerLeft,
+                    child: Padding(
+                      padding: const EdgeInsets.symmetric(horizontal: AppSpacing.md, vertical: AppSpacing.sm),
+                      child: ConstrainedBox(
+                        key: const Key('register-landscape-panel-width'),
+                        constraints: BoxConstraints(maxWidth: panelWidth),
+                        child: SingleChildScrollView(
+                          child: _buildMobileFormContent(
+                            themeContext,
+                            l10n,
+                            registerState,
+                            socialState,
+                            anyLoading,
+                          ),
+                        ),
+                      ),
+                    ),
+                  );
+                },
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
   /// Contenido del formulario, idéntico en orden/lógica al original de
-  /// `origin/main` — usado ÚNICAMENTE por `_buildLegacyShell` (portrait/
-  /// phone landscape). KORIXA-SCREEN03-WEB-MATCH-SCREEN02-DESKTOP-UI-
-  /// SCALE-20260914: desktop dejó de reusar este método (ver
-  /// `_buildDesktopFormContent`, estructuralmente distinto — agrupa
-  /// logo/título/subtítulo/controles en bloques de `_desktopControlWidth`
-  /// centrados, algo que este método no necesita) — restaurado a su forma
-  /// simple original, sin el parámetro `desktop` que existía en rondas
-  /// anteriores.
+  /// `origin/main` — usado ÚNICAMENTE por `_buildLegacyShell` (red de
+  /// seguridad teórica, no alcanzable en la práctica — ver `build()`).
+  /// KORIXA-SCREEN03-WEB-MATCH-SCREEN02-DESKTOP-UI-SCALE-20260914:
+  /// desktop dejó de reusar este método (ver `_buildDesktopFormContent`,
+  /// estructuralmente distinto — agrupa logo/título/subtítulo/controles
+  /// en bloques de `_desktopControlWidth` centrados, algo que este método
+  /// no necesita) — restaurado a su forma simple original, sin el
+  /// parámetro `desktop` que existía en rondas anteriores.
   Widget _buildStandardFormContent(
     BuildContext themeContext,
     AppLocalizations l10n,

@@ -133,6 +133,21 @@ class KorixaViewportInfo {
     return width >= desktopMinWidth && height >= desktopMinShortHeight;
   }
 
+  /// KORIXA-SCREEN03-PHONE-COMPACT-LANDSCAPE-IMPLEMENTATION-20260915:
+  /// promueve a la clase la fórmula `isLandscape && !canFitWideLayout()`
+  /// que `WelcomePage`/`LoginPage` ya calculaban de forma local e idéntica
+  /// (`_isPhoneLandscape`, duplicada carácter por carácter en ambos
+  /// archivos) — un teléfono horizontal (844×390, 915×412, 932×430) o
+  /// landscape angosto en general, que NO alcanza el ancho/alto mínimo
+  /// para una composición de escritorio. Refactor puro: preserva
+  /// exactamente el comportamiento ya probado — no cambia ningún
+  /// resultado de `isLandscape`/`canFitWideLayout()` existente, solo les
+  /// da un nombre compartido. `WelcomePage`/`LoginPage` NO se migraron a
+  /// este getter en esta tarea (fuera de alcance — ambas pantallas ya
+  /// están aprobadas visualmente; migrarlas es un refactor puro pendiente
+  /// para una tarea futura, sin cambio de comportamiento esperado).
+  bool get isCompactLandscape => isLandscape && !canFitWideLayout();
+
   /// `clamp(minimum, valor derivado del viewport, maximum)` — helper
   /// fino para que las pantallas no repitan `math.min(max, math.max(min, v))`
   /// a mano. `valueOf(this)` recibe esta misma instancia para derivar el

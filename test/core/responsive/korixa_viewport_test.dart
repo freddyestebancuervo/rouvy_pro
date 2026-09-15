@@ -97,6 +97,43 @@ void main() {
     });
   });
 
+  group('isCompactLandscape — KORIXA-SCREEN03-PHONE-COMPACT-LANDSCAPE-IMPLEMENTATION-20260915', () {
+    test('teléfonos horizontales requeridos por el encargo => true', () {
+      expect(const KorixaViewportInfo(width: 844, height: 390).isCompactLandscape, isTrue);
+      expect(const KorixaViewportInfo(width: 915, height: 412).isCompactLandscape, isTrue);
+      expect(const KorixaViewportInfo(width: 932, height: 430).isCompactLandscape, isTrue);
+    });
+
+    test('portrait nunca es compact landscape, sin importar el tamaño', () {
+      expect(const KorixaViewportInfo(width: 390, height: 844).isCompactLandscape, isFalse);
+    });
+
+    test('desktop/tablet-ancho landscape nunca es compact landscape', () {
+      expect(const KorixaViewportInfo(width: 1280, height: 720).isCompactLandscape, isFalse);
+    });
+
+    test('tablet portrait no es compact landscape (es portrait, no landscape)', () {
+      expect(const KorixaViewportInfo(width: 768, height: 1024).isCompactLandscape, isFalse);
+    });
+
+    test('coincide exactamente con la fórmula local ya usada en Welcome/Login, para toda la matriz de barrido', () {
+      const List<double> widths = <double>[
+        320, 360, 390, 412, 430, 480, 500, 568, 599, 600, 601, 650, 700, 768, 800, 844, 900, 915, 932, 1000, 1023,
+        1024, 1025, 1080, 1200, 1280, 1365, 1366, 1440, 1536, 1600, 1920, 2560,
+      ];
+      const List<double> heights = <double>[
+        320, 360, 390, 412, 430, 480, 500, 568, 599, 600, 601, 650, 700, 768, 800, 900, 1080, 1440,
+      ];
+      for (final double w in widths) {
+        for (final double h in heights) {
+          final KorixaViewportInfo vp = KorixaViewportInfo(width: w, height: h);
+          final bool localFormula = vp.isLandscape && !vp.canFitWideLayout();
+          expect(vp.isCompactLandscape, localFormula, reason: 'w=$w,h=$h: isCompactLandscape debe igualar la fórmula local');
+        }
+      }
+    });
+  });
+
   group('Boundary tests — límites exactos alrededor de los umbrales (Sección BOUNDARY_TESTING)', () {
     // 599 / 600 / 601 de alto, a un ancho medio representativo (800, el
     // mismo del caso explícito del encargo) — expone el "cliff" exacto
