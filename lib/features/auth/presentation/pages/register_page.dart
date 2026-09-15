@@ -350,17 +350,45 @@ class _RegisterPageState extends ConsumerState<RegisterPage> {
   /// visual propio del mockup aprobado: título/subtítulo centrados,
   /// íconos a la izquierda dentro de cada campo, sombra de legibilidad
   /// (el formulario flota sobre la foto, sin card detrás).
+  /// [compact] (`false` por defecto, preserva EXACTAMENTE el
+  /// comportamiento/medidas actuales de mobile portrait — verificado por
+  /// `REGISTER_PORTRAIT_UNCHANGED`): KORIXA-SCREEN03-COMPACT-LANDSCAPE-
+  /// VISUAL-DENSITY-REFINEMENT-20260915. El owner probó
+  /// `_buildPhoneLandscape` en un teléfono físico real y reportó que,
+  /// reusando este método TAL CUAL (medidas pensadas para un viewport
+  /// portrait alto, ~844px), la UI resultaba demasiado alta para un
+  /// viewport landscape corto (~390px): con teclado cerrado solo se veían
+  /// Nombre/Correo/parte de Contraseña, y "Registrarme" quedaba muy
+  /// abajo. `compact: true` (solo desde `_buildPhoneLandscape`) reduce
+  /// densidad vertical (título/subtítulo más chicos, gaps más angostos,
+  /// padding interno de campo reducido de 16 a 10) SIN tocar el tamaño
+  /// táctil de ningún control (los campos siguen midiendo bien por
+  /// encima del mínimo de 44px recomendado; el CTA/Google conservan su
+  /// alto de tema por defecto, nunca se redujeron — el problema real
+  /// eran los espacios entre elementos, no el tamaño de los controles en
+  /// sí).
   Widget _buildMobileFormContent(
     BuildContext themeContext,
     AppLocalizations l10n,
     AsyncValue<void> registerState,
     AsyncValue<void> socialState,
-    bool anyLoading,
-  ) {
+    bool anyLoading, {
+    bool compact = false,
+  }) {
     final TextTheme textTheme = Theme.of(themeContext).textTheme;
     final List<Shadow> legibilityShadow = <Shadow>[
       Shadow(color: Colors.black.withValues(alpha: 0.65), blurRadius: 10),
     ];
+    final EdgeInsetsGeometry? fieldContentPadding =
+        compact ? const EdgeInsets.symmetric(horizontal: 16, vertical: 10) : null;
+    final double titleSubtitleGap = compact ? AppSpacing.xs : AppSpacing.sm;
+    final double subtitleFieldsGap = compact ? AppSpacing.sm : AppSpacing.xl;
+    final double fieldGap = compact ? AppSpacing.sm : AppSpacing.base;
+    final double ctaGap = compact ? AppSpacing.sm : AppSpacing.lg;
+    final double ctaTermsGap = compact ? AppSpacing.xs : AppSpacing.md;
+    final double termsDividerGap = compact ? AppSpacing.sm : AppSpacing.lg;
+    final double dividerGoogleGap = compact ? AppSpacing.sm : AppSpacing.lg;
+    final double googleFooterGap = compact ? AppSpacing.sm : AppSpacing.lg;
 
     return Form(
       key: _formKey,
@@ -373,22 +401,24 @@ class _RegisterPageState extends ConsumerState<RegisterPage> {
             key: const Key('register-title'),
             textAlign: TextAlign.center,
             style: textTheme.headlineMedium?.copyWith(
+              fontSize: compact ? 21 : null,
               fontWeight: FontWeight.w800,
               color: DarkTech.textPrimary,
               shadows: legibilityShadow,
             ),
           ),
-          const SizedBox(height: AppSpacing.sm),
+          SizedBox(height: titleSubtitleGap),
           Text(
             l10n.registerSubtitle,
             key: const Key('register-subtitle'),
             textAlign: TextAlign.center,
             style: textTheme.bodyLarge?.copyWith(
+              fontSize: compact ? 13 : null,
               color: DarkTech.textSecondary,
               shadows: legibilityShadow,
             ),
           ),
-          const SizedBox(height: AppSpacing.xl),
+          SizedBox(height: subtitleFieldsGap),
           TextFormField(
             controller: _nameController,
             textInputAction: TextInputAction.next,
@@ -396,10 +426,11 @@ class _RegisterPageState extends ConsumerState<RegisterPage> {
             decoration: InputDecoration(
               labelText: l10n.nameLabel,
               prefixIcon: const Icon(Icons.person_outline),
+              contentPadding: fieldContentPadding,
             ),
             validator: (String? value) => Validators.name(value).message(l10n),
           ),
-          const SizedBox(height: AppSpacing.base),
+          SizedBox(height: fieldGap),
           TextFormField(
             controller: _emailController,
             keyboardType: TextInputType.emailAddress,
@@ -408,10 +439,11 @@ class _RegisterPageState extends ConsumerState<RegisterPage> {
             decoration: InputDecoration(
               labelText: l10n.emailLabel,
               prefixIcon: const Icon(Icons.mail_outline),
+              contentPadding: fieldContentPadding,
             ),
             validator: (String? value) => Validators.email(value).message(l10n),
           ),
-          const SizedBox(height: AppSpacing.base),
+          SizedBox(height: fieldGap),
           TextFormField(
             controller: _passwordController,
             obscureText: _obscurePassword,
@@ -420,6 +452,7 @@ class _RegisterPageState extends ConsumerState<RegisterPage> {
             decoration: InputDecoration(
               labelText: l10n.passwordLabel,
               prefixIcon: const Icon(Icons.lock_outline),
+              contentPadding: fieldContentPadding,
               suffixIcon: Semantics(
                 key: const Key('register-password-visibility-semantics'),
                 label: _obscurePassword ? l10n.showPasswordAction : l10n.hidePasswordAction,
@@ -433,7 +466,7 @@ class _RegisterPageState extends ConsumerState<RegisterPage> {
             ),
             validator: (String? value) => Validators.password(value).message(l10n),
           ),
-          const SizedBox(height: AppSpacing.base),
+          SizedBox(height: fieldGap),
           TextFormField(
             controller: _confirmPasswordController,
             obscureText: _obscurePassword,
@@ -441,6 +474,7 @@ class _RegisterPageState extends ConsumerState<RegisterPage> {
             decoration: InputDecoration(
               labelText: l10n.confirmPasswordLabel,
               prefixIcon: const Icon(Icons.lock_outline),
+              contentPadding: fieldContentPadding,
             ),
             onFieldSubmitted: (_) => _handleSubmit(),
             validator: (String? value) => Validators.confirmPassword(
@@ -448,20 +482,20 @@ class _RegisterPageState extends ConsumerState<RegisterPage> {
               value,
             ).message(l10n),
           ),
-          const SizedBox(height: AppSpacing.lg),
+          SizedBox(height: ctaGap),
           PrimaryGradientButton(
             label: l10n.registerButton,
             isLoading: registerState.isLoading,
             onPressed: anyLoading ? null : _handleSubmit,
           ),
-          const SizedBox(height: AppSpacing.md),
+          SizedBox(height: ctaTermsGap),
           Text(
             l10n.termsAcceptText,
             key: const Key('register-terms-text'),
             textAlign: TextAlign.center,
             style: textTheme.bodySmall?.copyWith(color: DarkTech.textSecondary, shadows: legibilityShadow),
           ),
-          const SizedBox(height: AppSpacing.lg),
+          SizedBox(height: termsDividerGap),
           Row(
             children: <Widget>[
               const Expanded(child: Divider()),
@@ -472,7 +506,7 @@ class _RegisterPageState extends ConsumerState<RegisterPage> {
               const Expanded(child: Divider()),
             ],
           ),
-          const SizedBox(height: AppSpacing.lg),
+          SizedBox(height: dividerGoogleGap),
           GoogleSignInButton(
             label: l10n.continueWithGoogle,
             isLoading: socialState.isLoading,
@@ -494,7 +528,7 @@ class _RegisterPageState extends ConsumerState<RegisterPage> {
                       ),
             ),
           ],
-          const SizedBox(height: AppSpacing.lg),
+          SizedBox(height: googleFooterGap),
           Wrap(
             alignment: WrapAlignment.center,
             crossAxisAlignment: WrapCrossAlignment.center,
@@ -621,6 +655,7 @@ class _RegisterPageState extends ConsumerState<RegisterPage> {
                             registerState,
                             socialState,
                             anyLoading,
+                            compact: true,
                           ),
                         ),
                       ),

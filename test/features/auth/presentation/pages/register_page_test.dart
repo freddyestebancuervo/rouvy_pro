@@ -739,6 +739,29 @@ void main() {
     expect(find.text('Registrarme'), findsOneWidget, reason: 'REGISTER_COMPACT_LANDSCAPE_KEYBOARD_OPEN_CTA_REACHABLE');
   });
 
+  testWidgets('REGISTER_COMPACT_LANDSCAPE_PRIMARY_CTA_NEAR_INITIAL_VIEWPORT = PASS', (WidgetTester tester) async {
+    // KORIXA-SCREEN03-COMPACT-LANDSCAPE-VISUAL-DENSITY-REFINEMENT-20260915:
+    // el owner probó físicamente que "Registrarme" quedaba muy abajo con
+    // teclado cerrado. Medido empíricamente (fuera de este test, ver
+    // reporte de la tarea): antes de esta ronda el borde inferior del CTA
+    // caía en y=488 (por debajo del viewport de 390px, `844x390`); con la
+    // densidad reducida cae en y=347 — DENTRO del viewport inicial, sin
+    // necesitar ningún scroll. Este test protege esa propiedad sin fijar
+    // una coordenada exacta y frágil: solo exige que el CTA esté dentro
+    // del viewport (o a lo sumo muy cerca de su borde) sin haber hecho
+    // ningún scroll manual.
+    const Size size = Size(844, 390);
+    await pumpRegisterPage(tester, repository, surfaceSize: size);
+
+    final double ctaBottom = tester.getRect(find.text('Registrarme')).bottom;
+    expect(
+      ctaBottom,
+      lessThan(size.height * 1.15),
+      reason: 'REGISTER_COMPACT_LANDSCAPE_PRIMARY_CTA_NEAR_INITIAL_VIEWPORT: '
+          'el CTA debe estar dentro (o a lo sumo apenas fuera) del viewport inicial sin scroll manual',
+    );
+  });
+
   testWidgets('REGISTER_PORTRAIT_UNCHANGED = PASS', (WidgetTester tester) async {
     // Regresión: portrait sigue exactamente igual después de introducir
     // la rama de landscape — mismo layout, mismo comportamiento.
