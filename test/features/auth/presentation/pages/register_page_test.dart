@@ -744,25 +744,28 @@ void main() {
   });
 
   testWidgets('REGISTER_COMPACT_LANDSCAPE_CONTROL_WIDTH_WITHIN_TARGET_RANGE = PASS', (WidgetTester tester) async {
-    // CONTROL_MIN_WIDTH/CONTROL_MAX_WIDTH pedidos por la tarea: 300-320 a
-    // 380-400px, según el viewport. Verificado en los 5 tamaños
-    // obligatorios sin fijar un valor exacto (serían asserts frágiles) —
-    // solo el rango.
-    const List<Size> sizes = <Size>[
-      Size(740, 360),
-      Size(812, 375),
-      Size(844, 390),
-      Size(915, 412),
-      Size(932, 430),
+    // KORIXA-SCREEN03-COMPACT-LANDSCAPE-FORM-WIDTH-REFINEMENT-20260915
+    // (ronda 2 — ajuste del owner, -12% exacto sobre la ronda 1):
+    // clamp(270.0, 343.2), fracción 0.3696 del ancho del viewport.
+    // Verificado contra los 5 anchos aproximados exactos que dio el
+    // owner, con una tolerancia mínima (0.5px) para redondeo de layout.
+    const List<(Size, double)> expectedWidths = <(Size, double)>[
+      (Size(740, 360), 273.5),
+      (Size(812, 375), 300.1),
+      (Size(844, 390), 311.9),
+      (Size(915, 412), 338.2),
+      (Size(932, 430), 343.2),
     ];
-    for (final Size size in sizes) {
+    for (final (Size size, double expectedWidth) in expectedWidths) {
       await pumpRegisterPage(tester, repository, surfaceSize: size);
       final double width = tester.getSize(find.byKey(const Key('register-landscape-panel-width'))).width;
       expect(
         width,
-        inInclusiveRange(300.0, 400.0),
-        reason: 'REGISTER_COMPACT_LANDSCAPE_CONTROL_WIDTH_WITHIN_TARGET_RANGE: ${size.width.toInt()}x${size.height.toInt()} -> ancho=$width',
+        closeTo(expectedWidth, 0.5),
+        reason: 'REGISTER_COMPACT_LANDSCAPE_CONTROL_WIDTH_WITHIN_TARGET_RANGE: '
+            '${size.width.toInt()}x${size.height.toInt()} -> ancho=$width, esperado≈$expectedWidth',
       );
+      expect(width, inInclusiveRange(270.0, 343.2));
     }
   });
 

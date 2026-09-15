@@ -646,18 +646,18 @@ class _RegisterPageState extends ConsumerState<RegisterPage> {
                   // Ancho proporcional al viewport — mismo mecanismo que
                   // `LoginPage._buildPhoneLandscape`, nunca un número fijo
                   // de escritorio. KORIXA-SCREEN03-COMPACT-LANDSCAPE-FORM-
-                  // WIDTH-REFINEMENT-20260915: el owner, ya con el
-                  // dispositivo real en mano, reportó los campos
-                  // demasiado anchos/pesados y pidió más aire hacia la
-                  // ciclista — 0.42 (antes 0.46) + clamp(300, 390) (antes
-                  // clamp(280, 400)) da un rango de ~311px (740 de ancho)
-                  // a 390px (932 de ancho), dentro del rango 300–400
-                  // pedido explícitamente. Título/subtítulo/campos/CTA/
+                  // WIDTH-REFINEMENT-20260915 (ronda 1: 0.46→0.42,
+                  // clamp(280,400)→clamp(300,390)) + ajuste posterior del
+                  // owner (ronda 2, -12% adicional exacto sobre la ronda
+                  // 1: 0.42×0.88=0.3696, 300×0.88=264≈270 (redondeado a un
+                  // número más limpio), 390×0.88=343.2) — el owner, ya con
+                  // el preview en mano, siguió percibiendo los controles
+                  // demasiado anchos. Título/subtítulo/campos/CTA/
                   // términos/divisor/Google/footer comparten este MISMO
                   // ancho (un solo `Column` con `crossAxisAlignment.
                   // stretch` dentro de este `ConstrainedBox`) — nunca
                   // anchos distintos entre elementos.
-                  final double panelWidth = (MediaQuery.of(themeContext).size.width * 0.42).clamp(300.0, 390.0);
+                  final double panelWidth = (MediaQuery.of(themeContext).size.width * 0.3696).clamp(270.0, 343.2);
                   return Align(
                     alignment: Alignment.centerLeft,
                     child: Padding(
