@@ -383,7 +383,11 @@ class _RegisterPageState extends ConsumerState<RegisterPage> {
         compact ? const EdgeInsets.symmetric(horizontal: 16, vertical: 10) : null;
     final double titleSubtitleGap = compact ? AppSpacing.xs : AppSpacing.sm;
     final double subtitleFieldsGap = compact ? AppSpacing.sm : AppSpacing.xl;
-    final double fieldGap = compact ? AppSpacing.sm : AppSpacing.base;
+    // KORIXA-SCREEN03-COMPACT-LANDSCAPE-FORM-WIDTH-REFINEMENT-20260915:
+    // 5.0px EXACTOS entre campos en landscape — decisión explícita del
+    // owner, deliberadamente NO uno de los tokens de `AppSpacing`
+    // (el más chico, `xs`, es 4 — no sirve; el resto son mayores).
+    final double fieldGap = compact ? 5.0 : AppSpacing.base;
     final double ctaGap = compact ? AppSpacing.sm : AppSpacing.lg;
     final double ctaTermsGap = compact ? AppSpacing.xs : AppSpacing.md;
     final double termsDividerGap = compact ? AppSpacing.sm : AppSpacing.lg;
@@ -399,7 +403,12 @@ class _RegisterPageState extends ConsumerState<RegisterPage> {
           Text(
             l10n.registerTitle,
             key: const Key('register-title'),
-            textAlign: TextAlign.center,
+            // KORIXA-SCREEN03-COMPACT-LANDSCAPE-FORM-WIDTH-REFINEMENT-
+            // 20260915: alineado al borde izquierdo del bloque de
+            // controles en landscape (ya no centrado) — el owner pidió
+            // explícitamente "NO centrar el formulario". Portrait
+            // conserva el centrado ya aprobado, sin cambios.
+            textAlign: compact ? TextAlign.left : TextAlign.center,
             style: textTheme.headlineMedium?.copyWith(
               fontSize: compact ? 21 : null,
               fontWeight: FontWeight.w800,
@@ -411,7 +420,7 @@ class _RegisterPageState extends ConsumerState<RegisterPage> {
           Text(
             l10n.registerSubtitle,
             key: const Key('register-subtitle'),
-            textAlign: TextAlign.center,
+            textAlign: compact ? TextAlign.left : TextAlign.center,
             style: textTheme.bodyLarge?.copyWith(
               fontSize: compact ? 13 : null,
               color: DarkTech.textSecondary,
@@ -636,11 +645,19 @@ class _RegisterPageState extends ConsumerState<RegisterPage> {
                 builder: (BuildContext themeContext) {
                   // Ancho proporcional al viewport — mismo mecanismo que
                   // `LoginPage._buildPhoneLandscape`, nunca un número fijo
-                  // de escritorio. 0.46 (vs. el 0.56 de Login, que solo
-                  // tiene 2 campos) deja el hero más dominante, coherente
-                  // con la composición pedida en la Sección 5 ("HERO
-                  // dominante, REGISTER FORM compacto y usable").
-                  final double panelWidth = (MediaQuery.of(themeContext).size.width * 0.46).clamp(280.0, 400.0);
+                  // de escritorio. KORIXA-SCREEN03-COMPACT-LANDSCAPE-FORM-
+                  // WIDTH-REFINEMENT-20260915: el owner, ya con el
+                  // dispositivo real en mano, reportó los campos
+                  // demasiado anchos/pesados y pidió más aire hacia la
+                  // ciclista — 0.42 (antes 0.46) + clamp(300, 390) (antes
+                  // clamp(280, 400)) da un rango de ~311px (740 de ancho)
+                  // a 390px (932 de ancho), dentro del rango 300–400
+                  // pedido explícitamente. Título/subtítulo/campos/CTA/
+                  // términos/divisor/Google/footer comparten este MISMO
+                  // ancho (un solo `Column` con `crossAxisAlignment.
+                  // stretch` dentro de este `ConstrainedBox`) — nunca
+                  // anchos distintos entre elementos.
+                  final double panelWidth = (MediaQuery.of(themeContext).size.width * 0.42).clamp(300.0, 390.0);
                   return Align(
                     alignment: Alignment.centerLeft,
                     child: Padding(

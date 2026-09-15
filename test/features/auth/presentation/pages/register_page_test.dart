@@ -713,6 +713,71 @@ void main() {
     expect(tester.takeException(), isNull, reason: 'REGISTER_COMPACT_LANDSCAPE_ALL_FIELDS_REACHABLE: los 4 campos deben ser alcanzables y editables');
   });
 
+  testWidgets('REGISTER_COMPACT_LANDSCAPE_FIELD_GAP_EXACT_5PX = PASS', (WidgetTester tester) async {
+    // KORIXA-SCREEN03-COMPACT-LANDSCAPE-FORM-WIDTH-REFINEMENT-20260915:
+    // decisión explícita del owner — 5.0px EXACTOS entre los 4 campos en
+    // landscape (deliberadamente no un token de `AppSpacing`). Es el
+    // único assert de esta ronda que SÍ fija un número exacto de
+    // píxeles, a propósito.
+    await pumpRegisterPage(tester, repository, surfaceSize: const Size(844, 390));
+
+    final Finder fields = find.byType(TextFormField);
+    expect(fields, findsNWidgets(4));
+
+    for (int i = 0; i < 3; i++) {
+      final double gap = tester.getTopLeft(fields.at(i + 1)).dy - tester.getBottomLeft(fields.at(i)).dy;
+      expect(gap, 5.0, reason: 'REGISTER_COMPACT_LANDSCAPE_FIELD_GAP_EXACT_5PX: gap entre campo ${i + 1} y ${i + 2}');
+    }
+  });
+
+  testWidgets('REGISTER_COMPACT_LANDSCAPE_CONTROLS_SHARE_CONSISTENT_WIDTH = PASS', (WidgetTester tester) async {
+    // Título, campos y CTA deben compartir el MISMO ancho — nunca anchos
+    // distintos entre elementos (Sección 1 de la tarea).
+    await pumpRegisterPage(tester, repository, surfaceSize: const Size(844, 390));
+
+    final double titleWidth = tester.getSize(find.byKey(const Key('register-title'))).width;
+    final double fieldWidth = tester.getSize(find.byType(TextFormField).first).width;
+    final double ctaWidth = tester.getSize(find.byType(PrimaryGradientButton)).width;
+
+    expect(fieldWidth, closeTo(ctaWidth, 0.5), reason: 'REGISTER_COMPACT_LANDSCAPE_CONTROLS_SHARE_CONSISTENT_WIDTH: CTA debe tener el mismo ancho que los campos');
+    expect(titleWidth, closeTo(fieldWidth, 0.5), reason: 'título debe compartir el mismo ancho que los campos/CTA');
+  });
+
+  testWidgets('REGISTER_COMPACT_LANDSCAPE_CONTROL_WIDTH_WITHIN_TARGET_RANGE = PASS', (WidgetTester tester) async {
+    // CONTROL_MIN_WIDTH/CONTROL_MAX_WIDTH pedidos por la tarea: 300-320 a
+    // 380-400px, según el viewport. Verificado en los 5 tamaños
+    // obligatorios sin fijar un valor exacto (serían asserts frágiles) —
+    // solo el rango.
+    const List<Size> sizes = <Size>[
+      Size(740, 360),
+      Size(812, 375),
+      Size(844, 390),
+      Size(915, 412),
+      Size(932, 430),
+    ];
+    for (final Size size in sizes) {
+      await pumpRegisterPage(tester, repository, surfaceSize: size);
+      final double width = tester.getSize(find.byKey(const Key('register-landscape-panel-width'))).width;
+      expect(
+        width,
+        inInclusiveRange(300.0, 400.0),
+        reason: 'REGISTER_COMPACT_LANDSCAPE_CONTROL_WIDTH_WITHIN_TARGET_RANGE: ${size.width.toInt()}x${size.height.toInt()} -> ancho=$width',
+      );
+    }
+  });
+
+  testWidgets('REGISTER_COMPACT_LANDSCAPE_TITLE_LEFT_ALIGNED = PASS', (WidgetTester tester) async {
+    // El owner pidió explícitamente "NO centrar el formulario" — título/
+    // subtítulo alineados a la izquierda en landscape (portrait conserva
+    // el centrado ya aprobado, sin cambios — ver MOBILE_PORTRAIT_ALL_FIELDS_PRESENT).
+    await pumpRegisterPage(tester, repository, surfaceSize: const Size(844, 390));
+
+    final Text title = tester.widget<Text>(find.byKey(const Key('register-title')));
+    final Text subtitle = tester.widget<Text>(find.byKey(const Key('register-subtitle')));
+    expect(title.textAlign, TextAlign.left);
+    expect(subtitle.textAlign, TextAlign.left);
+  });
+
   testWidgets('REGISTER_COMPACT_LANDSCAPE_KEYBOARD_OPEN_CTA_REACHABLE = PASS', (WidgetTester tester) async {
     await pumpRegisterPage(tester, repository, surfaceSize: const Size(844, 390));
 
