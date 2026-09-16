@@ -1957,18 +1957,9 @@ void main() {
 
   // ---------------------------------------------------------------------
   // KORIXA-SCREEN01-SCREEN02-MATCH-SCREEN03-CONTAINER-WIDTH-20260915:
-  // verifica el ancho exacto del SUBTÍTULO landscape contra la MISMA
-  // fórmula ya aprobada en `RegisterPage._buildPhoneLandscape` (SCREEN_03
-  // — fuente de verdad), en los 5 viewports obligatorios.
-  //
-  // KORIXA-SCREEN01-SCREEN02-CONTROLS-MATCH-TITLE-WIDTH-20260915: esta
-  // fórmula ya NO gobierna campos/CTA/Google/enlaces (ver el grupo
-  // `CONTROLS_MATCH_TITLE_WIDTH` más abajo, que ahora los mide contra
-  // `titleBlockWidth`) — el dueño pidió explícitamente que esos controles
-  // dejen de igualar el ancho de SCREEN_03. Esta prueba se actualiza
-  // (no se debilita) para medir el `Key` renombrado
-  // `login-landscape-subtitle-width`, que sigue siendo el SUBTÍTULO —
-  // el único elemento de este grupo que el encargo no tocó.
+  // verifica el ancho exacto del panel landscape contra la MISMA fórmula
+  // ya aprobada en `RegisterPage._buildPhoneLandscape` (SCREEN_03 —
+  // fuente de verdad), en los 5 viewports obligatorios.
   // ---------------------------------------------------------------------
   const List<(Size, double)> screen03MatchedWidths = <(Size, double)>[
     (Size(740, 360), 273.5),
@@ -1980,54 +1971,19 @@ void main() {
 
   for (final (Size size, double expectedWidth) in screen03MatchedWidths) {
     testWidgets(
-      'LOGIN_LANDSCAPE_${size.width.toInt()}x${size.height.toInt()}_SUBTITLE_MATCHES_SCREEN03_WIDTH = PASS',
+      'LOGIN_LANDSCAPE_${size.width.toInt()}x${size.height.toInt()}_MATCHES_SCREEN03_WIDTH = PASS',
       (WidgetTester tester) async {
         final MockAuthRepository repository = MockAuthRepository();
         await pumpLoginPage(tester, repository, surfaceSize: size);
         expect(tester.takeException(), isNull);
 
-        final double width = tester.getSize(find.byKey(const Key('login-landscape-subtitle-width'))).width;
+        final double width = tester.getSize(find.byKey(const Key('login-landscape-panel-width'))).width;
         expect(
           width,
           closeTo(expectedWidth, 0.5),
-          reason: 'LOGIN_LANDSCAPE_${size.width.toInt()}x${size.height.toInt()}_SUBTITLE_MATCHES_SCREEN03_WIDTH: '
-              'ancho=$width, esperado≈$expectedWidth (misma fórmula que SCREEN_03, ahora exclusiva del subtítulo)',
+          reason: 'LOGIN_LANDSCAPE_${size.width.toInt()}x${size.height.toInt()}_MATCHES_SCREEN03_WIDTH: '
+              'ancho=$width, esperado≈$expectedWidth (misma fórmula que SCREEN_03)',
         );
-      },
-    );
-  }
-
-  // ---------------------------------------------------------------------
-  // KORIXA-SCREEN01-SCREEN02-CONTROLS-MATCH-TITLE-WIDTH-20260915: email,
-  // contraseña, CTA principal y Google deben medir EXACTAMENTE lo mismo
-  // que el bloque del título (`min(630, viewportWidth - 24)`).
-  // ---------------------------------------------------------------------
-  const List<Size> controlsMatchTitleWidthViewports = <Size>[
-    Size(740, 360),
-    Size(812, 375),
-    Size(844, 390),
-    Size(915, 412),
-    Size(932, 430),
-  ];
-
-  for (final Size size in controlsMatchTitleWidthViewports) {
-    testWidgets(
-      'LOGIN_LANDSCAPE_${size.width.toInt()}x${size.height.toInt()}_CONTROLS_MATCH_TITLE_WIDTH = PASS',
-      (WidgetTester tester) async {
-        final MockAuthRepository repository = MockAuthRepository();
-        await pumpLoginPage(tester, repository, surfaceSize: size);
-        expect(tester.takeException(), isNull, reason: 'no debe haber overflow en ${size.width.toInt()}x${size.height.toInt()}');
-
-        final double titleBlockWidth = tester.getSize(find.byKey(const Key('login-landscape-title-block-width'))).width;
-        final double emailWidth = tester.getSize(find.byType(TextFormField).at(0)).width;
-        final double passwordWidth = tester.getSize(find.byType(TextFormField).at(1)).width;
-        final double ctaWidth = tester.getSize(find.byType(PrimaryGradientButton)).width;
-        final double googleWidth = tester.getSize(find.byType(GoogleSignInButton)).width;
-
-        expect(emailWidth, closeTo(titleBlockWidth, 0.5), reason: 'SCREEN02_EMAIL_WIDTH debe igualar el ancho del título');
-        expect(passwordWidth, closeTo(titleBlockWidth, 0.5), reason: 'SCREEN02_PASSWORD_WIDTH debe igualar el ancho del título');
-        expect(ctaWidth, closeTo(titleBlockWidth, 0.5), reason: 'SCREEN02_PRIMARY_CTA_WIDTH debe igualar el ancho del título');
-        expect(googleWidth, closeTo(titleBlockWidth, 0.5), reason: 'Google Sign-In debe igualar el ancho del título');
       },
     );
   }
@@ -2064,17 +2020,9 @@ void main() {
   // ---------------------------------------------------------------------
   // KORIXA-SCREEN01-SCREEN02-TITLE-SINGLE-LINE-LANDSCAPE-20260915: el
   // título debe quedar en UNA sola línea en los 5 viewports requeridos,
-  // sin reducir `fontSize`.
-  //
-  // KORIXA-SCREEN01-SCREEN02-CONTROLS-MATCH-TITLE-WIDTH-20260915: la
-  // aserción original de este grupo verificaba que el panel de
-  // campos/CTA (`login-landscape-panel-width`) NO se ensanchara — ese
-  // control YA NO existe con ese significado: el dueño pidió
-  // explícitamente que campos/CTA/Google/enlaces ahora igualen el ancho
-  // del título (ver grupo `CONTROLS_MATCH_TITLE_WIDTH` más abajo).
-  // Actualizada (no debilitada) para verificar en su lugar el ancho del
-  // SUBTÍTULO (`login-landscape-subtitle-width`, renombrado), el único
-  // elemento de ese grupo que esta tarea no tocó.
+  // sin ensanchar el panel de campos/CTA (`login-landscape-panel-width`,
+  // que sigue midiendo exactamente lo mismo que antes, ver el grupo
+  // `MATCHES_SCREEN03_WIDTH` de arriba) y sin reducir `fontSize`.
   // ---------------------------------------------------------------------
   const List<Size> titleSingleLineViewports = <Size>[
     Size(740, 360),
@@ -2100,12 +2048,11 @@ void main() {
               '"Bienvenido de nuevo" debe entrar en una sola línea',
         );
 
-        // El ancho del SUBTÍTULO NO debe cambiar (misma fórmula 0.3696
-        // clamp(270, 343.2) de siempre) — campos/CTA ya no viven en este
-        // ancho, ver grupo `CONTROLS_MATCH_TITLE_WIDTH`.
-        final double subtitleWidth = tester.getSize(find.byKey(const Key('login-landscape-subtitle-width'))).width;
-        expect(subtitleWidth, greaterThanOrEqualTo(270.0));
-        expect(subtitleWidth, lessThanOrEqualTo(343.2));
+        // El ancho del panel de campos/CTA NO debe cambiar (misma
+        // fórmula 0.3696 clamp(270, 343.2) de siempre).
+        final double panelWidth = tester.getSize(find.byKey(const Key('login-landscape-panel-width'))).width;
+        expect(panelWidth, greaterThanOrEqualTo(270.0));
+        expect(panelWidth, lessThanOrEqualTo(343.2));
       },
     );
   }

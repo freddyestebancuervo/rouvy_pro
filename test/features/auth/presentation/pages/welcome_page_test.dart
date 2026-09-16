@@ -270,56 +270,48 @@ void main() {
       );
       expect(bars.length, 3, reason: '$label debe mostrar exactamente 3 líneas indicadoras');
 
-      // KORIXA-SCREEN01-SCREEN02-CONTROLS-MATCH-TITLE-WIDTH-20260915: el
-      // CTA "Comenzar" ahora debe medir EXACTAMENTE lo mismo que el
-      // bloque del título (`min(630, viewportWidth - 24)`) — reemplaza
-      // el rango angosto 230-300 anterior (fórmula de SCREEN_03), que el
-      // dueño pidió explícitamente abandonar SOLO para este control.
+      // CTA responsivo — derivado del mismo `contentMaxWidth` acotado
+      // 270-343.2 (fórmula de SCREEN_03), nunca el ancho de 320+ fijo de
+      // portrait ni el de 550 de desktop. Rango holgado (230-300) para
+      // cubrir el CTA derivado en los 3 tamaños obligatorios sin fijar
+      // un valor exacto frágil.
       expect(find.byKey(const Key('welcome-landscape-cta')), findsOneWidget);
       final Size ctaSize = tester.getSize(find.byKey(const Key('welcome-landscape-cta')));
-      final Size titleBlockSize = tester.getSize(find.byKey(const Key('welcome-title-block-width')));
-      expect(
-        ctaSize.width,
-        closeTo(titleBlockSize.width, 0.5),
-        reason: '$label: KORIXA-SCREEN01-SCREEN02-CONTROLS-MATCH-TITLE-WIDTH-20260915 — '
-            'el CTA debe medir exactamente lo mismo que el bloque del título',
-      );
-      expect(ctaSize.height, 56, reason: '$label: el alto del CTA NO debe cambiar por esta tarea');
+      expect(ctaSize.width, greaterThanOrEqualTo(230), reason: '$label: el CTA debe acercarse al nuevo rango angosto (fórmula SCREEN_03)');
+      expect(ctaSize.width, lessThanOrEqualTo(300), reason: '$label: el CTA no debe exceder el nuevo rango angosto (fórmula SCREEN_03)');
+      expect(ctaSize.height, greaterThanOrEqualTo(48), reason: '$label: el CTA debe seguir siendo táctil (>=48dp)');
 
-      // KORIXA-SCREEN01-SCREEN02-CONTROLS-MATCH-TITLE-WIDTH-20260915: el
-      // indicador de 3 barras NO fue parte de este encargo (solo se pidió
-      // ensanchar el CTA) — sigue siendo un `Row` de ancho intrínseco
-      // (3 barras de 16 + 2 separaciones de 4 = 56), sin estirarse al
-      // ancho del CTA ensanchado. Ya NO se exige que comparta centro con
-      // el CTA (KORIXA-SCREEN01-CENTER-PAGE-INDICATORS-20260910) porque
-      // este encargo ensanchó el CTA deliberadamente sin tocar el
-      // indicador — documentado como consecuencia esperada, no una
-      // regresión oculta.
-      final Size indicatorRowSize = tester.getSize(find.byKey(const Key('welcome-indicator-row')));
+      // KORIXA-SCREEN01-CENTER-PAGE-INDICATORS-20260910: el indicador
+      // debe compartir el centro horizontal exacto del CTA, no quedar
+      // estirado/alineado a la izquierda del ancho completo de columna.
+      final Offset ctaCenter = tester.getCenter(find.byKey(const Key('welcome-landscape-cta')));
+      final Offset indicatorCenter = tester.getCenter(find.byKey(const Key('welcome-indicator-row')));
       expect(
-        indicatorRowSize.width,
-        closeTo(56, 0.5),
-        reason: '$label: el indicador no debe haberse ensanchado — sigue con su ancho intrínseco de siempre',
+        indicatorCenter.dx,
+        closeTo(ctaCenter.dx, 0.5),
+        reason: '$label: el indicador debe compartir el centro horizontal exacto del CTA',
       );
 
-      // El bloque de contenido (subtítulo/indicador) debe quedar en el
-      // rango de SCREEN_03 (270-343.2, fórmula
-      // `(width * 0.3696).clamp(270.0, 343.2)`) — SIN CAMBIOS por esta
-      // tarea, que solo tocó el CTA.
+      // El bloque de contenido debe quedar en el rango de SCREEN_03
+      // (270-343.2, fórmula `(width * 0.3696).clamp(270.0, 343.2)`) —
+      // con el hero nuevo, el margen libre real es de ~590-650px, muy
+      // por encima de este rango, así que no hay riesgo de invadir al
+      // ciclista.
       final Size contentSize = tester.getSize(find.byKey(const Key('welcome-content-max-width')));
       expect(contentSize.width, greaterThanOrEqualTo(270.0), reason: '$label: el contenido debe respetar el clamp mínimo de SCREEN_03');
       expect(contentSize.width, lessThanOrEqualTo(343.2), reason: '$label: el contenido no debe exceder el clamp máximo de SCREEN_03');
 
-      // KORIXA-SCREEN01-SCREEN02-CONTROLS-MATCH-TITLE-WIDTH-20260915: el
-      // CTA ahora debe ser MÁS ANCHO que el bloque de contenido
-      // (subtítulo/indicador) — invierte la aserción de KORIXA-SCREEN01-
-      // LANDSCAPE-CTA-MICRO-REDUCTION-20260906 (que exigía lo contrario)
-      // porque el dueño pidió explícitamente que el CTA iguale el ancho
-      // del título, no el del contenido angosto.
+      // KORIXA-SCREEN01-LANDSCAPE-CTA-MICRO-REDUCTION-20260906: el CTA
+      // debe quedar MEDIBLEMENTE más angosto que el ancho que le daría
+      // el stretch del `Column` (`contentSize.width` menos el padding
+      // horizontal, `AppSpacing.md` × 2) — si algún cambio futuro
+      // revierte el `Align`/`SizedBox` y el CTA vuelve a estirarse al
+      // ancho completo, esta aserción debe fallar.
+      final double stretchWidth = contentSize.width - 2 * 12;
       expect(
         ctaSize.width,
-        greaterThan(contentSize.width),
-        reason: '$label: el CTA debe ser más ancho que el bloque de contenido angosto (ahora iguala el título)',
+        lessThan(stretchWidth - 1),
+        reason: '$label: el CTA debe ser más angosto que el ancho completo de la columna (reducción ~10%)',
       );
 
       // El hero debe ser el dedicado de horizontal, nunca el vertical
