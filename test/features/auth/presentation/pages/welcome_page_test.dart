@@ -243,8 +243,17 @@ void main() {
   // KORIXA-SCREEN01-FINAL-LANDSCAPE-HERO-ASSET-20260906: con el hero
   // dedicado nuevo (ciclista más chico, corrido a ~70% del ancho), el
   // bloque de contenido/CTA ya puede ser un porcentaje real del
-  // viewport (34-40%, CTA 300-380px) en vez del ancho fijo de 250px que
-  // exigía la foto anterior — ver [_PhoneLandscapeWelcomeContent].
+  // viewport en vez del ancho fijo de 250px que exigía la foto anterior
+  // — ver [_PhoneLandscapeWelcomeContent].
+  //
+  // KORIXA-SCREEN01-SCREEN02-MATCH-SCREEN03-CONTAINER-WIDTH-20260915:
+  // rangos actualizados a la fórmula EXACTA ya aprobada en
+  // `RegisterPage._buildPhoneLandscape` (SCREEN_03 — fuente de verdad
+  // única): `(width * 0.3696).clamp(270.0, 343.2)` — antes
+  // `(width * 0.40).clamp(280.0, 380.0)`. El contenido resultante es
+  // MEDIBLEMENTE más angosto ("contenedor más flaco", pedido
+  // explícitamente por el owner), así que el rango del CTA (derivado del
+  // contenido) también se angosta proporcionalmente.
   const <String, Size>{
     '844x390': Size(844, 390),
     '915x412': Size(915, 412),
@@ -260,12 +269,15 @@ void main() {
       );
       expect(bars.length, 3, reason: '$label debe mostrar exactamente 3 líneas indicadoras');
 
-      // CTA responsivo — 300-380px pedido, nunca el ancho de 320+ fijo
-      // de portrait ni el de 550 de desktop.
+      // CTA responsivo — derivado del mismo `contentMaxWidth` acotado
+      // 270-343.2 (fórmula de SCREEN_03), nunca el ancho de 320+ fijo de
+      // portrait ni el de 550 de desktop. Rango holgado (230-300) para
+      // cubrir el CTA derivado en los 3 tamaños obligatorios sin fijar
+      // un valor exacto frágil.
       expect(find.byKey(const Key('welcome-landscape-cta')), findsOneWidget);
       final Size ctaSize = tester.getSize(find.byKey(const Key('welcome-landscape-cta')));
-      expect(ctaSize.width, greaterThanOrEqualTo(280), reason: '$label: el CTA debe acercarse al rango 300-380 pedido');
-      expect(ctaSize.width, lessThanOrEqualTo(380), reason: '$label: el CTA no debe exceder el rango 300-380 pedido');
+      expect(ctaSize.width, greaterThanOrEqualTo(230), reason: '$label: el CTA debe acercarse al nuevo rango angosto (fórmula SCREEN_03)');
+      expect(ctaSize.width, lessThanOrEqualTo(300), reason: '$label: el CTA no debe exceder el nuevo rango angosto (fórmula SCREEN_03)');
       expect(ctaSize.height, greaterThanOrEqualTo(48), reason: '$label: el CTA debe seguir siendo táctil (>=48dp)');
 
       // KORIXA-SCREEN01-CENTER-PAGE-INDICATORS-20260910: el indicador
@@ -279,13 +291,14 @@ void main() {
         reason: '$label: el indicador debe compartir el centro horizontal exacto del CTA',
       );
 
-      // El bloque de contenido debe quedar en el rango 34-40% del
-      // viewport pedido (acotado 280-380) — con el hero nuevo, el
-      // margen libre real es de ~590-650px, muy por encima de este
-      // rango, así que no hay riesgo de invadir al ciclista.
+      // El bloque de contenido debe quedar en el rango de SCREEN_03
+      // (270-343.2, fórmula `(width * 0.3696).clamp(270.0, 343.2)`) —
+      // con el hero nuevo, el margen libre real es de ~590-650px, muy
+      // por encima de este rango, así que no hay riesgo de invadir al
+      // ciclista.
       final Size contentSize = tester.getSize(find.byKey(const Key('welcome-content-max-width')));
-      expect(contentSize.width, greaterThanOrEqualTo(280), reason: '$label: el contenido debe acercarse al 34-40% pedido');
-      expect(contentSize.width, lessThanOrEqualTo(380), reason: '$label: el contenido no debe exceder el rango pedido');
+      expect(contentSize.width, greaterThanOrEqualTo(270.0), reason: '$label: el contenido debe respetar el clamp mínimo de SCREEN_03');
+      expect(contentSize.width, lessThanOrEqualTo(343.2), reason: '$label: el contenido no debe exceder el clamp máximo de SCREEN_03');
 
       // KORIXA-SCREEN01-LANDSCAPE-CTA-MICRO-REDUCTION-20260906: el CTA
       // debe quedar MEDIBLEMENTE más angosto que el ancho que le daría
@@ -308,6 +321,39 @@ void main() {
       );
     });
   });
+
+  // ---------------------------------------------------------------------
+  // KORIXA-SCREEN01-SCREEN02-MATCH-SCREEN03-CONTAINER-WIDTH-20260915:
+  // verifica el ancho exacto del bloque de contenido contra la MISMA
+  // fórmula ya aprobada en `RegisterPage._buildPhoneLandscape` (SCREEN_03
+  // — fuente de verdad), en los 5 viewports obligatorios (incluyendo los
+  // 2 que el grupo de arriba no cubría: 740x360, 812x375).
+  // ---------------------------------------------------------------------
+  const List<(Size, double)> screen03MatchedWidths = <(Size, double)>[
+    (Size(740, 360), 273.5),
+    (Size(812, 375), 300.1),
+    (Size(844, 390), 311.9),
+    (Size(915, 412), 338.2),
+    (Size(932, 430), 343.2),
+  ];
+
+  for (final (Size size, double expectedWidth) in screen03MatchedWidths) {
+    testWidgets(
+      'WELCOME_LANDSCAPE_${size.width.toInt()}x${size.height.toInt()}_MATCHES_SCREEN03_WIDTH = PASS',
+      (WidgetTester tester) async {
+        await pumpWelcomePage(tester, surfaceSize: size);
+        expect(tester.takeException(), isNull);
+
+        final double width = tester.getSize(find.byKey(const Key('welcome-content-max-width'))).width;
+        expect(
+          width,
+          closeTo(expectedWidth, 0.5),
+          reason: 'WELCOME_LANDSCAPE_${size.width.toInt()}x${size.height.toInt()}_MATCHES_SCREEN03_WIDTH: '
+              'ancho=$width, esperado≈$expectedWidth (misma fórmula que SCREEN_03)',
+        );
+      },
+    );
+  }
 
   testWidgets('1440x900_USES_DESKTOP_LAYOUT = PASS', (WidgetTester tester) async {
     // Contraparte del grupo de arriba: un desktop real (ancho Y alto

@@ -516,12 +516,15 @@ class _PhoneLandscapeWelcomeContent extends StatelessWidget {
 
   final AppLocalizations l10n;
 
-  /// 40% del ancho del viewport (el extremo superior del rango 34-40%
-  /// pedido), acotado entre 280 y 380 — el mismo rango sugerido para el
-  /// CTA — como salvaguarda en viewports fuera de los 3 tamaños ya
-  /// verificados contra la foto real.
+  /// KORIXA-SCREEN01-SCREEN02-MATCH-SCREEN03-CONTAINER-WIDTH-20260915:
+  /// misma fórmula EXACTA ya aprobada por el owner en
+  /// `RegisterPage._buildPhoneLandscape` (SCREEN_03 — fuente de verdad
+  /// única, ver ese archivo) — antes `(width * 0.40).clamp(280, 380)`.
+  /// Reemplazada, no reinventada, para que las 3 pantallas de auth
+  /// compartan la misma sensación visual de "contenedor más flaco" en
+  /// landscape compacto.
   static double _contentWidthFor(double viewportWidth) {
-    return (viewportWidth * 0.40).clamp(280.0, 380.0);
+    return (viewportWidth * 0.3696).clamp(270.0, 343.2);
   }
 
   @override

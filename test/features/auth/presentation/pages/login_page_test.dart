@@ -1944,4 +1944,36 @@ void main() {
     });
   });
 
+  // ---------------------------------------------------------------------
+  // KORIXA-SCREEN01-SCREEN02-MATCH-SCREEN03-CONTAINER-WIDTH-20260915:
+  // verifica el ancho exacto del panel landscape contra la MISMA fórmula
+  // ya aprobada en `RegisterPage._buildPhoneLandscape` (SCREEN_03 —
+  // fuente de verdad), en los 5 viewports obligatorios.
+  // ---------------------------------------------------------------------
+  const List<(Size, double)> screen03MatchedWidths = <(Size, double)>[
+    (Size(740, 360), 273.5),
+    (Size(812, 375), 300.1),
+    (Size(844, 390), 311.9),
+    (Size(915, 412), 338.2),
+    (Size(932, 430), 343.2),
+  ];
+
+  for (final (Size size, double expectedWidth) in screen03MatchedWidths) {
+    testWidgets(
+      'LOGIN_LANDSCAPE_${size.width.toInt()}x${size.height.toInt()}_MATCHES_SCREEN03_WIDTH = PASS',
+      (WidgetTester tester) async {
+        final MockAuthRepository repository = MockAuthRepository();
+        await pumpLoginPage(tester, repository, surfaceSize: size);
+        expect(tester.takeException(), isNull);
+
+        final double width = tester.getSize(find.byKey(const Key('login-landscape-panel-width'))).width;
+        expect(
+          width,
+          closeTo(expectedWidth, 0.5),
+          reason: 'LOGIN_LANDSCAPE_${size.width.toInt()}x${size.height.toInt()}_MATCHES_SCREEN03_WIDTH: '
+              'ancho=$width, esperado≈$expectedWidth (misma fórmula que SCREEN_03)',
+        );
+      },
+    );
+  }
 }

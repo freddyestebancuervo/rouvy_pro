@@ -649,7 +649,14 @@ class _LoginPageState extends ConsumerState<LoginPage> {
     AsyncValue<void> socialState,
     bool anyLoading,
   ) {
-    final double panelWidth = (MediaQuery.of(context).size.width * 0.56).clamp(260.0, 380.0);
+    // KORIXA-SCREEN01-SCREEN02-MATCH-SCREEN03-CONTAINER-WIDTH-20260915:
+    // misma fórmula EXACTA ya aprobada por el owner en
+    // `RegisterPage._buildPhoneLandscape` (SCREEN_03 — fuente de verdad
+    // única, ver ese archivo) — antes `(width * 0.56).clamp(260, 380)`.
+    // Reemplazada, no reinventada, para que las 3 pantallas de auth
+    // compartan la misma sensación visual de "contenedor más flaco" en
+    // landscape compacto.
+    final double panelWidth = (MediaQuery.of(context).size.width * 0.3696).clamp(270.0, 343.2);
 
     return Stack(
       key: const Key('login-landscape-layout'),
@@ -666,6 +673,7 @@ class _LoginPageState extends ConsumerState<LoginPage> {
             child: Padding(
               padding: const EdgeInsets.symmetric(horizontal: AppSpacing.md, vertical: AppSpacing.sm),
               child: ConstrainedBox(
+                key: const Key('login-landscape-panel-width'),
                 constraints: BoxConstraints(maxWidth: panelWidth),
                 child: SingleChildScrollView(
                   child: _buildFormColumn(
