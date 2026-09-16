@@ -273,6 +273,14 @@ void main() {
       );
       expect(bars.length, 3, reason: '$label debe mostrar exactamente 3 líneas indicadoras');
 
+      // KORIXA-SCREEN01-LANDSCAPE-INDICATOR-BARS-REFINEMENT-20260915:
+      // 20×4 (antes 16×3) — cada barra mide el `Container` completo, sin
+      // importar si es la activa o una inactiva.
+      for (final Container bar in bars) {
+        expect(bar.constraints?.maxWidth, 20.0, reason: '$label: cada barra debe medir 20 de largo');
+        expect(bar.constraints?.maxHeight, 4.0, reason: '$label: cada barra debe medir 4 de grosor');
+      }
+
       // KORIXA-SCREEN01-SCREEN02-CONTROLS-MATCH-RENDERED-TITLE-LENGTH-
       // 20260915: el CTA ya NO es un porcentaje de `contentMaxWidth`
       // (fórmula de SCREEN_03) ni los 630px del contenedor del título
@@ -323,6 +331,46 @@ void main() {
       );
     });
   });
+
+  // ---------------------------------------------------------------------
+  // KORIXA-SCREEN01-LANDSCAPE-INDICATOR-BARS-REFINEMENT-20260915: las 3
+  // barras del indicador deben medir 20×4 (antes 16×3) en los 5
+  // viewports obligatorios, sin overflow y sin perder el centrado
+  // compartido con el CTA.
+  // ---------------------------------------------------------------------
+  const List<Size> indicatorBarsRefinementViewports = <Size>[
+    Size(740, 360),
+    Size(812, 375),
+    Size(844, 390),
+    Size(915, 412),
+    Size(932, 430),
+  ];
+
+  for (final Size size in indicatorBarsRefinementViewports) {
+    testWidgets(
+      'WELCOME_LANDSCAPE_${size.width.toInt()}x${size.height.toInt()}_INDICATOR_BARS_REFINED = PASS',
+      (WidgetTester tester) async {
+        await pumpWelcomePage(tester, surfaceSize: size);
+        expect(tester.takeException(), isNull, reason: 'no debe haber overflow en ${size.width.toInt()}x${size.height.toInt()}');
+
+        final Iterable<Container> bars = tester.widgetList<Container>(
+          find.descendant(of: find.byKey(const Key('welcome-indicator-row')), matching: find.byType(Container)),
+        );
+        expect(bars.length, 3);
+        for (final Container bar in bars) {
+          expect(bar.constraints?.maxWidth, 20.0, reason: 'largo nuevo de cada barra (antes 16)');
+          expect(bar.constraints?.maxHeight, 4.0, reason: 'grosor nuevo de cada barra (antes 3)');
+        }
+
+        // El indicador debe seguir compartiendo centro horizontal con el
+        // CTA — sin cambios por este ajuste, que solo toca el tamaño de
+        // las barras, no su alineación/centrado.
+        final Offset ctaCenter = tester.getCenter(find.byKey(const Key('welcome-landscape-cta')));
+        final Offset indicatorCenter = tester.getCenter(find.byKey(const Key('welcome-indicator-row')));
+        expect(indicatorCenter.dx, closeTo(ctaCenter.dx, 0.5));
+      },
+    );
+  }
 
   // ---------------------------------------------------------------------
   // KORIXA-SCREEN01-SCREEN02-MATCH-SCREEN03-CONTAINER-WIDTH-20260915:

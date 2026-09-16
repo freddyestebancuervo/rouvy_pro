@@ -772,9 +772,19 @@ class _PhoneLandscapeHeroImage extends StatelessWidget {
   }
 }
 
-/// Indicador de teléfono en horizontal — mismas 3 barras, aún más
-/// compactas que las de portrait (16×3, separación 4) para el alto
-/// reducido disponible.
+/// Indicador de teléfono en horizontal — mismas 3 barras (1 activa + 2
+/// inactivas), mismo orden/gradiente/color que el resto de la app.
+///
+/// KORIXA-SCREEN01-LANDSCAPE-INDICATOR-BARS-REFINEMENT-20260915: 20×4
+/// (antes 16×3) — el dueño pidió verlas "un poco más largas y un poco
+/// más gruesas" sin exagerar. +25% de largo (16→20) y +33% de grosor
+/// (3→4, el incremento entero más chico posible ya que `barHeight` se
+/// renderiza en píxeles físicos íntegros). `gap` se mantiene en 4 —el
+/// encargo pide conservar "la misma separación visual coherente entre
+/// barras", y ese valor no cambia el look de la separación, solo el
+/// tamaño de las barras en sí. Exclusivo de esta composición (phone
+/// landscape de SCREEN_01) — portrait/desktop siguen con sus propios
+/// tamaños (18×4 y 24×4 respectivamente, sin tocar).
 class _PhoneLandscapeOnboardingIndicator extends StatelessWidget {
   const _PhoneLandscapeOnboardingIndicator();
 
@@ -782,8 +792,8 @@ class _PhoneLandscapeOnboardingIndicator extends StatelessWidget {
   Widget build(BuildContext context) {
     return const ThreeBarIndicator(
       key: Key('welcome-indicator-row'),
-      barWidth: 16,
-      barHeight: 3,
+      barWidth: 20,
+      barHeight: 4,
       gap: 4,
     );
   }
