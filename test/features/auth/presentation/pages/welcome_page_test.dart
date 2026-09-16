@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/rendering.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 import 'package:rouvy_pro/app/theme/app_colors.dart';
@@ -351,6 +352,50 @@ void main() {
           reason: 'WELCOME_LANDSCAPE_${size.width.toInt()}x${size.height.toInt()}_MATCHES_SCREEN03_WIDTH: '
               'ancho=$width, esperado≈$expectedWidth (misma fórmula que SCREEN_03)',
         );
+      },
+    );
+  }
+
+  // ---------------------------------------------------------------------
+  // KORIXA-SCREEN01-SCREEN02-TITLE-SINGLE-LINE-LANDSCAPE-20260915: el
+  // título debe quedar en UNA sola línea en los 5 viewports requeridos,
+  // sin ensanchar el bloque de contenido (`welcome-content-max-width`,
+  // que sigue midiendo exactamente lo mismo que antes, ver el grupo de
+  // arriba) y sin reducir `fontSize`.
+  // ---------------------------------------------------------------------
+  const List<Size> titleSingleLineViewports = <Size>[
+    Size(740, 360),
+    Size(812, 375),
+    Size(844, 390),
+    Size(915, 412),
+    Size(932, 430),
+  ];
+
+  for (final Size size in titleSingleLineViewports) {
+    testWidgets(
+      'WELCOME_LANDSCAPE_${size.width.toInt()}x${size.height.toInt()}_TITLE_SINGLE_LINE = PASS',
+      (WidgetTester tester) async {
+        await pumpWelcomePage(tester, surfaceSize: size);
+        expect(tester.takeException(), isNull, reason: 'no debe haber overflow en ${size.width.toInt()}x${size.height.toInt()}');
+
+        final RenderParagraph titleParagraph = tester.renderObject<RenderParagraph>(find.byKey(const Key('welcome-title')));
+        expect(
+          titleParagraph.didExceedMaxLines,
+          isFalse,
+          reason: 'WELCOME_LANDSCAPE_${size.width.toInt()}x${size.height.toInt()}_TITLE_SINGLE_LINE: '
+              '"Conecta tu energía." debe entrar en una sola línea',
+        );
+
+        // fontSize/fontWeight no cambian por esta tarea (ya eran 32/w800).
+        final Text title = tester.widget<Text>(find.byKey(const Key('welcome-title')));
+        expect(title.style?.fontSize, 32);
+        expect(title.style?.fontWeight, FontWeight.w800);
+
+        // El ancho del bloque de campos/CTA/subtítulo NO debe cambiar
+        // (sigue dentro del clamp de SCREEN_03, 270-343.2).
+        final double contentWidth = tester.getSize(find.byKey(const Key('welcome-content-max-width'))).width;
+        expect(contentWidth, greaterThanOrEqualTo(270.0));
+        expect(contentWidth, lessThanOrEqualTo(343.2));
       },
     );
   }

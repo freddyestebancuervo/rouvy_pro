@@ -3,7 +3,7 @@ import 'dart:async';
 import 'package:dartz/dartz.dart';
 import 'package:flutter/foundation.dart' show debugDefaultTargetPlatformOverride;
 import 'package:flutter/material.dart';
-import 'package:flutter/semantics.dart';
+import 'package:flutter/rendering.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:mocktail/mocktail.dart';
@@ -2013,6 +2013,46 @@ void main() {
         final Text title = tester.widget<Text>(find.byKey(const Key('login-title')));
         expect(title.style?.fontSize, 32, reason: 'debe coincidir con el tamaño del título de SCREEN_01 (32px)');
         expect(title.style?.fontWeight, FontWeight.w800, reason: 'debe coincidir con el peso del título de SCREEN_01 (w800)');
+      },
+    );
+  }
+
+  // ---------------------------------------------------------------------
+  // KORIXA-SCREEN01-SCREEN02-TITLE-SINGLE-LINE-LANDSCAPE-20260915: el
+  // título debe quedar en UNA sola línea en los 5 viewports requeridos,
+  // sin ensanchar el panel de campos/CTA (`login-landscape-panel-width`,
+  // que sigue midiendo exactamente lo mismo que antes, ver el grupo
+  // `MATCHES_SCREEN03_WIDTH` de arriba) y sin reducir `fontSize`.
+  // ---------------------------------------------------------------------
+  const List<Size> titleSingleLineViewports = <Size>[
+    Size(740, 360),
+    Size(812, 375),
+    Size(844, 390),
+    Size(915, 412),
+    Size(932, 430),
+  ];
+
+  for (final Size size in titleSingleLineViewports) {
+    testWidgets(
+      'LOGIN_LANDSCAPE_${size.width.toInt()}x${size.height.toInt()}_TITLE_SINGLE_LINE = PASS',
+      (WidgetTester tester) async {
+        final MockAuthRepository repository = MockAuthRepository();
+        await pumpLoginPage(tester, repository, surfaceSize: size);
+        expect(tester.takeException(), isNull, reason: 'no debe haber overflow en ${size.width.toInt()}x${size.height.toInt()}');
+
+        final RenderParagraph titleParagraph = tester.renderObject<RenderParagraph>(find.byKey(const Key('login-title')));
+        expect(
+          titleParagraph.didExceedMaxLines,
+          isFalse,
+          reason: 'LOGIN_LANDSCAPE_${size.width.toInt()}x${size.height.toInt()}_TITLE_SINGLE_LINE: '
+              '"Bienvenido de nuevo" debe entrar en una sola línea',
+        );
+
+        // El ancho del panel de campos/CTA NO debe cambiar (misma
+        // fórmula 0.3696 clamp(270, 343.2) de siempre).
+        final double panelWidth = tester.getSize(find.byKey(const Key('login-landscape-panel-width'))).width;
+        expect(panelWidth, greaterThanOrEqualTo(270.0));
+        expect(panelWidth, lessThanOrEqualTo(343.2));
       },
     );
   }

@@ -527,6 +527,21 @@ class _PhoneLandscapeWelcomeContent extends StatelessWidget {
     return (viewportWidth * 0.3696).clamp(270.0, 343.2);
   }
 
+  /// KORIXA-SCREEN01-SCREEN02-TITLE-SINGLE-LINE-LANDSCAPE-20260915: ancho
+  /// EXCLUSIVO del bloque de título, deliberadamente desacoplado de
+  /// [_contentWidthFor] (que sigue gobernando SOLO subtítulo/indicador/CTA,
+  /// sin cambios). El dueño pidió una sola línea para "Conecta tu
+  /// energía." sin ensanchar el formulario — 630 es el mínimo medido
+  /// (`RenderParagraph.didExceedMaxLines`, ver informe) con margen de
+  /// seguridad para que el título quepa en una línea a 32px/w800 en los 5
+  /// viewports requeridos; el `math.min` contra el ancho disponible es
+  /// puramente defensivo (nunca se activa en los viewports pedidos, todos
+  /// ≥740, con ≥716px disponibles tras el padding).
+  static double _titleBlockWidthFor(double viewportWidth) {
+    final double available = viewportWidth - 2 * AppSpacing.md;
+    return available < 630.0 ? available : 630.0;
+  }
+
   @override
   Widget build(BuildContext context) {
     final TextTheme textTheme = Theme.of(context).textTheme;
@@ -534,6 +549,7 @@ class _PhoneLandscapeWelcomeContent extends StatelessWidget {
     return LayoutBuilder(
       builder: (BuildContext context, BoxConstraints constraints) {
         final double contentMaxWidth = _contentWidthFor(constraints.maxWidth);
+        final double titleBlockWidth = _titleBlockWidthFor(constraints.maxWidth);
         // KORIXA-SCREEN01-CENTER-PAGE-INDICATORS-20260910: mismo ancho
         // que usa el CTA de abajo (`welcome-landscape-cta`) — una sola
         // fuente de verdad para que el indicador y el botón compartan
@@ -551,103 +567,131 @@ class _PhoneLandscapeWelcomeContent extends StatelessWidget {
             SafeArea(
               child: Align(
                 alignment: Alignment.centerLeft,
-                child: ConstrainedBox(
-                  key: const Key('welcome-content-max-width'),
-                  constraints: BoxConstraints(maxWidth: contentMaxWidth),
+                child: Padding(
+                  // Igual que portrait: si el alto disponible es
+                  // excepcionalmente chico (texto localizado más
+                  // largo, escala de fuente de accesibilidad alta),
+                  // el contenido se desplaza en vez de desbordar —
+                  // nunca cambia a la composición de escritorio por
+                  // falta de espacio.
+                  padding: const EdgeInsets.symmetric(horizontal: AppSpacing.md, vertical: AppSpacing.sm),
                   child: SingleChildScrollView(
-                    // Igual que portrait: si el alto disponible es
-                    // excepcionalmente chico (texto localizado más
-                    // largo, escala de fuente de accesibilidad alta),
-                    // el contenido se desplaza en vez de desbordar —
-                    // nunca cambia a la composición de escritorio por
-                    // falta de espacio.
-                    padding: const EdgeInsets.symmetric(horizontal: AppSpacing.md, vertical: AppSpacing.sm),
                     child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.stretch,
+                      // KORIXA-SCREEN01-SCREEN02-TITLE-SINGLE-LINE-
+                      // LANDSCAPE-20260915: `start` (antes `stretch`) —
+                      // título y el resto del contenido ahora declaran
+                      // su propio ancho explícito (ver abajo) en vez de
+                      // heredar el de esta columna; ambos comparten el
+                      // mismo borde izquierdo sin necesidad de stretch.
+                      crossAxisAlignment: CrossAxisAlignment.start,
                       mainAxisSize: MainAxisSize.min,
                       children: <Widget>[
-                        Text(
-                          l10n.welcomeTitle,
-                          textAlign: TextAlign.left,
-                          maxLines: 2,
-                          overflow: TextOverflow.ellipsis,
-                          // `fontSize` 32 — el extremo más grande del
-                          // rango 28-34 pedido en la iteración anterior;
-                          // el nuevo hero deja mucho más ancho seguro,
-                          // así que ya no hace falta quedarse en el
-                          // extremo conservador. Sin `color:` explícito
-                          // a propósito — `titleLarge` ya hereda
-                          // `DarkTech.textPrimary` vía `AppTheme.darkTech`;
-                          // forzar `Colors.white` rompió antes la
-                          // garantía "Dark Tech gana sobre el tema
-                          // exterior" (`OUTER_LIGHT_THEME_DARK_TECH`).
-                          style: textTheme.titleLarge?.copyWith(fontSize: 32, fontWeight: FontWeight.w800),
-                        ),
-                        const SizedBox(height: AppSpacing.sm),
-                        Text(
-                          l10n.welcomeSubtitle,
-                          textAlign: TextAlign.left,
-                          // Con el ancho de columna ahora real (34-40%
-                          // del viewport, no los 250px fijos de la
-                          // versión anterior), el subtítulo completo
-                          // entra en 2 líneas en los 3 tamaños
-                          // requeridos — verificado con captura real.
-                          maxLines: 2,
-                          overflow: TextOverflow.ellipsis,
-                          // `bodyLarge` (16, como el subtítulo de
-                          // portrait) — el `bodyMedium` (14) de la
-                          // versión anterior era una concesión al ancho
-                          // acotado de esa foto, ya no necesaria.
-                          style: textTheme.bodyLarge?.copyWith(color: DarkTech.textSecondary),
-                        ),
-                        const SizedBox(height: AppSpacing.md),
-                        // KORIXA-SCREEN01-CENTER-PAGE-INDICATORS-20260910:
-                        // antes el indicador quedaba estirado a lo ancho
-                        // completo de la columna (`crossAxisAlignment.
-                        // stretch`) con sus barras pegadas a la izquierda
-                        // — el CTA de abajo, en cambio, es más angosto
-                        // que la columna (`ctaWidth`, 90% del contenido).
-                        // Mismo patrón que en desktop: se envuelve en un
-                        // `SizedBox` del ancho EXACTO del CTA + `Align`
-                        // al mismo borde izquierdo, luego `Center` adentro
-                        // — así ambos comparten centro horizontal real.
-                        Align(
-                          alignment: Alignment.centerLeft,
-                          child: SizedBox(
-                            width: ctaWidth,
-                            child: const Center(child: _PhoneLandscapeOnboardingIndicator()),
+                        SizedBox(
+                          key: const Key('welcome-title-block-width'),
+                          width: titleBlockWidth,
+                          child: Text(
+                            l10n.welcomeTitle,
+                            key: const Key('welcome-title'),
+                            textAlign: TextAlign.left,
+                            // KORIXA-SCREEN01-SCREEN02-TITLE-SINGLE-LINE-
+                            // LANDSCAPE-20260915: `maxLines` 1 (antes 2)
+                            // — el dueño pidió explícitamente una sola
+                            // línea; el bloque de título ahora tiene
+                            // ancho propio suficiente (ver
+                            // [_titleBlockWidthFor]) para lograrlo sin
+                            // reducir `fontSize`. `overflow: ellipsis`
+                            // se mantiene como red de seguridad, no como
+                            // comportamiento esperado.
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            // `fontSize` 32 — el extremo más grande del
+                            // rango 28-34 pedido en la iteración anterior;
+                            // el nuevo hero deja mucho más ancho seguro,
+                            // así que ya no hace falta quedarse en el
+                            // extremo conservador. Sin `color:` explícito
+                            // a propósito — `titleLarge` ya hereda
+                            // `DarkTech.textPrimary` vía `AppTheme.darkTech`;
+                            // forzar `Colors.white` rompió antes la
+                            // garantía "Dark Tech gana sobre el tema
+                            // exterior" (`OUTER_LIGHT_THEME_DARK_TECH`).
+                            style: textTheme.titleLarge?.copyWith(fontSize: 32, fontWeight: FontWeight.w800),
                           ),
                         ),
-                        const SizedBox(height: AppSpacing.md),
-                        // KORIXA-SCREEN01-LANDSCAPE-CTA-MICRO-REDUCTION-
-                        // 20260906: el dueño pidió el CTA "un poco menos
-                        // dominante" — 10% más angosto que el ancho que
-                        // stretch le daba antes (el mismo ancho que
-                        // título/subtítulo, que NO cambian — el indicador
-                        // comparte `ctaWidth` con el CTA desde KORIXA-
-                        // SCREEN01-CENTER-PAGE-INDICATORS-20260910, ver
-                        // arriba). `Align` en vez de dejar que el `Column`
-                        // (`crossAxisAlignment.stretch`) lo estire: solo
-                        // el CTA se saca de ese comportamiento, título y
-                        // subtítulo siguen ocupando el ancho completo de
-                        // la columna exactamente igual que antes. Alto
-                        // sin cambios (56, dentro del rango 52-58 pedido)
-                        // — el encargo pide reducir SOLO el ancho.
-                        Align(
-                          alignment: Alignment.centerLeft,
-                          child: SizedBox(
-                            width: ctaWidth,
-                            child: PrimaryGradientButton(
-                              key: const Key('welcome-landscape-cta'),
-                              label: l10n.welcomeGetStarted,
-                              // KORIXA-WELCOME-SINGLE-CTA-NAVIGATION-
-                              // PR127-20260910: navega a
-                              // `AppRoute.login` — ver docblock de
-                              // [WelcomePage].
-                              onPressed: () => context.go(AppRoute.login),
-                              height: 56,
-                              fontSize: 16,
-                            ),
+                        const SizedBox(height: AppSpacing.sm),
+                        ConstrainedBox(
+                          key: const Key('welcome-content-max-width'),
+                          constraints: BoxConstraints(maxWidth: contentMaxWidth),
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.stretch,
+                            mainAxisSize: MainAxisSize.min,
+                            children: <Widget>[
+                              Text(
+                                l10n.welcomeSubtitle,
+                                textAlign: TextAlign.left,
+                                // Con el ancho de columna ahora real (34-40%
+                                // del viewport, no los 250px fijos de la
+                                // versión anterior), el subtítulo completo
+                                // entra en 2 líneas en los 3 tamaños
+                                // requeridos — verificado con captura real.
+                                maxLines: 2,
+                                overflow: TextOverflow.ellipsis,
+                                // `bodyLarge` (16, como el subtítulo de
+                                // portrait) — el `bodyMedium` (14) de la
+                                // versión anterior era una concesión al ancho
+                                // acotado de esa foto, ya no necesaria.
+                                style: textTheme.bodyLarge?.copyWith(color: DarkTech.textSecondary),
+                              ),
+                              const SizedBox(height: AppSpacing.md),
+                              // KORIXA-SCREEN01-CENTER-PAGE-INDICATORS-20260910:
+                              // antes el indicador quedaba estirado a lo ancho
+                              // completo de la columna (`crossAxisAlignment.
+                              // stretch`) con sus barras pegadas a la izquierda
+                              // — el CTA de abajo, en cambio, es más angosto
+                              // que la columna (`ctaWidth`, 90% del contenido).
+                              // Mismo patrón que en desktop: se envuelve en un
+                              // `SizedBox` del ancho EXACTO del CTA + `Align`
+                              // al mismo borde izquierdo, luego `Center` adentro
+                              // — así ambos comparten centro horizontal real.
+                              Align(
+                                alignment: Alignment.centerLeft,
+                                child: SizedBox(
+                                  width: ctaWidth,
+                                  child: const Center(child: _PhoneLandscapeOnboardingIndicator()),
+                                ),
+                              ),
+                              const SizedBox(height: AppSpacing.md),
+                              // KORIXA-SCREEN01-LANDSCAPE-CTA-MICRO-REDUCTION-
+                              // 20260906: el dueño pidió el CTA "un poco menos
+                              // dominante" — 10% más angosto que el ancho que
+                              // stretch le daba antes (el mismo ancho que
+                              // título/subtítulo, que NO cambian — el indicador
+                              // comparte `ctaWidth` con el CTA desde KORIXA-
+                              // SCREEN01-CENTER-PAGE-INDICATORS-20260910, ver
+                              // arriba). `Align` en vez de dejar que el `Column`
+                              // (`crossAxisAlignment.stretch`) lo estire: solo
+                              // el CTA se saca de ese comportamiento, título y
+                              // subtítulo siguen ocupando el ancho completo de
+                              // la columna exactamente igual que antes. Alto
+                              // sin cambios (56, dentro del rango 52-58 pedido)
+                              // — el encargo pide reducir SOLO el ancho.
+                              Align(
+                                alignment: Alignment.centerLeft,
+                                child: SizedBox(
+                                  width: ctaWidth,
+                                  child: PrimaryGradientButton(
+                                    key: const Key('welcome-landscape-cta'),
+                                    label: l10n.welcomeGetStarted,
+                                    // KORIXA-WELCOME-SINGLE-CTA-NAVIGATION-
+                                    // PR127-20260910: navega a
+                                    // `AppRoute.login` — ver docblock de
+                                    // [WelcomePage].
+                                    onPressed: () => context.go(AppRoute.login),
+                                    height: 56,
+                                    fontSize: 16,
+                                  ),
+                                ),
+                              ),
+                            ],
                           ),
                         ),
                       ],

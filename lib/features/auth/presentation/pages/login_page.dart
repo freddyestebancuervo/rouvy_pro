@@ -657,6 +657,19 @@ class _LoginPageState extends ConsumerState<LoginPage> {
     // compartan la misma sensación visual de "contenedor más flaco" en
     // landscape compacto.
     final double panelWidth = (MediaQuery.of(context).size.width * 0.3696).clamp(270.0, 343.2);
+    // KORIXA-SCREEN01-SCREEN02-TITLE-SINGLE-LINE-LANDSCAPE-20260915: ancho
+    // EXCLUSIVO del bloque de título, deliberadamente desacoplado de
+    // `panelWidth` (que sigue gobernando SOLO campos/CTA, sin cambios, vía
+    // `narrowContentWidth` más abajo). 630 es el mínimo medido
+    // (`RenderParagraph.didExceedMaxLines`, ver informe) con margen de
+    // seguridad para que "Bienvenido de nuevo" quepa en una línea a
+    // 32px/w800 en los 5 viewports requeridos — mismo valor que
+    // `WelcomePage._titleBlockWidthFor` (misma fuente de verdad, título
+    // idéntico en tamaño/peso). El `math.min` contra el ancho disponible
+    // es puramente defensivo (nunca se activa en los viewports pedidos).
+    final double screenWidth = MediaQuery.of(context).size.width;
+    final double titleBlockAvailable = screenWidth - 2 * AppSpacing.md;
+    final double titleBlockWidth = titleBlockAvailable < 630.0 ? titleBlockAvailable : 630.0;
 
     return Stack(
       key: const Key('login-landscape-layout'),
@@ -673,8 +686,8 @@ class _LoginPageState extends ConsumerState<LoginPage> {
             child: Padding(
               padding: const EdgeInsets.symmetric(horizontal: AppSpacing.md, vertical: AppSpacing.sm),
               child: ConstrainedBox(
-                key: const Key('login-landscape-panel-width'),
-                constraints: BoxConstraints(maxWidth: panelWidth),
+                key: const Key('login-landscape-title-block-width'),
+                constraints: BoxConstraints(maxWidth: titleBlockWidth),
                 child: SingleChildScrollView(
                   child: _buildFormColumn(
                     context: context,
@@ -686,6 +699,8 @@ class _LoginPageState extends ConsumerState<LoginPage> {
                     logoHeight: 32,
                     compact: true,
                     floatingOverPhoto: true,
+                    narrowContentWidth: panelWidth,
+                    narrowContentKey: 'login-landscape-panel-width',
                   ),
                 ),
               ),
@@ -981,6 +996,29 @@ class _LoginPageState extends ConsumerState<LoginPage> {
     // el dueño pidió que este grupo se sienta "más junto", sin tocar
     // `sectionGap`/`dividerGap` en el resto del formulario.
     bool tightenBottomActions = false,
+    // KORIXA-SCREEN01-SCREEN02-TITLE-SINGLE-LINE-LANDSCAPE-20260915: `null`
+    // (default) preserva el comportamiento EXACTO de siempre para
+    // portrait/desktop — título/subtítulo/campos/CTA siguen todos
+    // estirados al mismo ancho de columna (`crossAxisAlignment.stretch`
+    // de [content]). Cuando no es `null` (SOLO phone landscape, ver
+    // [_buildPhoneLandscape]), subtítulo+campos+CTA+Google+enlaces se
+    // envuelven en su propio `SizedBox` de este ancho (el `panelWidth`
+    // aprobado de siempre, SIN CAMBIOS) para que solo el título/logo de
+    // arriba puedan usar el ancho más generoso que le da su propio
+    // `ConstrainedBox` exterior — el objetivo es una sola línea en el
+    // título sin re-ensanchar campos/CTA.
+    double? narrowContentWidth,
+    // Alineamiento horizontal del bloque re-angostado dentro del bloque
+    // ancho de título — debe coincidir con el borde de anclaje real del
+    // panel (`centerRight` en Login, panel anclado a la derecha) para que
+    // campos/CTA queden exactamente en la misma posición que antes.
+    AlignmentGeometry narrowContentAlignment = Alignment.centerRight,
+    // Mismo `Key` que antes tenía el `ConstrainedBox` exterior
+    // (`login-landscape-panel-width`) — se reubica aquí, en el `SizedBox`
+    // que ahora sí mide el ancho real de campos/CTA, para que las
+    // pruebas `LOGIN_LANDSCAPE_*_MATCHES_SCREEN03_WIDTH` (ya aprobadas,
+    // tarea anterior) seguir midiendo exactamente lo mismo sin cambios.
+    String? narrowContentKey,
   }) {
     final TextTheme textTheme = Theme.of(context).textTheme;
     final double sectionGap = compact ? AppSpacing.sm : AppSpacing.xl;
@@ -1052,7 +1090,28 @@ class _LoginPageState extends ConsumerState<LoginPage> {
       // algún día el texto ocupa 2 líneas de distinto largo); el
       // centrado de la caja en sí respecto a la columna de 550 lo da
       // `crossAxisAlignment.center` en [content] más abajo.
-      textAlign: (isDesktopScale || matchScreen01Typography) ? TextAlign.center : null,
+      // KORIXA-SCREEN01-SCREEN02-TITLE-SINGLE-LINE-LANDSCAPE-20260915:
+      // `right` (antes `null`/`start`) SOLO en `compact` — el bloque de
+      // título ahora es más ancho que el panel de campos/CTA de abajo
+      // (`narrowContentWidth`, ver [_buildPhoneLandscape]); alinear el
+      // texto a la derecha mantiene su borde derecho pegado al mismo
+      // borde que fields/CTA (el panel está anclado a la derecha, ver
+      // `Align(alignment: Alignment.centerRight)`), en vez de que el
+      // título "flote" lejos hacia la izquierda dentro de su caja ancha.
+      textAlign: compact
+          ? TextAlign.right
+          : (isDesktopScale || matchScreen01Typography)
+              ? TextAlign.center
+              : null,
+      // KORIXA-SCREEN01-SCREEN02-TITLE-SINGLE-LINE-LANDSCAPE-20260915:
+      // `maxLines` 1 + `overflow: ellipsis` SOLO en `compact` — el dueño
+      // pidió explícitamente una sola línea para "Bienvenido de nuevo";
+      // el bloque de título ahora tiene ancho propio suficiente (ver
+      // [_buildPhoneLandscape]) para lograrlo sin reducir `fontSize`.
+      // Portrait/desktop no se tocan (sin `maxLines` explícito, mismo
+      // comportamiento de siempre).
+      maxLines: compact ? 1 : null,
+      overflow: compact ? TextOverflow.ellipsis : null,
       style: textTheme.headlineMedium?.copyWith(
         // KORIXA-SCREEN02-SCREEN03-MATCH-SCREEN01-TITLE-SIZE-20260915:
         // 32 (antes 22) en `compact` (phone landscape, único llamador con
@@ -1367,10 +1426,39 @@ class _LoginPageState extends ConsumerState<LoginPage> {
                 SizedBox(height: compact ? AppSpacing.sm : AppSpacing.lg),
               ],
               titleWidget,
-              SizedBox(height: titleToSubtitleGap ?? AppSpacing.sm),
-              subtitleWidget,
-              SizedBox(height: effectiveSectionGap),
-              ...controlChildren,
+              // KORIXA-SCREEN01-SCREEN02-TITLE-SINGLE-LINE-LANDSCAPE-
+              // 20260915: cuando `narrowContentWidth` no es `null` (SOLO
+              // phone landscape), subtítulo+campos+CTA+Google+enlaces se
+              // re-angostan a ese ancho (el `panelWidth` aprobado de
+              // siempre) dentro de un `SizedBox` propio, alineado al
+              // mismo borde que ancla el panel — el título de arriba
+              // queda solo, libre de usar el ancho más generoso de su
+              // `ConstrainedBox` exterior. Portrait/desktop (`null`)
+              // preservan exactamente la misma lista plana de siempre.
+              if (narrowContentWidth != null)
+                Align(
+                  alignment: narrowContentAlignment,
+                  child: SizedBox(
+                    key: narrowContentKey == null ? null : Key(narrowContentKey),
+                    width: narrowContentWidth,
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.stretch,
+                      mainAxisSize: MainAxisSize.min,
+                      children: <Widget>[
+                        SizedBox(height: titleToSubtitleGap ?? AppSpacing.sm),
+                        subtitleWidget,
+                        SizedBox(height: effectiveSectionGap),
+                        ...controlChildren,
+                      ],
+                    ),
+                  ),
+                )
+              else ...<Widget>[
+                SizedBox(height: titleToSubtitleGap ?? AppSpacing.sm),
+                subtitleWidget,
+                SizedBox(height: effectiveSectionGap),
+                ...controlChildren,
+              ],
             ],
           );
 
