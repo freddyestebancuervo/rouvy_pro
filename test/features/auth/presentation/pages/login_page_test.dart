@@ -1957,9 +1957,17 @@ void main() {
 
   // ---------------------------------------------------------------------
   // KORIXA-SCREEN01-SCREEN02-MATCH-SCREEN03-CONTAINER-WIDTH-20260915:
-  // verifica el ancho exacto del panel landscape contra la MISMA fórmula
-  // ya aprobada en `RegisterPage._buildPhoneLandscape` (SCREEN_03 —
-  // fuente de verdad), en los 5 viewports obligatorios.
+  // verifica el ancho exacto del SUBTÍTULO landscape contra la MISMA
+  // fórmula ya aprobada en `RegisterPage._buildPhoneLandscape` (SCREEN_03
+  // — fuente de verdad), en los 5 viewports obligatorios.
+  //
+  // KORIXA-SCREEN01-SCREEN02-CONTROLS-MATCH-RENDERED-TITLE-LENGTH-
+  // 20260915: campos/CTA/Google/enlaces ya NO viven en este ancho (ver
+  // el grupo `CONTROLS_MATCH_RENDERED_TITLE_LENGTH` más abajo, que ahora
+  // los mide contra el largo real renderizado del título) — el dueño
+  // pidió que solo el SUBTÍTULO conserve la fórmula de SCREEN_03. Esta
+  // prueba se actualiza (no se debilita) para medir el `Key`
+  // `login-landscape-subtitle-width`.
   // ---------------------------------------------------------------------
   const List<(Size, double)> screen03MatchedWidths = <(Size, double)>[
     (Size(740, 360), 273.5),
@@ -1971,19 +1979,84 @@ void main() {
 
   for (final (Size size, double expectedWidth) in screen03MatchedWidths) {
     testWidgets(
-      'LOGIN_LANDSCAPE_${size.width.toInt()}x${size.height.toInt()}_MATCHES_SCREEN03_WIDTH = PASS',
+      'LOGIN_LANDSCAPE_${size.width.toInt()}x${size.height.toInt()}_SUBTITLE_MATCHES_SCREEN03_WIDTH = PASS',
       (WidgetTester tester) async {
         final MockAuthRepository repository = MockAuthRepository();
         await pumpLoginPage(tester, repository, surfaceSize: size);
         expect(tester.takeException(), isNull);
 
-        final double width = tester.getSize(find.byKey(const Key('login-landscape-panel-width'))).width;
+        final double width = tester.getSize(find.byKey(const Key('login-landscape-subtitle-width'))).width;
         expect(
           width,
           closeTo(expectedWidth, 0.5),
-          reason: 'LOGIN_LANDSCAPE_${size.width.toInt()}x${size.height.toInt()}_MATCHES_SCREEN03_WIDTH: '
-              'ancho=$width, esperado≈$expectedWidth (misma fórmula que SCREEN_03)',
+          reason: 'LOGIN_LANDSCAPE_${size.width.toInt()}x${size.height.toInt()}_SUBTITLE_MATCHES_SCREEN03_WIDTH: '
+              'ancho=$width, esperado≈$expectedWidth (misma fórmula que SCREEN_03, ahora exclusiva del subtítulo)',
         );
+      },
+    );
+  }
+
+  // ---------------------------------------------------------------------
+  // KORIXA-SCREEN01-SCREEN02-CONTROLS-MATCH-RENDERED-TITLE-LENGTH-
+  // 20260915: email, contraseña, CTA principal y Google deben compartir
+  // el mismo ancho, y ese ancho debe aproximarse al largo REAL
+  // renderizado del título "Bienvenido de nuevo" (32px/w800) + el margen
+  // de seguridad de 8px — NO al `panelWidth` de SCREEN_03 (ver grupo de
+  // arriba, ahora exclusivo del subtítulo) ni a los 630px del contenedor
+  // del título.
+  // ---------------------------------------------------------------------
+  const List<Size> controlsMatchTitleWidthViewports = <Size>[
+    Size(740, 360),
+    Size(812, 375),
+    Size(844, 390),
+    Size(915, 412),
+    Size(932, 430),
+  ];
+
+  for (final Size size in controlsMatchTitleWidthViewports) {
+    testWidgets(
+      'LOGIN_LANDSCAPE_${size.width.toInt()}x${size.height.toInt()}_CONTROLS_MATCH_RENDERED_TITLE_LENGTH = PASS',
+      (WidgetTester tester) async {
+        final MockAuthRepository repository = MockAuthRepository();
+        await pumpLoginPage(tester, repository, surfaceSize: size);
+        expect(tester.takeException(), isNull, reason: 'no debe haber overflow en ${size.width.toInt()}x${size.height.toInt()}');
+
+        // Ancho intrínseco (natural, sin wrap) del texto ya renderizado
+        // — el `RenderParagraph` real de la app, no un `TextPainter`
+        // duplicado en el test. `.size.width` NO sirve acá: el título
+        // vive en una columna con `crossAxisAlignment.stretch`, así que
+        // su caja se estira al ancho del bloque de título (630 máx.),
+        // mucho más ancha que el texto en sí.
+        final double renderedTitleWidth = tester
+            .renderObject<RenderParagraph>(find.byKey(const Key('login-title')))
+            .getMaxIntrinsicWidth(double.infinity);
+        final double controlsWidth = tester.getSize(find.byKey(const Key('login-landscape-controls-width'))).width;
+        final double emailWidth = tester.getSize(find.byType(TextFormField).at(0)).width;
+        final double passwordWidth = tester.getSize(find.byType(TextFormField).at(1)).width;
+        final double ctaWidth = tester.getSize(find.byType(PrimaryGradientButton)).width;
+        final double googleWidth = tester.getSize(find.byType(GoogleSignInButton)).width;
+        final double ctaHeight = tester.getSize(find.byType(PrimaryGradientButton)).height;
+
+        // Los 4 controles deben compartir EXACTAMENTE el mismo ancho
+        // entre sí (todos viven en el mismo `SizedBox`).
+        expect(emailWidth, closeTo(controlsWidth, 0.5));
+        expect(passwordWidth, closeTo(controlsWidth, 0.5));
+        expect(ctaWidth, closeTo(controlsWidth, 0.5));
+        expect(googleWidth, closeTo(controlsWidth, 0.5));
+
+        // Ese ancho compartido debe aproximarse al largo real
+        // renderizado del título + el margen de seguridad de 8px — una
+        // diferencia mínima y razonable, no un valor pixel-perfecto.
+        final double expectedControlsWidth = renderedTitleWidth + 8.0;
+        expect(
+          controlsWidth,
+          closeTo(expectedControlsWidth, 0.5),
+          reason: 'CONTROL_WIDTH debe aproximarse a RENDERED_TITLE_TEXT_WIDTH + 8px de margen',
+        );
+
+        // El alto del CTA NO debe cambiar por esta tarea (habla de largo
+        // horizontal, no de grosor/altura).
+        expect(ctaHeight, 52, reason: 'CONTROL_HEIGHT_CHANGED debe ser NO');
       },
     );
   }
@@ -2020,9 +2093,17 @@ void main() {
   // ---------------------------------------------------------------------
   // KORIXA-SCREEN01-SCREEN02-TITLE-SINGLE-LINE-LANDSCAPE-20260915: el
   // título debe quedar en UNA sola línea en los 5 viewports requeridos,
-  // sin ensanchar el panel de campos/CTA (`login-landscape-panel-width`,
-  // que sigue midiendo exactamente lo mismo que antes, ver el grupo
-  // `MATCHES_SCREEN03_WIDTH` de arriba) y sin reducir `fontSize`.
+  // sin reducir `fontSize`.
+  //
+  // KORIXA-SCREEN01-SCREEN02-CONTROLS-MATCH-RENDERED-TITLE-LENGTH-
+  // 20260915: la aserción original de este grupo verificaba el panel de
+  // campos/CTA (`login-landscape-panel-width`) — ese `Key` ya no existe
+  // con ese significado (campos/CTA ahora viven en
+  // `login-landscape-controls-width`, angostado al largo real del
+  // título, ver grupo `CONTROLS_MATCH_RENDERED_TITLE_LENGTH`).
+  // Actualizada (no debilitada) para verificar en su lugar el SUBTÍTULO
+  // (`login-landscape-subtitle-width`), que sigue en la fórmula de
+  // SCREEN_03 sin cambios.
   // ---------------------------------------------------------------------
   const List<Size> titleSingleLineViewports = <Size>[
     Size(740, 360),
@@ -2048,11 +2129,12 @@ void main() {
               '"Bienvenido de nuevo" debe entrar en una sola línea',
         );
 
-        // El ancho del panel de campos/CTA NO debe cambiar (misma
-        // fórmula 0.3696 clamp(270, 343.2) de siempre).
-        final double panelWidth = tester.getSize(find.byKey(const Key('login-landscape-panel-width'))).width;
-        expect(panelWidth, greaterThanOrEqualTo(270.0));
-        expect(panelWidth, lessThanOrEqualTo(343.2));
+        // El ancho del SUBTÍTULO NO debe cambiar (misma fórmula 0.3696
+        // clamp(270, 343.2) de siempre) — campos/CTA ya no viven en este
+        // ancho, ver grupo `CONTROLS_MATCH_RENDERED_TITLE_LENGTH`.
+        final double subtitleWidth = tester.getSize(find.byKey(const Key('login-landscape-subtitle-width'))).width;
+        expect(subtitleWidth, greaterThanOrEqualTo(270.0));
+        expect(subtitleWidth, lessThanOrEqualTo(343.2));
       },
     );
   }

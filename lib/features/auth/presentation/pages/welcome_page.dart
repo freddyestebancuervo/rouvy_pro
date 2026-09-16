@@ -542,19 +542,57 @@ class _PhoneLandscapeWelcomeContent extends StatelessWidget {
     return available < 630.0 ? available : 630.0;
   }
 
+  /// KORIXA-SCREEN01-SCREEN02-CONTROLS-MATCH-RENDERED-TITLE-LENGTH-
+  /// 20260915: pequeño margen visual para que el control no quede
+  /// pegado exactamente a los extremos del texto medido — no es una
+  /// fórmula, solo evita un ancho pixel-perfecto frágil.
+  static const double _controlSafetyPadding = 8.0;
+
+  /// Ancho REAL renderizado de una línea de texto con la tipografía del
+  /// theme actual (misma fuente/escala de accesibilidad que ve la
+  /// persona) — `TextPainter` es la API estable de Flutter para esto, la
+  /// misma que usa el propio framework internamente en `RenderParagraph`.
+  /// Deliberadamente NO se asume un valor fijo (630, el ancho del
+  /// CONTENEDOR del título — ver [_titleBlockWidthFor], que sigue
+  /// gobernando SOLO ese contenedor, sin cambios): el dueño pidió el
+  /// largo real del TEXTO, que es más angosto y varía según el idioma/
+  /// escala de fuente activa.
+  static double _measureTextWidth(BuildContext context, String text, TextStyle? style) {
+    final TextPainter painter = TextPainter(
+      text: TextSpan(text: text, style: style),
+      textDirection: Directionality.of(context),
+      textScaler: MediaQuery.textScalerOf(context),
+      maxLines: 1,
+    )..layout();
+    return painter.size.width;
+  }
+
   @override
   Widget build(BuildContext context) {
     final TextTheme textTheme = Theme.of(context).textTheme;
+    // KORIXA-SCREEN01-SCREEN02-CONTROLS-MATCH-RENDERED-TITLE-LENGTH-
+    // 20260915: MISMO estilo que el `Text` del título de abajo
+    // (`textTheme.titleLarge` + fontSize 32 + w800) — si algún día ese
+    // estilo cambia, esta medición cambia con él automáticamente en vez
+    // de quedar desincronizada.
+    final TextStyle? titleStyle = textTheme.titleLarge?.copyWith(fontSize: 32, fontWeight: FontWeight.w800);
+    final double titleTextWidth = _measureTextWidth(context, l10n.welcomeTitle, titleStyle);
 
     return LayoutBuilder(
       builder: (BuildContext context, BoxConstraints constraints) {
         final double contentMaxWidth = _contentWidthFor(constraints.maxWidth);
         final double titleBlockWidth = _titleBlockWidthFor(constraints.maxWidth);
-        // KORIXA-SCREEN01-CENTER-PAGE-INDICATORS-20260910: mismo ancho
-        // que usa el CTA de abajo (`welcome-landscape-cta`) — una sola
-        // fuente de verdad para que el indicador y el botón compartan
-        // centro horizontal exacto sin duplicar la fórmula.
-        final double ctaWidth = (contentMaxWidth - 2 * AppSpacing.md) * 0.90;
+        // KORIXA-SCREEN01-SCREEN02-CONTROLS-MATCH-RENDERED-TITLE-LENGTH-
+        // 20260915: el CTA (y, vía esta misma variable, el indicador de
+        // arriba — KORIXA-SCREEN01-CENTER-PAGE-INDICATORS-20260910, una
+        // sola fuente de verdad para que ambos compartan centro
+        // horizontal) ahora usan el largo REAL renderizado del texto del
+        // título + un pequeño margen de seguridad — reemplaza la fórmula
+        // anterior (90% de `contentMaxWidth`, la fórmula angosta de
+        // SCREEN_03) y, sobre todo, reemplaza el error de la iteración
+        // previa (usar los 630px del CONTENEDOR del título en vez del
+        // texto en sí).
+        final double ctaWidth = titleTextWidth + _controlSafetyPadding;
 
         return Stack(
           fit: StackFit.expand,
@@ -621,77 +659,74 @@ class _PhoneLandscapeWelcomeContent extends StatelessWidget {
                         ConstrainedBox(
                           key: const Key('welcome-content-max-width'),
                           constraints: BoxConstraints(maxWidth: contentMaxWidth),
-                          child: Column(
-                            crossAxisAlignment: CrossAxisAlignment.stretch,
-                            mainAxisSize: MainAxisSize.min,
-                            children: <Widget>[
-                              Text(
-                                l10n.welcomeSubtitle,
-                                textAlign: TextAlign.left,
-                                // Con el ancho de columna ahora real (34-40%
-                                // del viewport, no los 250px fijos de la
-                                // versión anterior), el subtítulo completo
-                                // entra en 2 líneas en los 3 tamaños
-                                // requeridos — verificado con captura real.
-                                maxLines: 2,
-                                overflow: TextOverflow.ellipsis,
-                                // `bodyLarge` (16, como el subtítulo de
-                                // portrait) — el `bodyMedium` (14) de la
-                                // versión anterior era una concesión al ancho
-                                // acotado de esa foto, ya no necesaria.
-                                style: textTheme.bodyLarge?.copyWith(color: DarkTech.textSecondary),
-                              ),
-                              const SizedBox(height: AppSpacing.md),
-                              // KORIXA-SCREEN01-CENTER-PAGE-INDICATORS-20260910:
-                              // antes el indicador quedaba estirado a lo ancho
-                              // completo de la columna (`crossAxisAlignment.
-                              // stretch`) con sus barras pegadas a la izquierda
-                              // — el CTA de abajo, en cambio, es más angosto
-                              // que la columna (`ctaWidth`, 90% del contenido).
-                              // Mismo patrón que en desktop: se envuelve en un
-                              // `SizedBox` del ancho EXACTO del CTA + `Align`
-                              // al mismo borde izquierdo, luego `Center` adentro
-                              // — así ambos comparten centro horizontal real.
-                              Align(
-                                alignment: Alignment.centerLeft,
-                                child: SizedBox(
-                                  width: ctaWidth,
-                                  child: const Center(child: _PhoneLandscapeOnboardingIndicator()),
-                                ),
-                              ),
-                              const SizedBox(height: AppSpacing.md),
-                              // KORIXA-SCREEN01-LANDSCAPE-CTA-MICRO-REDUCTION-
-                              // 20260906: el dueño pidió el CTA "un poco menos
-                              // dominante" — 10% más angosto que el ancho que
-                              // stretch le daba antes (el mismo ancho que
-                              // título/subtítulo, que NO cambian — el indicador
-                              // comparte `ctaWidth` con el CTA desde KORIXA-
-                              // SCREEN01-CENTER-PAGE-INDICATORS-20260910, ver
-                              // arriba). `Align` en vez de dejar que el `Column`
-                              // (`crossAxisAlignment.stretch`) lo estire: solo
-                              // el CTA se saca de ese comportamiento, título y
-                              // subtítulo siguen ocupando el ancho completo de
-                              // la columna exactamente igual que antes. Alto
-                              // sin cambios (56, dentro del rango 52-58 pedido)
-                              // — el encargo pide reducir SOLO el ancho.
-                              Align(
-                                alignment: Alignment.centerLeft,
-                                child: SizedBox(
-                                  width: ctaWidth,
-                                  child: PrimaryGradientButton(
-                                    key: const Key('welcome-landscape-cta'),
-                                    label: l10n.welcomeGetStarted,
-                                    // KORIXA-WELCOME-SINGLE-CTA-NAVIGATION-
-                                    // PR127-20260910: navega a
-                                    // `AppRoute.login` — ver docblock de
-                                    // [WelcomePage].
-                                    onPressed: () => context.go(AppRoute.login),
-                                    height: 56,
-                                    fontSize: 16,
-                                  ),
-                                ),
-                              ),
-                            ],
+                          child: Text(
+                            l10n.welcomeSubtitle,
+                            textAlign: TextAlign.left,
+                            // Con el ancho de columna ahora real (34-40%
+                            // del viewport, no los 250px fijos de la
+                            // versión anterior), el subtítulo completo
+                            // entra en 2 líneas en los 3 tamaños
+                            // requeridos — verificado con captura real.
+                            maxLines: 2,
+                            overflow: TextOverflow.ellipsis,
+                            // `bodyLarge` (16, como el subtítulo de
+                            // portrait) — el `bodyMedium` (14) de la
+                            // versión anterior era una concesión al ancho
+                            // acotado de esa foto, ya no necesaria.
+                            style: textTheme.bodyLarge?.copyWith(color: DarkTech.textSecondary),
+                          ),
+                        ),
+                        const SizedBox(height: AppSpacing.md),
+                        // KORIXA-SCREEN01-CENTER-PAGE-INDICATORS-20260910:
+                        // antes el indicador quedaba estirado a lo ancho
+                        // completo de la columna (`crossAxisAlignment.
+                        // stretch`) con sus barras pegadas a la izquierda —
+                        // el CTA de abajo, en cambio, es más angosto que la
+                        // columna (`ctaWidth`). Se envuelve en un `SizedBox`
+                        // del ancho EXACTO del CTA + `Center` adentro — así
+                        // ambos comparten centro horizontal real.
+                        //
+                        // KORIXA-SCREEN01-SCREEN02-CONTROLS-MATCH-RENDERED-
+                        // TITLE-LENGTH-20260915: indicador y CTA se sacaron
+                        // del `ConstrainedBox` de `contentMaxWidth` (arriba,
+                        // ahora exclusivo del subtítulo) — ese ancho angosto
+                        // (fórmula de SCREEN_03) recortaba `ctaWidth` de
+                        // vuelta hacia abajo en viewports donde el texto del
+                        // título mide más que `contentMaxWidth`. Como
+                        // hermanos directos de la columna exterior (ancho
+                        // libre, sin `ConstrainedBox` de por medio), pueden
+                        // usar `ctaWidth` (el largo real del título +
+                        // margen) sin que nada lo recorte.
+                        SizedBox(
+                          width: ctaWidth,
+                          child: const Center(child: _PhoneLandscapeOnboardingIndicator()),
+                        ),
+                        const SizedBox(height: AppSpacing.md),
+                        // KORIXA-SCREEN01-LANDSCAPE-CTA-MICRO-REDUCTION-
+                        // 20260906 (histórico): el CTA dejó de estirarse al
+                        // ancho completo de la columna — alto sin cambios
+                        // (56, dentro del rango 52-58 pedido en esa tarea).
+                        //
+                        // KORIXA-SCREEN01-SCREEN02-CONTROLS-MATCH-RENDERED-
+                        // TITLE-LENGTH-20260915: `ctaWidth` = largo real
+                        // renderizado del título "Conecta tu energía."
+                        // (`TextPainter`, misma tipografía/fontSize 32/w800)
+                        // + un pequeño margen de seguridad — NO un
+                        // porcentaje de `contentMaxWidth` (tarea anterior a
+                        // esta) NI los 630px del contenedor del título
+                        // (error de la iteración previa, ya corregido).
+                        SizedBox(
+                          width: ctaWidth,
+                          child: PrimaryGradientButton(
+                            key: const Key('welcome-landscape-cta'),
+                            label: l10n.welcomeGetStarted,
+                            // KORIXA-WELCOME-SINGLE-CTA-NAVIGATION-
+                            // PR127-20260910: navega a
+                            // `AppRoute.login` — ver docblock de
+                            // [WelcomePage].
+                            onPressed: () => context.go(AppRoute.login),
+                            height: 56,
+                            fontSize: 16,
                           ),
                         ),
                       ],

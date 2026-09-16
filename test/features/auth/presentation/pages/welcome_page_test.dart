@@ -270,20 +270,32 @@ void main() {
       );
       expect(bars.length, 3, reason: '$label debe mostrar exactamente 3 líneas indicadoras');
 
-      // CTA responsivo — derivado del mismo `contentMaxWidth` acotado
-      // 270-343.2 (fórmula de SCREEN_03), nunca el ancho de 320+ fijo de
-      // portrait ni el de 550 de desktop. Rango holgado (230-300) para
-      // cubrir el CTA derivado en los 3 tamaños obligatorios sin fijar
-      // un valor exacto frágil.
+      // KORIXA-SCREEN01-SCREEN02-CONTROLS-MATCH-RENDERED-TITLE-LENGTH-
+      // 20260915: el CTA ya NO es un porcentaje de `contentMaxWidth`
+      // (fórmula de SCREEN_03) ni los 630px del contenedor del título
+      // (error de la iteración previa) — debe aproximarse al largo REAL
+      // renderizado del texto del título "Conecta tu energía." (mismo
+      // estilo: `titleLarge` + fontSize 32 + w800) + el margen de
+      // seguridad de 8px.
       expect(find.byKey(const Key('welcome-landscape-cta')), findsOneWidget);
       final Size ctaSize = tester.getSize(find.byKey(const Key('welcome-landscape-cta')));
-      expect(ctaSize.width, greaterThanOrEqualTo(230), reason: '$label: el CTA debe acercarse al nuevo rango angosto (fórmula SCREEN_03)');
-      expect(ctaSize.width, lessThanOrEqualTo(300), reason: '$label: el CTA no debe exceder el nuevo rango angosto (fórmula SCREEN_03)');
-      expect(ctaSize.height, greaterThanOrEqualTo(48), reason: '$label: el CTA debe seguir siendo táctil (>=48dp)');
+      final double renderedTitleWidth = tester
+          .renderObject<RenderParagraph>(find.byKey(const Key('welcome-title')))
+          .getMaxIntrinsicWidth(double.infinity);
+      final double expectedCtaWidth = renderedTitleWidth + 8.0;
+      expect(
+        ctaSize.width,
+        closeTo(expectedCtaWidth, 0.5),
+        reason: '$label: CONTROL_WIDTH debe aproximarse a RENDERED_TITLE_TEXT_WIDTH + 8px de margen',
+      );
+      expect(ctaSize.height, 56, reason: '$label: el alto del CTA NO debe cambiar por esta tarea');
 
       // KORIXA-SCREEN01-CENTER-PAGE-INDICATORS-20260910: el indicador
       // debe compartir el centro horizontal exacto del CTA, no quedar
-      // estirado/alineado a la izquierda del ancho completo de columna.
+      // estirado/alineado a la izquierda del ancho completo de columna
+      // — coherencia visual con el bloque compacto, pedida explícitamente
+      // por KORIXA-SCREEN01-SCREEN02-CONTROLS-MATCH-RENDERED-TITLE-
+      // LENGTH-20260915.
       final Offset ctaCenter = tester.getCenter(find.byKey(const Key('welcome-landscape-cta')));
       final Offset indicatorCenter = tester.getCenter(find.byKey(const Key('welcome-indicator-row')));
       expect(
@@ -292,27 +304,13 @@ void main() {
         reason: '$label: el indicador debe compartir el centro horizontal exacto del CTA',
       );
 
-      // El bloque de contenido debe quedar en el rango de SCREEN_03
-      // (270-343.2, fórmula `(width * 0.3696).clamp(270.0, 343.2)`) —
-      // con el hero nuevo, el margen libre real es de ~590-650px, muy
-      // por encima de este rango, así que no hay riesgo de invadir al
-      // ciclista.
+      // El bloque de SUBTÍTULO (ya no incluye indicador/CTA, ver arriba)
+      // debe quedar en el rango de SCREEN_03 (270-343.2, fórmula
+      // `(width * 0.3696).clamp(270.0, 343.2)`) — SIN CAMBIOS por esta
+      // tarea, que solo tocó el CTA/indicador.
       final Size contentSize = tester.getSize(find.byKey(const Key('welcome-content-max-width')));
       expect(contentSize.width, greaterThanOrEqualTo(270.0), reason: '$label: el contenido debe respetar el clamp mínimo de SCREEN_03');
       expect(contentSize.width, lessThanOrEqualTo(343.2), reason: '$label: el contenido no debe exceder el clamp máximo de SCREEN_03');
-
-      // KORIXA-SCREEN01-LANDSCAPE-CTA-MICRO-REDUCTION-20260906: el CTA
-      // debe quedar MEDIBLEMENTE más angosto que el ancho que le daría
-      // el stretch del `Column` (`contentSize.width` menos el padding
-      // horizontal, `AppSpacing.md` × 2) — si algún cambio futuro
-      // revierte el `Align`/`SizedBox` y el CTA vuelve a estirarse al
-      // ancho completo, esta aserción debe fallar.
-      final double stretchWidth = contentSize.width - 2 * 12;
-      expect(
-        ctaSize.width,
-        lessThan(stretchWidth - 1),
-        reason: '$label: el CTA debe ser más angosto que el ancho completo de la columna (reducción ~10%)',
-      );
 
       // El hero debe ser el dedicado de horizontal, nunca el vertical
       // de portrait ni el panorámico de escritorio.
@@ -352,6 +350,46 @@ void main() {
           reason: 'WELCOME_LANDSCAPE_${size.width.toInt()}x${size.height.toInt()}_MATCHES_SCREEN03_WIDTH: '
               'ancho=$width, esperado≈$expectedWidth (misma fórmula que SCREEN_03)',
         );
+      },
+    );
+  }
+
+  // ---------------------------------------------------------------------
+  // KORIXA-SCREEN01-SCREEN02-CONTROLS-MATCH-RENDERED-TITLE-LENGTH-
+  // 20260915: el CTA "Comenzar" debe aproximarse al largo REAL
+  // renderizado del texto del título "Conecta tu energía." (32px/w800) +
+  // el margen de seguridad de 8px, en los 5 viewports obligatorios.
+  // ---------------------------------------------------------------------
+  const List<Size> controlsMatchRenderedTitleLengthViewports = <Size>[
+    Size(740, 360),
+    Size(812, 375),
+    Size(844, 390),
+    Size(915, 412),
+    Size(932, 430),
+  ];
+
+  for (final Size size in controlsMatchRenderedTitleLengthViewports) {
+    testWidgets(
+      'WELCOME_LANDSCAPE_${size.width.toInt()}x${size.height.toInt()}_CONTROLS_MATCH_RENDERED_TITLE_LENGTH = PASS',
+      (WidgetTester tester) async {
+        await pumpWelcomePage(tester, surfaceSize: size);
+        expect(tester.takeException(), isNull, reason: 'no debe haber overflow en ${size.width.toInt()}x${size.height.toInt()}');
+
+        final double renderedTitleWidth = tester
+            .renderObject<RenderParagraph>(find.byKey(const Key('welcome-title')))
+            .getMaxIntrinsicWidth(double.infinity);
+        final double ctaWidth = tester.getSize(find.byKey(const Key('welcome-landscape-cta'))).width;
+        final double ctaHeight = tester.getSize(find.byKey(const Key('welcome-landscape-cta'))).height;
+        final double expectedCtaWidth = renderedTitleWidth + 8.0;
+
+        expect(
+          ctaWidth,
+          closeTo(expectedCtaWidth, 0.5),
+          reason: 'CONTROL_WIDTH debe aproximarse a RENDERED_TITLE_TEXT_WIDTH + 8px de margen '
+              '(RENDERED_TITLE_TEXT_WIDTH=$renderedTitleWidth, CONTROL_WIDTH=$ctaWidth, '
+              'DIFFERENCE_PX=${(ctaWidth - renderedTitleWidth).abs()})',
+        );
+        expect(ctaHeight, 56, reason: 'CONTROL_HEIGHT_CHANGED debe ser NO');
       },
     );
   }

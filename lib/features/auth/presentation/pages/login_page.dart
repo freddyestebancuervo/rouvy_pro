@@ -625,6 +625,30 @@ class _LoginPageState extends ConsumerState<LoginPage> {
     );
   }
 
+  /// KORIXA-SCREEN01-SCREEN02-CONTROLS-MATCH-RENDERED-TITLE-LENGTH-
+  /// 20260915: pequeño margen visual para que el control no quede pegado
+  /// exactamente a los extremos del texto medido — no es una fórmula,
+  /// solo evita un ancho pixel-perfecto frágil. Mismo valor que
+  /// `WelcomePage._controlSafetyPadding` (misma fuente de verdad).
+  static const double _controlSafetyPadding = 8.0;
+
+  /// Ancho REAL renderizado de una línea de texto con la tipografía del
+  /// theme actual (misma fuente/escala de accesibilidad que ve la
+  /// persona) — `TextPainter` es la API estable de Flutter para esto, la
+  /// misma que usa el propio framework internamente en `RenderParagraph`.
+  /// Deliberadamente NO se asume un valor fijo (630, el ancho del
+  /// CONTENEDOR del título — sigue gobernando SOLO ese contenedor, sin
+  /// cambios): el dueño pidió el largo real del TEXTO.
+  static double _measureTextWidth(BuildContext context, String text, TextStyle? style) {
+    final TextPainter painter = TextPainter(
+      text: TextSpan(text: text, style: style),
+      textDirection: Directionality.of(context),
+      textScaler: MediaQuery.textScalerOf(context),
+      maxLines: 1,
+    )..layout();
+    return painter.size.width;
+  }
+
   // -------------------------------------------------------------------
   // PHONE LANDSCAPE — KORIXA-SCREEN02-LOGIN-NO-OUTER-CARD-20260910: el
   // dueño pidió eliminar por completo el panel de vidrio que envolvía el
@@ -670,6 +694,19 @@ class _LoginPageState extends ConsumerState<LoginPage> {
     final double screenWidth = MediaQuery.of(context).size.width;
     final double titleBlockAvailable = screenWidth - 2 * AppSpacing.md;
     final double titleBlockWidth = titleBlockAvailable < 630.0 ? titleBlockAvailable : 630.0;
+    // KORIXA-SCREEN01-SCREEN02-CONTROLS-MATCH-RENDERED-TITLE-LENGTH-
+    // 20260915: campos/CTA/Google/enlaces ahora usan el largo REAL
+    // renderizado del texto del título ("Bienvenido de nuevo", MISMO
+    // estilo que el `Text` de abajo: `headlineMedium` + fontSize 32 +
+    // w800) + un pequeño margen de seguridad — reemplaza el error de la
+    // iteración anterior (usar los 630px de `titleBlockWidth`, el ancho
+    // del CONTENEDOR del título, no del texto en sí). El subtítulo NO
+    // cambia — sigue en `panelWidth` (ver `narrowContentWidth` abajo).
+    final TextStyle? loginTitleStyle = Theme.of(
+      context,
+    ).textTheme.headlineMedium?.copyWith(fontSize: 32, fontWeight: FontWeight.w800);
+    final double titleTextWidth = _measureTextWidth(context, l10n.loginTitle, loginTitleStyle);
+    final double controlsWidth = titleTextWidth + _controlSafetyPadding;
 
     return Stack(
       key: const Key('login-landscape-layout'),
@@ -700,7 +737,9 @@ class _LoginPageState extends ConsumerState<LoginPage> {
                     compact: true,
                     floatingOverPhoto: true,
                     narrowContentWidth: panelWidth,
-                    narrowContentKey: 'login-landscape-panel-width',
+                    narrowContentKey: 'login-landscape-subtitle-width',
+                    controlsWidth: controlsWidth,
+                    controlsWidthKey: 'login-landscape-controls-width',
                   ),
                 ),
               ),
@@ -1019,6 +1058,21 @@ class _LoginPageState extends ConsumerState<LoginPage> {
     // pruebas `LOGIN_LANDSCAPE_*_MATCHES_SCREEN03_WIDTH` (ya aprobadas,
     // tarea anterior) seguir midiendo exactamente lo mismo sin cambios.
     String? narrowContentKey,
+    // KORIXA-SCREEN01-SCREEN02-CONTROLS-MATCH-RENDERED-TITLE-LENGTH-
+    // 20260915: `null` (default) preserva el comportamiento de siempre —
+    // campos/CTA/Google/enlaces viajan dentro del `SizedBox` de
+    // `narrowContentWidth` junto al subtítulo, como un solo bloque
+    // (portrait/desktop, y el estado restaurado de la tarea anterior).
+    // Cuando no es `null` (SOLO phone landscape, ver
+    // [_buildPhoneLandscape]), campos/CTA/Google/enlaces se separan del
+    // subtítulo en su PROPIO `SizedBox`, angostado al largo REAL
+    // renderizado del texto del título (no `panelWidth`, no los 630px
+    // del contenedor del título) — el subtítulo se queda solo en
+    // `narrowContentWidth` (`panelWidth`, sin cambios).
+    double? controlsWidth,
+    // `Key` del `SizedBox` de campos/CTA cuando `controlsWidth` no es
+    // `null` — permite medir su ancho real desde los tests.
+    String? controlsWidthKey,
   }) {
     final TextTheme textTheme = Theme.of(context).textTheme;
     final double sectionGap = compact ? AppSpacing.sm : AppSpacing.xl;
@@ -1428,13 +1482,13 @@ class _LoginPageState extends ConsumerState<LoginPage> {
               titleWidget,
               // KORIXA-SCREEN01-SCREEN02-TITLE-SINGLE-LINE-LANDSCAPE-
               // 20260915: cuando `narrowContentWidth` no es `null` (SOLO
-              // phone landscape), subtítulo+campos+CTA+Google+enlaces se
-              // re-angostan a ese ancho (el `panelWidth` aprobado de
-              // siempre) dentro de un `SizedBox` propio, alineado al
-              // mismo borde que ancla el panel — el título de arriba
-              // queda solo, libre de usar el ancho más generoso de su
-              // `ConstrainedBox` exterior. Portrait/desktop (`null`)
-              // preservan exactamente la misma lista plana de siempre.
+              // phone landscape), el SUBTÍTULO se re-angosta a ese ancho
+              // (el `panelWidth` aprobado de siempre) dentro de un
+              // `SizedBox` propio, alineado al mismo borde que ancla el
+              // panel — el título de arriba queda solo, libre de usar el
+              // ancho más generoso de su `ConstrainedBox` exterior.
+              // Portrait/desktop (`null`) preservan exactamente la misma
+              // lista plana de siempre.
               if (narrowContentWidth != null)
                 Align(
                   alignment: narrowContentAlignment,
@@ -1447,8 +1501,6 @@ class _LoginPageState extends ConsumerState<LoginPage> {
                       children: <Widget>[
                         SizedBox(height: titleToSubtitleGap ?? AppSpacing.sm),
                         subtitleWidget,
-                        SizedBox(height: effectiveSectionGap),
-                        ...controlChildren,
                       ],
                     ),
                   ),
@@ -1456,9 +1508,32 @@ class _LoginPageState extends ConsumerState<LoginPage> {
               else ...<Widget>[
                 SizedBox(height: titleToSubtitleGap ?? AppSpacing.sm),
                 subtitleWidget,
-                SizedBox(height: effectiveSectionGap),
-                ...controlChildren,
               ],
+              SizedBox(height: effectiveSectionGap),
+              // KORIXA-SCREEN01-SCREEN02-CONTROLS-MATCH-RENDERED-TITLE-
+              // LENGTH-20260915: cuando `controlsWidth` no es `null`
+              // (SOLO phone landscape), campos/CTA/Google/enlaces se
+              // angostan al largo REAL renderizado del título (no al
+              // `panelWidth` del subtítulo, no a los 630px del
+              // contenedor del título) — mismo patrón de `Align` +
+              // `SizedBox` que el subtítulo, para compartir el mismo
+              // borde de anclaje. Portrait/desktop (`null`) preservan la
+              // misma lista plana de siempre.
+              if (controlsWidth != null)
+                Align(
+                  alignment: narrowContentAlignment,
+                  child: SizedBox(
+                    key: controlsWidthKey == null ? null : Key(controlsWidthKey),
+                    width: controlsWidth,
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.stretch,
+                      mainAxisSize: MainAxisSize.min,
+                      children: controlChildren,
+                    ),
+                  ),
+                )
+              else
+                ...controlChildren,
             ],
           );
 
