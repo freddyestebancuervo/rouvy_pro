@@ -11,6 +11,7 @@ import '../../../../app/theme/app_theme.dart';
 import '../../../../core/design_system/dark_tech_buttons.dart';
 import '../../../../core/design_system/dark_tech_indicators.dart';
 import '../../../../core/error/failures.dart';
+import '../../../../core/responsive/korixa_scroll_edge_safety.dart';
 import '../../../../core/responsive/korixa_viewport.dart';
 import '../../../../core/utils/validation_l10n.dart';
 import '../../../../core/utils/validators.dart';
@@ -436,7 +437,39 @@ class _LoginPageState extends ConsumerState<LoginPage> {
                           // `ctaHeight`/`socialButtonHeight`/`tightenBottomActions`
                           // más abajo), el título pasa de y=264 a y>=340 — medido,
                           // no estimado (ver `login_page_test.dart`).
-                          padding: const EdgeInsets.fromLTRB(AppSpacing.xl, 0, AppSpacing.xl, AppSpacing.sm),
+                          //
+                          // KORIXA-GLOBAL-SCROLL-EDGE-SAFETY-20260916: el
+                          // inset superior de 0 (arriba) es EXACTAMENTE el
+                          // bug real que el owner reportó — cuando el
+                          // contenido excede el alto disponible y hace
+                          // falta scrollear, el título llega pegado al
+                          // borde superior del scroll, sin colchón. Este
+                          // `Padding` es el hijo directo dentro del
+                          // `SingleChildScrollView`/`ConstrainedBox` de
+                          // arriba (ver ese `ConstrainedBox(minHeight:
+                          // actualViewportHeight)`), así que su inset
+                          // superior es literalmente el espacio seguro en
+                          // el extremo SUPERIOR del scroll.
+                          // `ensureMinEdgeGap` lo sube a `AppSpacing.sm`
+                          // (8, el mismo piso ya usado en el resto de la
+                          // app) SOLO en el caso con scroll — en el caso
+                          // SIN scroll (el normal, contenido anclado abajo
+                          // vía `mainAxisAlignment.end` más abajo) esto no
+                          // mueve el título ni un píxel: el `Column` de
+                          // abajo ya está anclado a la altura mínima
+                          // forzada por el `ConstrainedBox`
+                          // (`minHeight: actualViewportHeight`), y ese
+                          // anclaje se mide desde el inset INFERIOR (sin
+                          // cambios, sigue en `AppSpacing.sm`) — el inset
+                          // superior solo consume espacio vacío que ya
+                          // existía arriba del grupo, nunca desplaza el
+                          // grupo en sí. Verificado con
+                          // `NORMAL_390x844_GEOMETRY_NOT_REGRESSED` (ya
+                          // existente, sigue en PASS sin cambios) +
+                          // los nuevos tests de scroll-edge-safety.
+                          padding: KorixaScrollEdgeSafety.ensureMinEdgeGap(
+                            const EdgeInsets.fromLTRB(AppSpacing.xl, 0, AppSpacing.xl, AppSpacing.sm),
+                          ),
                           child: Column(
                             // KORIXA-SCREEN02-FIXED-BLOCK-NO-MOVEMENT-
                             // 20260911: `mainAxisSize.min` (el `Column`
@@ -721,7 +754,12 @@ class _LoginPageState extends ConsumerState<LoginPage> {
           child: Align(
             alignment: Alignment.centerRight,
             child: Padding(
-              padding: const EdgeInsets.symmetric(horizontal: AppSpacing.md, vertical: AppSpacing.sm),
+              // KORIXA-GLOBAL-SCROLL-EDGE-SAFETY-20260916: envuelto en
+              // `ensureMinEdgeGap` — sin efecto visual acá (8 ya es el
+              // piso), mismo mecanismo compartido del resto de la app.
+              padding: KorixaScrollEdgeSafety.ensureMinEdgeGap(
+                const EdgeInsets.symmetric(horizontal: AppSpacing.md, vertical: AppSpacing.sm),
+              ),
               child: ConstrainedBox(
                 key: const Key('login-landscape-title-block-width'),
                 constraints: BoxConstraints(maxWidth: titleBlockWidth),
@@ -815,7 +853,13 @@ class _LoginPageState extends ConsumerState<LoginPage> {
           child: Align(
             alignment: Alignment.centerRight,
             child: Padding(
-              padding: const EdgeInsets.all(AppSpacing.xxxl),
+              // KORIXA-GLOBAL-SCROLL-EDGE-SAFETY-20260916: envuelto en
+              // `ensureMinEdgeGap` — sin efecto visual acá (40 ya está
+              // muy por encima del piso de 8), mismo mecanismo
+              // compartido del resto de la app.
+              padding: KorixaScrollEdgeSafety.ensureMinEdgeGap(
+                const EdgeInsets.all(AppSpacing.xxxl),
+              ),
               child: ConstrainedBox(
                 key: const Key('login-desktop-content-max-width'),
                 constraints: const BoxConstraints(maxWidth: _desktopContentMaxWidth),

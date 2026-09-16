@@ -11,6 +11,7 @@ import '../../../../app/theme/app_theme.dart';
 import '../../../../core/design_system/dark_tech_buttons.dart';
 import '../../../../core/design_system/dark_tech_indicators.dart';
 import '../../../../core/error/failures.dart';
+import '../../../../core/responsive/korixa_scroll_edge_safety.dart';
 import '../../../../core/responsive/korixa_viewport.dart';
 import '../../../../core/utils/validation_l10n.dart';
 import '../../../../core/utils/validators.dart';
@@ -239,11 +240,18 @@ class _RegisterPageState extends ConsumerState<RegisterPage> {
                   return Align(
                     alignment: Alignment.centerLeft,
                     child: Padding(
-                      padding: EdgeInsets.only(
-                        top: AppSpacing.xxxl,
-                        bottom: AppSpacing.xxxl,
-                        left: leftMargin,
-                        right: AppSpacing.xxxl,
+                      // KORIXA-GLOBAL-SCROLL-EDGE-SAFETY-20260916:
+                      // envuelto en `ensureMinEdgeGap` — sin efecto
+                      // visual acá (40 ya está muy por encima del piso
+                      // de 8), mismo mecanismo compartido del resto de
+                      // la app.
+                      padding: KorixaScrollEdgeSafety.ensureMinEdgeGap(
+                        EdgeInsets.only(
+                          top: AppSpacing.xxxl,
+                          bottom: AppSpacing.xxxl,
+                          left: leftMargin,
+                          right: AppSpacing.xxxl,
+                        ),
                       ),
                       child: ConstrainedBox(
                         key: const Key('register-desktop-content-max-width'),
@@ -313,7 +321,13 @@ class _RegisterPageState extends ConsumerState<RegisterPage> {
               // de `build` — mismo motivo que en `_buildDesktopWeb`.
               child: Builder(
                 builder: (BuildContext themeContext) => Padding(
-                  padding: const EdgeInsets.fromLTRB(AppSpacing.xl, AppSpacing.lg, AppSpacing.xl, AppSpacing.lg),
+                  // KORIXA-GLOBAL-SCROLL-EDGE-SAFETY-20260916: envuelto
+                  // en `ensureMinEdgeGap` — sin efecto visual acá (20 ya
+                  // está por encima del piso de 8), mismo mecanismo
+                  // compartido del resto de la app.
+                  padding: KorixaScrollEdgeSafety.ensureMinEdgeGap(
+                    const EdgeInsets.fromLTRB(AppSpacing.xl, AppSpacing.lg, AppSpacing.xl, AppSpacing.lg),
+                  ),
                   // Scroll seguro: si el contenido no cabe en pantallas
                   // bajas, se desplaza — nunca se achican campos/botones
                   // silenciosamente para forzar que quepan.
@@ -704,7 +718,13 @@ class _RegisterPageState extends ConsumerState<RegisterPage> {
                   return Align(
                     alignment: Alignment.centerLeft,
                     child: Padding(
-                      padding: const EdgeInsets.symmetric(horizontal: AppSpacing.md, vertical: AppSpacing.sm),
+                      // KORIXA-GLOBAL-SCROLL-EDGE-SAFETY-20260916:
+                      // envuelto en `ensureMinEdgeGap` — sin efecto
+                      // visual acá (8 ya es el piso), mismo mecanismo
+                      // compartido del resto de la app.
+                      padding: KorixaScrollEdgeSafety.ensureMinEdgeGap(
+                        const EdgeInsets.symmetric(horizontal: AppSpacing.md, vertical: AppSpacing.sm),
+                      ),
                       child: ConstrainedBox(
                         key: const Key('register-landscape-panel-width'),
                         constraints: BoxConstraints(maxWidth: panelWidth),

@@ -8,6 +8,7 @@ import '../../../../app/theme/app_spacing.dart';
 import '../../../../app/theme/app_theme.dart';
 import '../../../../core/design_system/dark_tech_buttons.dart';
 import '../../../../core/design_system/dark_tech_indicators.dart';
+import '../../../../core/responsive/korixa_scroll_edge_safety.dart';
 import '../../../../core/responsive/korixa_viewport.dart';
 import '../../../../l10n/generated/app_localizations.dart';
 
@@ -175,11 +176,20 @@ class _MobileWelcomeContent extends StatelessWidget {
                 // rueda trasera (colisión real, no solo visual ajustada);
                 // 32 deja el bloque más alto que el original sin invadir
                 // la rueda — verificado con una captura real a 390×844.
-                padding: const EdgeInsets.fromLTRB(
-                  AppSpacing.xl,
-                  AppSpacing.xl,
-                  AppSpacing.xl,
-                  32,
+                //
+                // KORIXA-GLOBAL-SCROLL-EDGE-SAFETY-20260916: envuelto en
+                // `ensureMinEdgeGap` (práctica oficial de Korixa para
+                // scroll seguro) — sin efecto visual acá (24/32 ya están
+                // por encima del piso de 8), pero deja esta composición
+                // usando el mismo mecanismo compartido que el resto de
+                // la app en vez de un `EdgeInsets` aislado.
+                padding: KorixaScrollEdgeSafety.ensureMinEdgeGap(
+                  const EdgeInsets.fromLTRB(
+                    AppSpacing.xl,
+                    AppSpacing.xl,
+                    AppSpacing.xl,
+                    32,
+                  ),
                 ),
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -319,7 +329,14 @@ class _DesktopWelcomeContent extends StatelessWidget {
                 // inset izquierdo sube de 40 (`AppSpacing.xxxl`) a 72 —
                 // el contenido quedaba pegado al borde del viewport; el
                 // resto de los insets no cambia.
-                padding: const EdgeInsets.fromLTRB(72, AppSpacing.xl, AppSpacing.xxxl, AppSpacing.xl),
+                //
+                // KORIXA-GLOBAL-SCROLL-EDGE-SAFETY-20260916: envuelto en
+                // `ensureMinEdgeGap` — sin efecto visual acá (24 ya está
+                // por encima del piso de 8), mismo mecanismo compartido
+                // del resto de la app.
+                padding: KorixaScrollEdgeSafety.ensureMinEdgeGap(
+                  const EdgeInsets.fromLTRB(72, AppSpacing.xl, AppSpacing.xxxl, AppSpacing.xl),
+                ),
                 // KORIXA-RESPONSIVE-FOUNDATION-V1-SCREEN01-20260907: red
                 // de seguridad para el caso de alto reducido (laptop con
                 // chrome de navegador, p. ej. 1365×599) — mismo patrón ya
@@ -612,7 +629,14 @@ class _PhoneLandscapeWelcomeContent extends StatelessWidget {
                   // el contenido se desplaza en vez de desbordar —
                   // nunca cambia a la composición de escritorio por
                   // falta de espacio.
-                  padding: const EdgeInsets.symmetric(horizontal: AppSpacing.md, vertical: AppSpacing.sm),
+                  //
+                  // KORIXA-GLOBAL-SCROLL-EDGE-SAFETY-20260916: envuelto
+                  // en `ensureMinEdgeGap` — sin efecto visual acá (8 ya
+                  // es el piso), mismo mecanismo compartido del resto de
+                  // la app.
+                  padding: KorixaScrollEdgeSafety.ensureMinEdgeGap(
+                    const EdgeInsets.symmetric(horizontal: AppSpacing.md, vertical: AppSpacing.sm),
+                  ),
                   child: SingleChildScrollView(
                     child: Column(
                       // KORIXA-SCREEN01-SCREEN02-TITLE-SINGLE-LINE-

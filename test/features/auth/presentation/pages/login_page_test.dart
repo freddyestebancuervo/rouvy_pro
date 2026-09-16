@@ -13,6 +13,7 @@ import 'package:rouvy_pro/app/theme/app_gradients.dart';
 import 'package:rouvy_pro/app/theme/app_spacing.dart';
 import 'package:rouvy_pro/core/design_system/dark_tech_buttons.dart';
 import 'package:rouvy_pro/core/error/failures.dart';
+import 'package:rouvy_pro/core/responsive/korixa_scroll_edge_safety.dart';
 import 'package:rouvy_pro/features/auth/domain/entities/user_entity.dart';
 import 'package:rouvy_pro/features/auth/domain/usecases/login_usecase.dart';
 import 'package:rouvy_pro/features/auth/domain/usecases/sign_in_with_apple_usecase.dart';
@@ -2008,6 +2009,52 @@ void main() {
     await tester.pumpAndSettle();
     expect(tester.takeException(), isNull);
     expect(find.text('Crear cuenta'), findsOneWidget, reason: 'ALL_ACTIONS_REACHABLE incluso en el alto extremo, vía scroll');
+  });
+
+  // ---------------------------------------------------------------------
+  // KORIXA-GLOBAL-SCROLL-EDGE-SAFETY-20260916: regresión directa del bug
+  // real reportado por el dueño en SCREEN_02 mobile portrait — cuando el
+  // contenido excede el alto disponible y el scroll SÍ se activa
+  // (`EXTREME_HEIGHT_SCROLL_ENABLES_WHEN_CONTENT_GENUINELY_OVERFLOWS`,
+  // arriba, ya prueba que el scroll se activa a 360×400), el extremo
+  // SUPERIOR debe tener un colchón visual real (`KorixaScrollEdgeSafety.
+  // minEdgeGap`, 8) entre el borde del viewport de scroll y el título —
+  // antes de esta tarea ese inset era `0` (`EdgeInsets.fromLTRB(xl, 0,
+  // xl, sm)`, ver `_buildPortrait`).
+  // ---------------------------------------------------------------------
+  testWidgets('SCROLL_TOP_EDGE_SAFE_GAP_WHEN_SCROLLING = PASS', (WidgetTester tester) async {
+    const Size extremeSize = Size(360, 400);
+    await pumpLoginPage(tester, repository, surfaceSize: extremeSize);
+    expect(tester.takeException(), isNull);
+
+    // Posición inicial de scroll = 0 (tope) — el título es el primer
+    // elemento visible (showLogo:false en portrait).
+    final double scrollViewTop = tester.getTopLeft(find.byType(SingleChildScrollView).first).dy;
+    final double titleTop = tester.getTopLeft(find.byKey(const Key('login-title'))).dy;
+    expect(
+      titleTop - scrollViewTop,
+      greaterThanOrEqualTo(KorixaScrollEdgeSafety.minEdgeGap - 0.5),
+      reason: 'TOP_EDGE_FULLY_VISIBLE: debe existir un colchón de al menos ${KorixaScrollEdgeSafety.minEdgeGap}px '
+          'entre el borde superior del scroll y el título',
+    );
+  });
+
+  testWidgets('SCROLL_BOTTOM_EDGE_SAFE_GAP_WHEN_SCROLLING = PASS', (WidgetTester tester) async {
+    const Size extremeSize = Size(360, 400);
+    await pumpLoginPage(tester, repository, surfaceSize: extremeSize);
+
+    await tester.ensureVisible(find.text('Crear cuenta'));
+    await tester.pumpAndSettle();
+    expect(tester.takeException(), isNull);
+
+    final double scrollViewBottom = tester.getBottomLeft(find.byType(SingleChildScrollView).first).dy;
+    final double lastElementBottom = tester.getBottomLeft(find.text('Crear cuenta')).dy;
+    expect(
+      scrollViewBottom - lastElementBottom,
+      greaterThanOrEqualTo(-0.5),
+      reason: 'BOTTOM_EDGE_FULLY_VISIBLE / NO_CLIPPED_LAST_ELEMENT: "Crear cuenta" no debe quedar recortado '
+          'por el borde inferior del viewport de scroll',
+    );
   });
 
   const <String, Size>{
