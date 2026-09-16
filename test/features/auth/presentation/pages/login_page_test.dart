@@ -878,8 +878,8 @@ void main() {
             .toList();
         expect(bars.length, 3);
         for (final Container bar in bars) {
-          expect(bar.constraints?.maxWidth, 35.0, reason: 'INDICATOR_WIDTH debe ser 35px');
-          expect(bar.constraints?.maxHeight, 6.0, reason: 'INDICATOR_HEIGHT debe ser 6px');
+          expect(bar.constraints?.maxWidth, 32.0, reason: 'INDICATOR_WIDTH debe ser 32px');
+          expect(bar.constraints?.maxHeight, 4.0, reason: 'INDICATOR_HEIGHT debe ser 4px');
         }
         final BoxDecoration leftDecoration = bars[0].decoration! as BoxDecoration;
         final BoxDecoration centerDecoration = bars[1].decoration! as BoxDecoration;

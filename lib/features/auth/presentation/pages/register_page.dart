@@ -502,26 +502,33 @@ class _RegisterPageState extends ConsumerState<RegisterPage> {
           ),
           SizedBox(height: ctaGap),
           // KORIXA-SCREEN02-SCREEN03-INDICATORS-EXACT-POSITION-20260916:
-          // mismo indicador visual de 3 barras ya aprobado en SCREEN_01
-          // landscape (35×6, separación 4), pero con la barra FINAL
-          // activa (`activeIndex: 2`) — pedido explícito de esta tarea.
+          // indicador de 3 barras con la barra FINAL activa
+          // (`activeIndex: 2`), justo encima del CTA "Registrarme".
           // Exclusivo de `compact` (phone landscape, único llamador con
-          // `compact: true`) — portrait no lo recibe, sin cambios. Antes
-          // vivía ARRIBA de todo el formulario con la barra CENTRAL
-          // activa (KORIXA-SCREEN03-ADD-THREE-LINE-INDICATOR-WITH-
-          // CENTER-ACTIVE-20260915) — se removió de ahí (ver
-          // `_buildPhoneLandscape`) para que no queden 2 indicadores
-          // duplicados. `ctaGap` (el mismo valor ya usado para el
-          // espacio campo→CTA en `compact`, 8) se reutiliza arriba y
-          // abajo del indicador — separación limpia y moderada, sin
-          // pegarse a los campos ni al CTA, sin inventar un valor nuevo.
+          // `compact: true`) — portrait no lo recibe, sin cambios.
+          // `ctaGap` (el mismo valor ya usado para el espacio campo→CTA
+          // en `compact`, 8) se reutiliza arriba y abajo del indicador —
+          // separación limpia y moderada, sin pegarse a los campos ni al
+          // CTA, sin inventar un valor nuevo.
+          //
+          // KORIXA-THREE-SCREEN-INDICATORS-SIZE-AND-SCREEN03-CENTERING-
+          // 20260916: 32×4, separación 4 — tamaño EXACTO unificado entre
+          // SCREEN_01/02/03 (antes 35×6, separación 4). `Alignment.
+          // center` (antes `centerLeft`) — el dueño pidió que el grupo
+          // de 3 barras quede CENTRADO horizontalmente respecto al CTA,
+          // no pegado al borde izquierdo. Como este `Align` y el
+          // `PrimaryGradientButton` de abajo son hermanos directos del
+          // mismo `Column(crossAxisAlignment.stretch)`, ambos reciben
+          // exactamente el mismo ancho — centrar el indicador dentro de
+          // esa caja automáticamente coincide con el centro horizontal
+          // real del CTA, sin necesidad de medir su ancho por separado.
           if (compact) ...<Widget>[
             const Align(
-              alignment: Alignment.centerLeft,
+              alignment: Alignment.center,
               child: ThreeBarIndicator(
                 key: Key('register-indicator-row'),
-                barWidth: 35,
-                barHeight: 6,
+                barWidth: 32,
+                barHeight: 4,
                 gap: 4,
                 activeIndex: 2,
               ),

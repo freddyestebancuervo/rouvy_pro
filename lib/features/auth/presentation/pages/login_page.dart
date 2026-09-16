@@ -745,18 +745,21 @@ class _LoginPageState extends ConsumerState<LoginPage> {
                     // por portrait/desktop — el indicador ya vive, sin
                     // cambios de código, exactamente entre "olvidé mi
                     // contraseña" y el CTA dentro de `controlChildren` (ver
-                    // más abajo). Solo se activa acá con el tamaño EXACTO
-                    // pedido (35×6, separación 4) — antes phone landscape
-                    // no mostraba ningún indicador. `indicatorTopGap`/
-                    // `indicatorToCtaGap` se dejan en `null` (heredan
-                    // `effectiveSectionGap`/`sectionGap` = `AppSpacing.sm`,
-                    // 8, en `compact`) — espaciado limpio y moderado,
-                    // consistente con el resto de esta composición, sin
-                    // inventar un valor nuevo.
+                    // más abajo). `indicatorTopGap`/`indicatorToCtaGap` se
+                    // dejan en `null` (heredan `effectiveSectionGap`/
+                    // `sectionGap` = `AppSpacing.sm`, 8, en `compact`) —
+                    // espaciado limpio y moderado, consistente con el
+                    // resto de esta composición, sin inventar un valor
+                    // nuevo.
+                    //
+                    // KORIXA-THREE-SCREEN-INDICATORS-SIZE-AND-SCREEN03-
+                    // CENTERING-20260916: 32×4, separación 4 — tamaño
+                    // EXACTO unificado entre SCREEN_01/02/03 (antes 35×6,
+                    // separación 4).
                     showIndicator: true,
                     indicatorKey: 'login-landscape-indicator-row',
-                    indicatorBarWidth: 35,
-                    indicatorBarHeight: 6,
+                    indicatorBarWidth: 32,
+                    indicatorBarHeight: 4,
                     indicatorBarGap: 4,
                   ),
                 ),

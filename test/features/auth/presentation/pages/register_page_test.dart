@@ -784,13 +784,11 @@ void main() {
   });
 
   // ---------------------------------------------------------------------
-  // KORIXA-SCREEN02-SCREEN03-INDICATORS-EXACT-POSITION-20260916: el
-  // indicador de 3 barras (35×6, separación 4) se movió de "arriba del
-  // formulario, barra central activa" (KORIXA-SCREEN03-ADD-THREE-LINE-
-  // INDICATOR-WITH-CENTER-ACTIVE-20260915, tarea anterior) a "justo
-  // encima del CTA Registrarme, barra FINAL activa" — pedido explícito
-  // de esta tarea. Actualizado (no debilitado): la posición y la barra
-  // activa SÍ cambiaron por diseño; el tamaño/gap del indicador en sí no.
+  // KORIXA-SCREEN02-SCREEN03-INDICATORS-EXACT-POSITION-20260916 +
+  // KORIXA-THREE-SCREEN-INDICATORS-SIZE-AND-SCREEN03-CENTERING-20260916:
+  // el indicador de 3 barras (32×4, separación 4 — antes 35×6) va justo
+  // encima del CTA "Registrarme", con la barra FINAL activa, CENTRADO
+  // horizontalmente respecto al CTA (antes alineado a la izquierda).
   // ---------------------------------------------------------------------
   for (final Size size in phoneLandscapeSizes) {
     testWidgets(
@@ -808,8 +806,8 @@ void main() {
             .toList();
         expect(bars.length, 3, reason: 'INDICATOR debe mostrar exactamente 3 líneas');
         for (final Container bar in bars) {
-          expect(bar.constraints?.maxWidth, 35.0, reason: 'INDICATOR_WIDTH debe ser 35px');
-          expect(bar.constraints?.maxHeight, 6.0, reason: 'INDICATOR_HEIGHT debe ser 6px');
+          expect(bar.constraints?.maxWidth, 32.0, reason: 'INDICATOR_WIDTH debe ser 32px');
+          expect(bar.constraints?.maxHeight, 4.0, reason: 'INDICATOR_HEIGHT debe ser 4px');
         }
 
         // SCREEN03_ACTIVE_BAR_POSITION = END: la 3ra barra (índice 2)
@@ -845,14 +843,16 @@ void main() {
         expect(indicatorTop, greaterThan(confirmPasswordBottom), reason: 'el indicador debe quedar debajo de los campos');
         expect(indicatorTop - confirmPasswordBottom, greaterThan(0), reason: 'no debe quedar pegado a los campos');
 
-        // El indicador debe quedar alineado con el mismo borde izquierdo
-        // que el panel del formulario/CTA (mismo `Align(centerLeft)` de
-        // origen, `crossAxisAlignment.stretch` del `Column` del
-        // formulario) — no debe quedar flotando sin relación con el
-        // contenido.
-        final double indicatorLeft = tester.getTopLeft(find.byKey(const Key('register-indicator-row'))).dx;
-        final double panelLeft = tester.getTopLeft(find.byKey(const Key('register-landscape-panel-width'))).dx;
-        expect(indicatorLeft, closeTo(panelLeft, 0.5), reason: 'el indicador debe compartir el borde izquierdo del panel');
+        // SCREEN03_INDICATOR_CENTERED_WITH_CTA = YES: el centro
+        // horizontal del grupo de 3 barras debe coincidir con el centro
+        // horizontal del CTA "Registrarme" — KORIXA-THREE-SCREEN-
+        // INDICATORS-SIZE-AND-SCREEN03-CENTERING-20260916 pidió
+        // explícitamente centrar el indicador (antes alineado al borde
+        // izquierdo, KORIXA-SCREEN02-SCREEN03-INDICATORS-EXACT-
+        // POSITION-20260916), sin mover el CTA.
+        final double indicatorCenterX = tester.getCenter(find.byKey(const Key('register-indicator-row'))).dx;
+        final double ctaCenterX = tester.getCenter(find.byType(PrimaryGradientButton)).dx;
+        expect(indicatorCenterX, closeTo(ctaCenterX, 0.5), reason: 'el indicador debe estar centrado respecto al CTA "Registrarme"');
       },
     );
   }

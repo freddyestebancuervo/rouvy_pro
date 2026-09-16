@@ -274,12 +274,12 @@ void main() {
       );
       expect(bars.length, 3, reason: '$label debe mostrar exactamente 3 líneas indicadoras');
 
-      // KORIXA-SCREEN01-LANDSCAPE-INDICATOR-EXACT-SIZE-20260915: 35×6
-      // (antes 20×4) — cada barra mide el `Container` completo, sin
-      // importar si es la activa o una inactiva.
+      // KORIXA-THREE-SCREEN-INDICATORS-SIZE-AND-SCREEN03-CENTERING-
+      // 20260916: 32×4 (antes 35×6) — cada barra mide el `Container`
+      // completo, sin importar si es la activa o una inactiva.
       for (final Container bar in bars) {
-        expect(bar.constraints?.maxWidth, 35.0, reason: '$label: cada barra debe medir 35 de largo');
-        expect(bar.constraints?.maxHeight, 6.0, reason: '$label: cada barra debe medir 6 de grosor');
+        expect(bar.constraints?.maxWidth, 32.0, reason: '$label: cada barra debe medir 32 de largo');
+        expect(bar.constraints?.maxHeight, 4.0, reason: '$label: cada barra debe medir 4 de grosor');
       }
 
       // KORIXA-SCREEN01-SCREEN02-CONTROLS-MATCH-RENDERED-TITLE-LENGTH-
@@ -334,12 +334,12 @@ void main() {
   });
 
   // ---------------------------------------------------------------------
-  // KORIXA-SCREEN01-LANDSCAPE-INDICATOR-EXACT-SIZE-20260915: las 3
-  // barras del indicador deben medir EXACTAMENTE 35×6 (antes 20×4, gap
-  // 4 sin cambios) en los 5 viewports obligatorios, sin overflow, sin
-  // moverse de su posición actual y sin perder el centrado compartido
-  // con el CTA. La 1ra barra conserva el gradiente activo; la 2da y 3ra
-  // conservan `DarkTech.border` (gris inactivo).
+  // KORIXA-THREE-SCREEN-INDICATORS-SIZE-AND-SCREEN03-CENTERING-20260916:
+  // las 3 barras del indicador deben medir EXACTAMENTE 32×4 (antes 35×6,
+  // gap 4 sin cambios) en los 5 viewports obligatorios, sin overflow,
+  // sin moverse de su posición actual y sin perder el centrado
+  // compartido con el CTA. La 1ra barra conserva el gradiente activo; la
+  // 2da y 3ra conservan `DarkTech.border` (gris inactivo).
   // ---------------------------------------------------------------------
   const List<Size> indicatorExactSizeViewports = <Size>[
     Size(740, 360),
@@ -361,8 +361,8 @@ void main() {
             .toList();
         expect(bars.length, 3, reason: 'INDICATOR debe seguir mostrando exactamente 3 líneas');
         for (final Container bar in bars) {
-          expect(bar.constraints?.maxWidth, 35.0, reason: 'INDICATOR_WIDTH debe ser 35px');
-          expect(bar.constraints?.maxHeight, 6.0, reason: 'INDICATOR_HEIGHT debe ser 6px');
+          expect(bar.constraints?.maxWidth, 32.0, reason: 'INDICATOR_WIDTH debe ser 32px');
+          expect(bar.constraints?.maxHeight, 4.0, reason: 'INDICATOR_HEIGHT debe ser 4px');
         }
 
         // Estilo: 1ra barra con gradiente activo, 2da/3ra en gris
