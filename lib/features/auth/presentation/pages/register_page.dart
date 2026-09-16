@@ -501,6 +501,33 @@ class _RegisterPageState extends ConsumerState<RegisterPage> {
             ).message(l10n),
           ),
           SizedBox(height: ctaGap),
+          // KORIXA-SCREEN02-SCREEN03-INDICATORS-EXACT-POSITION-20260916:
+          // mismo indicador visual de 3 barras ya aprobado en SCREEN_01
+          // landscape (35×6, separación 4), pero con la barra FINAL
+          // activa (`activeIndex: 2`) — pedido explícito de esta tarea.
+          // Exclusivo de `compact` (phone landscape, único llamador con
+          // `compact: true`) — portrait no lo recibe, sin cambios. Antes
+          // vivía ARRIBA de todo el formulario con la barra CENTRAL
+          // activa (KORIXA-SCREEN03-ADD-THREE-LINE-INDICATOR-WITH-
+          // CENTER-ACTIVE-20260915) — se removió de ahí (ver
+          // `_buildPhoneLandscape`) para que no queden 2 indicadores
+          // duplicados. `ctaGap` (el mismo valor ya usado para el
+          // espacio campo→CTA en `compact`, 8) se reutiliza arriba y
+          // abajo del indicador — separación limpia y moderada, sin
+          // pegarse a los campos ni al CTA, sin inventar un valor nuevo.
+          if (compact) ...<Widget>[
+            const Align(
+              alignment: Alignment.centerLeft,
+              child: ThreeBarIndicator(
+                key: Key('register-indicator-row'),
+                barWidth: 35,
+                barHeight: 6,
+                gap: 4,
+                activeIndex: 2,
+              ),
+            ),
+            SizedBox(height: ctaGap),
+          ],
           PrimaryGradientButton(
             label: l10n.registerButton,
             isLoading: registerState.isLoading,
@@ -675,58 +702,27 @@ class _RegisterPageState extends ConsumerState<RegisterPage> {
                         key: const Key('register-landscape-panel-width'),
                         constraints: BoxConstraints(maxWidth: panelWidth),
                         child: SingleChildScrollView(
-                          child: Column(
-                            // KORIXA-SCREEN03-ADD-THREE-LINE-INDICATOR-
-                            // WITH-CENTER-ACTIVE-20260915: `stretch` (no
-                            // `start`) para que este `Column` exterior no
-                            // cambie el mecanismo de altura del
-                            // `SingleChildScrollView` (un `Column` con
-                            // `mainAxisSize.min` FUERA del scroll rompía
-                            // el alto acotado de siempre y producía
-                            // overflow — probado y descartado). El
-                            // indicador vive DENTRO del mismo scroll que
-                            // el formulario, como primer hijo, envuelto en
-                            // `Align` para no estirarse al `panelWidth`
-                            // completo (su ancho natural es ~113,
-                            // 3×35+2×4).
-                            crossAxisAlignment: CrossAxisAlignment.stretch,
-                            mainAxisSize: MainAxisSize.min,
-                            children: <Widget>[
-                              // Mismo indicador visual de 3 barras ya
-                              // aprobado en SCREEN_01 landscape (KORIXA-
-                              // SCREEN01-LANDSCAPE-INDICATOR-EXACT-SIZE-
-                              // 20260915: 35×6, separación 4), pero con
-                              // `activeIndex: 1` (la barra CENTRAL activa,
-                              // no la primera) — pedido explícito de esta
-                              // tarea. No toca título, subtítulo, campos,
-                              // gap entre campos, CTA ni Google — todos
-                              // hijos sin modificar de
-                              // `_buildMobileFormContent`, más abajo.
-                              const Align(
-                                alignment: Alignment.centerLeft,
-                                child: ThreeBarIndicator(
-                                  key: Key('register-indicator-row'),
-                                  barWidth: 35,
-                                  barHeight: 6,
-                                  gap: 4,
-                                  activeIndex: 1,
-                                ),
-                              ),
-                              // Separación elegante entre el indicador y
-                              // el formulario — mismo valor que Welcome
-                              // usa entre sus propios bloques de
-                              // contenido (`AppSpacing.sm`), no un número
-                              // inventado.
-                              const SizedBox(height: AppSpacing.sm),
-                              _buildMobileFormContent(
-                                themeContext,
-                                l10n,
-                                registerState,
-                                socialState,
-                                anyLoading,
-                                compact: true,
-                              ),
-                            ],
+                          // KORIXA-SCREEN02-SCREEN03-INDICATORS-EXACT-
+                          // POSITION-20260916: el indicador de 3 barras
+                          // (antes ARRIBA del formulario, barra central
+                          // activa — KORIXA-SCREEN03-ADD-THREE-LINE-
+                          // INDICATOR-WITH-CENTER-ACTIVE-20260915) se
+                          // movió DENTRO de `_buildMobileFormContent`,
+                          // justo encima del CTA "Registrarme", con la
+                          // barra FINAL activa — pedido explícito de esta
+                          // tarea. Se quitó de aquí para que no queden 2
+                          // indicadores duplicados; `SingleChildScrollView`
+                          // vuelve a envolver directamente
+                          // `_buildMobileFormContent`, sin el `Column`
+                          // intermedio que existía solo para alojar el
+                          // indicador anterior.
+                          child: _buildMobileFormContent(
+                            themeContext,
+                            l10n,
+                            registerState,
+                            socialState,
+                            anyLoading,
+                            compact: true,
                           ),
                         ),
                       ),

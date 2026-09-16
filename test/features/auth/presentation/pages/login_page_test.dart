@@ -832,11 +832,93 @@ void main() {
   // indicador de SCREEN_01 es específicamente para la composición de
   // escritorio de la captura anotada del dueño — phone landscape y
   // mobile portrait no lo reciben, sin cambio visual en ninguna de las 2.
-  testWidgets('PHONE_LANDSCAPE_NO_SCREEN01_INDICATOR = PASS (fuera de alcance de esta tarea)',
-      (WidgetTester tester) async {
+  testWidgets('PHONE_LANDSCAPE_INDICATOR_USES_OWN_KEY_NOT_DESKTOP = PASS', (WidgetTester tester) async {
+    // KORIXA-SCREEN02-SCREEN03-INDICATORS-EXACT-POSITION-20260916: esta
+    // aserción decía lo CONTRARIO antes de esta tarea
+    // ('PHONE_LANDSCAPE_NO_SCREEN01_INDICATOR', "fuera de alcance" en su
+    // momento) — el encargo actual pide explícitamente un indicador
+    // también en phone landscape, entre "olvidé mi contraseña" y el CTA.
+    // Invertida a propósito, no debilitada: ahora confirma que el
+    // indicador de landscape usa SU PROPIA key
+    // ('login-landscape-indicator-row', ver `_buildPhoneLandscape`), sin
+    // reusar ni duplicar la key del indicador de desktop
+    // ('login-desktop-indicator-row').
     await pumpLoginPage(tester, repository, surfaceSize: const Size(932, 430));
+    expect(find.byKey(const Key('login-landscape-indicator-row')), findsOneWidget);
     expect(find.byKey(const Key('login-desktop-indicator-row')), findsNothing);
   });
+
+  // ---------------------------------------------------------------------
+  // KORIXA-SCREEN02-SCREEN03-INDICATORS-EXACT-POSITION-20260916: el
+  // indicador de 3 barras (35×6, separación 4, barra CENTRAL activa)
+  // debe quedar EXACTAMENTE entre "¿Olvidaste tu contraseña?" y el CTA
+  // "Iniciar sesión", en los 5 viewports obligatorios.
+  // ---------------------------------------------------------------------
+  const List<Size> loginLandscapeIndicatorViewports = <Size>[
+    Size(740, 360),
+    Size(812, 375),
+    Size(844, 390),
+    Size(915, 412),
+    Size(932, 430),
+  ];
+
+  for (final Size size in loginLandscapeIndicatorViewports) {
+    testWidgets(
+      'LOGIN_LANDSCAPE_${size.width.toInt()}x${size.height.toInt()}_INDICATOR_BETWEEN_FORGOT_AND_CTA = PASS',
+      (WidgetTester tester) async {
+        final MockAuthRepository repository = MockAuthRepository();
+        await pumpLoginPage(tester, repository, surfaceSize: size);
+        expect(tester.takeException(), isNull, reason: 'no debe haber overflow en ${size.width.toInt()}x${size.height.toInt()}');
+
+        final Finder indicatorFinder = find.byKey(const Key('login-landscape-indicator-row'));
+        expect(indicatorFinder, findsOneWidget, reason: 'SCREEN02_INDICATOR_PRESENT debe ser YES');
+
+        final List<Container> bars = tester
+            .widgetList<Container>(find.descendant(of: indicatorFinder, matching: find.byType(Container)))
+            .toList();
+        expect(bars.length, 3);
+        for (final Container bar in bars) {
+          expect(bar.constraints?.maxWidth, 35.0, reason: 'INDICATOR_WIDTH debe ser 35px');
+          expect(bar.constraints?.maxHeight, 6.0, reason: 'INDICATOR_HEIGHT debe ser 6px');
+        }
+        final BoxDecoration leftDecoration = bars[0].decoration! as BoxDecoration;
+        final BoxDecoration centerDecoration = bars[1].decoration! as BoxDecoration;
+        final BoxDecoration rightDecoration = bars[2].decoration! as BoxDecoration;
+        expect(leftDecoration.color, DarkTech.border, reason: 'barra 1 gris/inactiva');
+        expect(centerDecoration.gradient, AppGradients.primaryCta, reason: 'SCREEN02_ACTIVE_BAR_POSITION debe ser CENTER');
+        expect(rightDecoration.color, DarkTech.border, reason: 'barra 3 gris/inactiva');
+
+        final List<SizedBox> gaps = tester
+            .widgetList<SizedBox>(find.descendant(of: indicatorFinder, matching: find.byType(SizedBox)))
+            .toList();
+        expect(gaps.length, 2);
+        for (final SizedBox gap in gaps) {
+          expect(gap.width, 4.0, reason: 'INDICATOR_GAP debe ser 4px');
+        }
+
+        // SCREEN02_INDICATOR_POSITION = BETWEEN_FORGOT_PASSWORD_AND_LOGIN_CTA:
+        // el indicador debe quedar verticalmente ENTRE "¿Olvidaste tu
+        // contraseña?" y el CTA "Iniciar sesión" (por encima del CTA, por
+        // debajo de "olvidé mi contraseña"), sin pegarse a ninguno de los
+        // 2 (separación > 0 en ambos lados).
+        final double forgotBottom = tester.getRect(find.text('¿Olvidaste tu contraseña?')).bottom;
+        final double indicatorTop = tester.getRect(indicatorFinder).top;
+        final double indicatorBottom = tester.getRect(indicatorFinder).bottom;
+        final double ctaTop = tester.getRect(find.byType(PrimaryGradientButton)).top;
+        expect(indicatorTop, greaterThan(forgotBottom), reason: 'el indicador debe quedar debajo de "olvidé mi contraseña"');
+        expect(ctaTop, greaterThan(indicatorBottom), reason: 'el indicador debe quedar arriba del CTA');
+        expect(indicatorTop - forgotBottom, greaterThan(0), reason: 'no debe quedar pegado a "olvidé mi contraseña"');
+        expect(ctaTop - indicatorBottom, greaterThan(0), reason: 'no debe quedar pegado al CTA');
+
+        // Centrado respecto al bloque de controles (no flotando a un
+        // lado) — comparte centro horizontal con el CTA/campos, que
+        // viven en el mismo `controlsWidth`.
+        final double indicatorCenterX = tester.getCenter(indicatorFinder).dx;
+        final double ctaCenterX = tester.getCenter(find.byType(PrimaryGradientButton)).dx;
+        expect(indicatorCenterX, closeTo(ctaCenterX, 0.5), reason: 'el indicador debe estar centrado respecto al bloque de controles');
+      },
+    );
+  }
 
   // ---------------------------------------------------------------------
   // KORIXA-SCREEN02-LOGIN-MOBILE-PORTRAIT-NO-LOGO-20260910 — el dueño

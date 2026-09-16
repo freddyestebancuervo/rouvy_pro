@@ -784,17 +784,24 @@ void main() {
   });
 
   // ---------------------------------------------------------------------
-  // KORIXA-SCREEN03-ADD-THREE-LINE-INDICATOR-WITH-CENTER-ACTIVE-20260915:
-  // mismo indicador visual de 3 barras ya aprobado en SCREEN_01 landscape
-  // (35×6, separación 4), pero con la barra CENTRAL activa — nuevo en
-  // SCREEN_03, exclusivo de phone landscape.
+  // KORIXA-SCREEN02-SCREEN03-INDICATORS-EXACT-POSITION-20260916: el
+  // indicador de 3 barras (35×6, separación 4) se movió de "arriba del
+  // formulario, barra central activa" (KORIXA-SCREEN03-ADD-THREE-LINE-
+  // INDICATOR-WITH-CENTER-ACTIVE-20260915, tarea anterior) a "justo
+  // encima del CTA Registrarme, barra FINAL activa" — pedido explícito
+  // de esta tarea. Actualizado (no debilitado): la posición y la barra
+  // activa SÍ cambiaron por diseño; el tamaño/gap del indicador en sí no.
   // ---------------------------------------------------------------------
   for (final Size size in phoneLandscapeSizes) {
     testWidgets(
-      'REGISTER_LANDSCAPE_${size.width.toInt()}x${size.height.toInt()}_INDICATOR_CENTER_ACTIVE = PASS',
+      'REGISTER_LANDSCAPE_${size.width.toInt()}x${size.height.toInt()}_INDICATOR_ABOVE_CTA_END_ACTIVE = PASS',
       (WidgetTester tester) async {
         await pumpRegisterPage(tester, repository, surfaceSize: size);
         expect(tester.takeException(), isNull, reason: 'no debe haber overflow en ${size.width.toInt()}x${size.height.toInt()}');
+
+        // SCREEN03_DUPLICATE_INDICATORS = NO: exactamente 1 indicador en
+        // el árbol.
+        expect(find.byKey(const Key('register-indicator-row')), findsOneWidget, reason: 'SCREEN03_INDICATOR_PRESENT debe ser YES, sin duplicados');
 
         final List<Container> bars = tester
             .widgetList<Container>(find.descendant(of: find.byKey(const Key('register-indicator-row')), matching: find.byType(Container)))
@@ -805,17 +812,17 @@ void main() {
           expect(bar.constraints?.maxHeight, 6.0, reason: 'INDICATOR_HEIGHT debe ser 6px');
         }
 
-        // INDICATOR_ACTIVE_BAR_POSITION = CENTER: la barra del MEDIO
-        // (índice 1) debe tener el gradiente activo; la 1ra y 3ra deben
-        // quedar en gris inactivo (`DarkTech.border`).
+        // SCREEN03_ACTIVE_BAR_POSITION = END: la 3ra barra (índice 2)
+        // debe tener el gradiente activo; la 1ra y 2da deben quedar en
+        // gris inactivo (`DarkTech.border`).
         final BoxDecoration firstDecoration = bars[0].decoration! as BoxDecoration;
-        final BoxDecoration centerDecoration = bars[1].decoration! as BoxDecoration;
+        final BoxDecoration secondDecoration = bars[1].decoration! as BoxDecoration;
         final BoxDecoration lastDecoration = bars[2].decoration! as BoxDecoration;
         expect(firstDecoration.gradient, isNull, reason: 'la 1ra barra debe ser gris/inactiva');
         expect(firstDecoration.color, DarkTech.border, reason: 'la 1ra barra debe ser gris/inactiva');
-        expect(centerDecoration.gradient, AppGradients.primaryCta, reason: 'INDICATOR_ACTIVE_BAR_POSITION debe ser CENTER');
-        expect(lastDecoration.gradient, isNull, reason: 'la 3ra barra debe ser gris/inactiva');
-        expect(lastDecoration.color, DarkTech.border, reason: 'la 3ra barra debe ser gris/inactiva');
+        expect(secondDecoration.gradient, isNull, reason: 'la 2da barra debe ser gris/inactiva');
+        expect(secondDecoration.color, DarkTech.border, reason: 'la 2da barra debe ser gris/inactiva');
+        expect(lastDecoration.gradient, AppGradients.primaryCta, reason: 'SCREEN03_ACTIVE_BAR_POSITION debe ser END');
 
         // Separación horizontal entre líneas: 4px.
         final List<SizedBox> gaps = tester
@@ -826,9 +833,22 @@ void main() {
           expect(gap.width, 4.0, reason: 'INDICATOR_GAP debe ser 4px');
         }
 
+        // SCREEN03_INDICATOR_POSITION = ABOVE_REGISTER_CTA: el indicador
+        // debe quedar inmediatamente arriba del CTA "Registrarme", sin
+        // pegarse a él ni a los campos.
+        final double indicatorBottom = tester.getRect(find.byKey(const Key('register-indicator-row'))).bottom;
+        final double ctaTop = tester.getRect(find.byType(PrimaryGradientButton)).top;
+        final double confirmPasswordBottom = tester.getRect(find.byType(TextFormField).last).bottom;
+        final double indicatorTop = tester.getRect(find.byKey(const Key('register-indicator-row'))).top;
+        expect(ctaTop, greaterThan(indicatorBottom), reason: 'el indicador debe quedar arriba del CTA');
+        expect(ctaTop - indicatorBottom, greaterThan(0), reason: 'no debe quedar pegado al CTA');
+        expect(indicatorTop, greaterThan(confirmPasswordBottom), reason: 'el indicador debe quedar debajo de los campos');
+        expect(indicatorTop - confirmPasswordBottom, greaterThan(0), reason: 'no debe quedar pegado a los campos');
+
         // El indicador debe quedar alineado con el mismo borde izquierdo
-        // que el panel del formulario (mismo `Align(centerLeft)` de
-        // origen) — no debe quedar flotando sin relación con el
+        // que el panel del formulario/CTA (mismo `Align(centerLeft)` de
+        // origen, `crossAxisAlignment.stretch` del `Column` del
+        // formulario) — no debe quedar flotando sin relación con el
         // contenido.
         final double indicatorLeft = tester.getTopLeft(find.byKey(const Key('register-indicator-row'))).dx;
         final double panelLeft = tester.getTopLeft(find.byKey(const Key('register-landscape-panel-width'))).dx;
