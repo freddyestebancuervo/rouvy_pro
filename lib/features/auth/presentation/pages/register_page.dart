@@ -410,7 +410,15 @@ class _RegisterPageState extends ConsumerState<RegisterPage> {
             // conserva el centrado ya aprobado, sin cambios.
             textAlign: compact ? TextAlign.left : TextAlign.center,
             style: textTheme.headlineMedium?.copyWith(
-              fontSize: compact ? 21 : null,
+              // KORIXA-SCREEN02-SCREEN03-MATCH-SCREEN01-TITLE-SIZE-
+              // 20260915: 32 (antes 21) en `compact` (phone landscape,
+              // único llamador con `compact: true`) — el mismo tamaño
+              // EXACTO del título de SCREEN_01 en phone landscape
+              // (`_PhoneLandscapeWelcomeContent`: `fontSize: 32,
+              // fontWeight: FontWeight.w800`). Portrait (`compact:
+              // false`) no se toca. `fontWeight: w800` ya era
+              // incondicional (sin cambios, ya coincidía con SCREEN_01).
+              fontSize: compact ? 32 : null,
               fontWeight: FontWeight.w800,
               color: DarkTech.textPrimary,
               shadows: legibilityShadow,

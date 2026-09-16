@@ -1108,12 +1108,23 @@ void main() {
     );
     expect(title.textAlign, TextAlign.center, reason: 'TITLE_STYLE_MATCH: el título debe centrarse igual que en SCREEN_01');
 
+    // KORIXA-SCREEN02-SCREEN03-MATCH-SCREEN01-TITLE-SIZE-20260915: esta
+    // aserción decía lo CONTRARIO antes de esta tarea (`isNot(w800)`,
+    // "fuera de alcance" en su momento) — la tarea actual pide
+    // explícitamente que el título landscape de Login iguale el tamaño Y
+    // peso del título de SCREEN_01 landscape (32px, w800). Invertida a
+    // propósito, no debilitada: refleja el nuevo comportamiento pedido.
     await pumpLoginPage(tester, repository, surfaceSize: const Size(932, 430));
     final Text landscapeTitle = tester.widget(find.byKey(const Key('login-title')));
     expect(
       landscapeTitle.style?.fontWeight,
-      isNot(FontWeight.w800),
-      reason: 'phone landscape no debe ganar el peso canónico en esta tarea — fuera de alcance, sin cambios',
+      FontWeight.w800,
+      reason: 'TITLE_STYLE_MATCH: el título landscape debe usar w800, igual que "Conecta tu energía." en Welcome landscape',
+    );
+    expect(
+      landscapeTitle.style?.fontSize,
+      32,
+      reason: 'TITLE_STYLE_MATCH: el título landscape debe usar 32px, el mismo tamaño exacto que Welcome landscape',
     );
   });
 
@@ -1973,6 +1984,35 @@ void main() {
           reason: 'LOGIN_LANDSCAPE_${size.width.toInt()}x${size.height.toInt()}_MATCHES_SCREEN03_WIDTH: '
               'ancho=$width, esperado≈$expectedWidth (misma fórmula que SCREEN_03)',
         );
+      },
+    );
+  }
+
+  // ---------------------------------------------------------------------
+  // KORIXA-SCREEN02-SCREEN03-MATCH-SCREEN01-TITLE-SIZE-20260915: el
+  // título landscape ("Bienvenido de nuevo") debe usar EXACTAMENTE el
+  // mismo tamaño/peso que el título landscape de SCREEN_01
+  // ("Conecta tu energía.", 32px, w800).
+  // ---------------------------------------------------------------------
+  const List<Size> titleSizeViewports = <Size>[
+    Size(740, 360),
+    Size(812, 375),
+    Size(844, 390),
+    Size(915, 412),
+    Size(932, 430),
+  ];
+
+  for (final Size size in titleSizeViewports) {
+    testWidgets(
+      'LOGIN_LANDSCAPE_${size.width.toInt()}x${size.height.toInt()}_TITLE_MATCHES_SCREEN01 = PASS',
+      (WidgetTester tester) async {
+        final MockAuthRepository repository = MockAuthRepository();
+        await pumpLoginPage(tester, repository, surfaceSize: size);
+        expect(tester.takeException(), isNull, reason: 'no debe haber overflow en ${size.width.toInt()}x${size.height.toInt()}');
+
+        final Text title = tester.widget<Text>(find.byKey(const Key('login-title')));
+        expect(title.style?.fontSize, 32, reason: 'debe coincidir con el tamaño del título de SCREEN_01 (32px)');
+        expect(title.style?.fontWeight, FontWeight.w800, reason: 'debe coincidir con el peso del título de SCREEN_01 (w800)');
       },
     );
   }

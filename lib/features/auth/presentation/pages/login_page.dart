@@ -1054,7 +1054,15 @@ class _LoginPageState extends ConsumerState<LoginPage> {
       // `crossAxisAlignment.center` en [content] más abajo.
       textAlign: (isDesktopScale || matchScreen01Typography) ? TextAlign.center : null,
       style: textTheme.headlineMedium?.copyWith(
-        fontSize: titleFontSize ?? (compact ? 22 : null),
+        // KORIXA-SCREEN02-SCREEN03-MATCH-SCREEN01-TITLE-SIZE-20260915:
+        // 32 (antes 22) en `compact` (phone landscape, único llamador con
+        // `compact: true`) — el mismo tamaño EXACTO del título de
+        // SCREEN_01 en phone landscape
+        // (`_PhoneLandscapeWelcomeContent`: `textTheme.titleLarge?.
+        // copyWith(fontSize: 32, fontWeight: FontWeight.w800)`). Portrait
+        // (`compact: false`) no se toca — sigue con el tamaño por
+        // defecto de `headlineMedium`.
+        fontSize: titleFontSize ?? (compact ? 32 : null),
         // KORIXA-SCREEN02-LOGIN-MATCH-SCREEN01-DESKTOP-SCALE-20260910:
         // mismo peso/tracking/interlineado que el título de escritorio de
         // Welcome (`_DesktopWelcomeContent`) — solo aplica cuando se pide
@@ -1066,7 +1074,17 @@ class _LoginPageState extends ConsumerState<LoginPage> {
         // override el título de Login quedaba en el `w700` por defecto
         // de `headlineMedium`, un peso visualmente más liviano que el ya
         // aprobado en SCREEN_01.
-        fontWeight: (titleFontSize != null || matchScreen01Typography) ? FontWeight.w800 : null,
+        //
+        // KORIXA-SCREEN02-SCREEN03-MATCH-SCREEN01-TITLE-SIZE-20260915:
+        // `compact` se agrega a esta condición por el mismo motivo — el
+        // título de SCREEN_01 en landscape también es `w800`, y antes
+        // Login landscape se quedaba en el `w700` por defecto.
+        // Deliberadamente NO se toca `letterSpacing`/`height` de abajo
+        // (siguen gateados SOLO por `titleFontSize != null`, la escala de
+        // escritorio con -0.5/1.08) — SCREEN_01 landscape no usa esos
+        // overrides, así que replicarlos aquí rompería la coincidencia
+        // exacta pedida.
+        fontWeight: (titleFontSize != null || matchScreen01Typography || compact) ? FontWeight.w800 : null,
         letterSpacing: titleFontSize != null ? -0.5 : null,
         height: titleFontSize != null ? 1.08 : null,
         shadows: legibilityShadow,

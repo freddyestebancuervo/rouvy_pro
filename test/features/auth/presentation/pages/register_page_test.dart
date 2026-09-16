@@ -781,6 +781,26 @@ void main() {
     expect(subtitle.textAlign, TextAlign.left);
   });
 
+  // ---------------------------------------------------------------------
+  // KORIXA-SCREEN02-SCREEN03-MATCH-SCREEN01-TITLE-SIZE-20260915: el
+  // título landscape ("Crea tu cuenta") debe usar EXACTAMENTE el mismo
+  // tamaño/peso que el título landscape de SCREEN_01
+  // ("Conecta tu energía.", 32px, w800).
+  // ---------------------------------------------------------------------
+  for (final Size size in phoneLandscapeSizes) {
+    testWidgets(
+      'REGISTER_LANDSCAPE_${size.width.toInt()}x${size.height.toInt()}_TITLE_MATCHES_SCREEN01 = PASS',
+      (WidgetTester tester) async {
+        await pumpRegisterPage(tester, repository, surfaceSize: size);
+        expect(tester.takeException(), isNull, reason: 'no debe haber overflow en ${size.width.toInt()}x${size.height.toInt()}');
+
+        final Text title = tester.widget<Text>(find.byKey(const Key('register-title')));
+        expect(title.style?.fontSize, 32, reason: 'debe coincidir con el tamaño del título de SCREEN_01 (32px)');
+        expect(title.style?.fontWeight, FontWeight.w800, reason: 'debe coincidir con el peso del título de SCREEN_01 (w800)');
+      },
+    );
+  }
+
   testWidgets('REGISTER_COMPACT_LANDSCAPE_KEYBOARD_OPEN_CTA_REACHABLE = PASS', (WidgetTester tester) async {
     await pumpRegisterPage(tester, repository, surfaceSize: const Size(844, 390));
 
