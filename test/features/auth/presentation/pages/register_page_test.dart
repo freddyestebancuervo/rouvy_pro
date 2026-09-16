@@ -6,6 +6,8 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:mocktail/mocktail.dart';
 
+import 'package:rouvy_pro/app/theme/app_colors.dart';
+import 'package:rouvy_pro/app/theme/app_gradients.dart';
 import 'package:rouvy_pro/core/design_system/dark_tech_buttons.dart';
 import 'package:rouvy_pro/core/error/failures.dart';
 import 'package:rouvy_pro/features/auth/domain/usecases/register_usecase.dart';
@@ -779,6 +781,77 @@ void main() {
     final Text subtitle = tester.widget<Text>(find.byKey(const Key('register-subtitle')));
     expect(title.textAlign, TextAlign.left);
     expect(subtitle.textAlign, TextAlign.left);
+  });
+
+  // ---------------------------------------------------------------------
+  // KORIXA-SCREEN03-ADD-THREE-LINE-INDICATOR-WITH-CENTER-ACTIVE-20260915:
+  // mismo indicador visual de 3 barras ya aprobado en SCREEN_01 landscape
+  // (35×6, separación 4), pero con la barra CENTRAL activa — nuevo en
+  // SCREEN_03, exclusivo de phone landscape.
+  // ---------------------------------------------------------------------
+  for (final Size size in phoneLandscapeSizes) {
+    testWidgets(
+      'REGISTER_LANDSCAPE_${size.width.toInt()}x${size.height.toInt()}_INDICATOR_CENTER_ACTIVE = PASS',
+      (WidgetTester tester) async {
+        await pumpRegisterPage(tester, repository, surfaceSize: size);
+        expect(tester.takeException(), isNull, reason: 'no debe haber overflow en ${size.width.toInt()}x${size.height.toInt()}');
+
+        final List<Container> bars = tester
+            .widgetList<Container>(find.descendant(of: find.byKey(const Key('register-indicator-row')), matching: find.byType(Container)))
+            .toList();
+        expect(bars.length, 3, reason: 'INDICATOR debe mostrar exactamente 3 líneas');
+        for (final Container bar in bars) {
+          expect(bar.constraints?.maxWidth, 35.0, reason: 'INDICATOR_WIDTH debe ser 35px');
+          expect(bar.constraints?.maxHeight, 6.0, reason: 'INDICATOR_HEIGHT debe ser 6px');
+        }
+
+        // INDICATOR_ACTIVE_BAR_POSITION = CENTER: la barra del MEDIO
+        // (índice 1) debe tener el gradiente activo; la 1ra y 3ra deben
+        // quedar en gris inactivo (`DarkTech.border`).
+        final BoxDecoration firstDecoration = bars[0].decoration! as BoxDecoration;
+        final BoxDecoration centerDecoration = bars[1].decoration! as BoxDecoration;
+        final BoxDecoration lastDecoration = bars[2].decoration! as BoxDecoration;
+        expect(firstDecoration.gradient, isNull, reason: 'la 1ra barra debe ser gris/inactiva');
+        expect(firstDecoration.color, DarkTech.border, reason: 'la 1ra barra debe ser gris/inactiva');
+        expect(centerDecoration.gradient, AppGradients.primaryCta, reason: 'INDICATOR_ACTIVE_BAR_POSITION debe ser CENTER');
+        expect(lastDecoration.gradient, isNull, reason: 'la 3ra barra debe ser gris/inactiva');
+        expect(lastDecoration.color, DarkTech.border, reason: 'la 3ra barra debe ser gris/inactiva');
+
+        // Separación horizontal entre líneas: 4px.
+        final List<SizedBox> gaps = tester
+            .widgetList<SizedBox>(find.descendant(of: find.byKey(const Key('register-indicator-row')), matching: find.byType(SizedBox)))
+            .toList();
+        expect(gaps.length, 2, reason: 'debe haber 2 separadores entre las 3 barras');
+        for (final SizedBox gap in gaps) {
+          expect(gap.width, 4.0, reason: 'INDICATOR_GAP debe ser 4px');
+        }
+
+        // El indicador debe quedar alineado con el mismo borde izquierdo
+        // que el panel del formulario (mismo `Align(centerLeft)` de
+        // origen) — no debe quedar flotando sin relación con el
+        // contenido.
+        final double indicatorLeft = tester.getTopLeft(find.byKey(const Key('register-indicator-row'))).dx;
+        final double panelLeft = tester.getTopLeft(find.byKey(const Key('register-landscape-panel-width'))).dx;
+        expect(indicatorLeft, closeTo(panelLeft, 0.5), reason: 'el indicador debe compartir el borde izquierdo del panel');
+      },
+    );
+  }
+
+  testWidgets('REGISTER_PORTRAIT_NO_INDICATOR = PASS', (WidgetTester tester) async {
+    // KORIXA-SCREEN03-ADD-THREE-LINE-INDICATOR-WITH-CENTER-ACTIVE-
+    // 20260915: exclusivo de phone landscape — portrait no debe mostrar
+    // este indicador.
+    await pumpRegisterPage(tester, repository, surfaceSize: const Size(390, 844));
+    expect(find.byKey(const Key('register-indicator-row')), findsNothing);
+  });
+
+  testWidgets('REGISTER_DESKTOP_NO_INDICATOR = PASS', (WidgetTester tester) async {
+    // KORIXA-SCREEN03-ADD-THREE-LINE-INDICATOR-WITH-CENTER-ACTIVE-
+    // 20260915: exclusivo de phone landscape — desktop/web no debe
+    // mostrar este indicador (no estaba explícitamente implementado ahí,
+    // así que el encargo pide no tocarlo).
+    await pumpRegisterPage(tester, repository, surfaceSize: const Size(1440, 900));
+    expect(find.byKey(const Key('register-indicator-row')), findsNothing);
   });
 
   // ---------------------------------------------------------------------

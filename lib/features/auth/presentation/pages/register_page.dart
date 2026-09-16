@@ -9,6 +9,7 @@ import '../../../../app/theme/app_gradients.dart';
 import '../../../../app/theme/app_spacing.dart';
 import '../../../../app/theme/app_theme.dart';
 import '../../../../core/design_system/dark_tech_buttons.dart';
+import '../../../../core/design_system/dark_tech_indicators.dart';
 import '../../../../core/error/failures.dart';
 import '../../../../core/responsive/korixa_viewport.dart';
 import '../../../../core/utils/validation_l10n.dart';
@@ -674,13 +675,58 @@ class _RegisterPageState extends ConsumerState<RegisterPage> {
                         key: const Key('register-landscape-panel-width'),
                         constraints: BoxConstraints(maxWidth: panelWidth),
                         child: SingleChildScrollView(
-                          child: _buildMobileFormContent(
-                            themeContext,
-                            l10n,
-                            registerState,
-                            socialState,
-                            anyLoading,
-                            compact: true,
+                          child: Column(
+                            // KORIXA-SCREEN03-ADD-THREE-LINE-INDICATOR-
+                            // WITH-CENTER-ACTIVE-20260915: `stretch` (no
+                            // `start`) para que este `Column` exterior no
+                            // cambie el mecanismo de altura del
+                            // `SingleChildScrollView` (un `Column` con
+                            // `mainAxisSize.min` FUERA del scroll rompía
+                            // el alto acotado de siempre y producía
+                            // overflow — probado y descartado). El
+                            // indicador vive DENTRO del mismo scroll que
+                            // el formulario, como primer hijo, envuelto en
+                            // `Align` para no estirarse al `panelWidth`
+                            // completo (su ancho natural es ~113,
+                            // 3×35+2×4).
+                            crossAxisAlignment: CrossAxisAlignment.stretch,
+                            mainAxisSize: MainAxisSize.min,
+                            children: <Widget>[
+                              // Mismo indicador visual de 3 barras ya
+                              // aprobado en SCREEN_01 landscape (KORIXA-
+                              // SCREEN01-LANDSCAPE-INDICATOR-EXACT-SIZE-
+                              // 20260915: 35×6, separación 4), pero con
+                              // `activeIndex: 1` (la barra CENTRAL activa,
+                              // no la primera) — pedido explícito de esta
+                              // tarea. No toca título, subtítulo, campos,
+                              // gap entre campos, CTA ni Google — todos
+                              // hijos sin modificar de
+                              // `_buildMobileFormContent`, más abajo.
+                              const Align(
+                                alignment: Alignment.centerLeft,
+                                child: ThreeBarIndicator(
+                                  key: Key('register-indicator-row'),
+                                  barWidth: 35,
+                                  barHeight: 6,
+                                  gap: 4,
+                                  activeIndex: 1,
+                                ),
+                              ),
+                              // Separación elegante entre el indicador y
+                              // el formulario — mismo valor que Welcome
+                              // usa entre sus propios bloques de
+                              // contenido (`AppSpacing.sm`), no un número
+                              // inventado.
+                              const SizedBox(height: AppSpacing.sm),
+                              _buildMobileFormContent(
+                                themeContext,
+                                l10n,
+                                registerState,
+                                socialState,
+                                anyLoading,
+                                compact: true,
+                              ),
+                            ],
                           ),
                         ),
                       ),
