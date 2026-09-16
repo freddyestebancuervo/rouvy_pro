@@ -653,20 +653,28 @@ class _LoginPageState extends ConsumerState<LoginPage> {
     // misma fórmula EXACTA ya aprobada por el owner en
     // `RegisterPage._buildPhoneLandscape` (SCREEN_03 — fuente de verdad
     // única, ver ese archivo) — antes `(width * 0.56).clamp(260, 380)`.
-    // Reemplazada, no reinventada, para que las 3 pantallas de auth
-    // compartan la misma sensación visual de "contenedor más flaco" en
-    // landscape compacto.
+    // KORIXA-SCREEN01-SCREEN02-CONTROLS-MATCH-TITLE-WIDTH-20260915: esta
+    // fórmula ya NO gobierna campos/CTA/Google/enlaces (el dueño pidió
+    // explícitamente que compartan el ancho del título en vez de este) —
+    // sigue viva únicamente para el SUBTÍTULO, que no fue parte de este
+    // encargo (ver `narrowContentWidth` más abajo).
     final double panelWidth = (MediaQuery.of(context).size.width * 0.3696).clamp(270.0, 343.2);
     // KORIXA-SCREEN01-SCREEN02-TITLE-SINGLE-LINE-LANDSCAPE-20260915: ancho
-    // EXCLUSIVO del bloque de título, deliberadamente desacoplado de
-    // `panelWidth` (que sigue gobernando SOLO campos/CTA, sin cambios, vía
-    // `narrowContentWidth` más abajo). 630 es el mínimo medido
+    // del bloque de título — 630 es el mínimo medido
     // (`RenderParagraph.didExceedMaxLines`, ver informe) con margen de
     // seguridad para que "Bienvenido de nuevo" quepa en una línea a
     // 32px/w800 en los 5 viewports requeridos — mismo valor que
     // `WelcomePage._titleBlockWidthFor` (misma fuente de verdad, título
     // idéntico en tamaño/peso). El `math.min` contra el ancho disponible
     // es puramente defensivo (nunca se activa en los viewports pedidos).
+    //
+    // KORIXA-SCREEN01-SCREEN02-CONTROLS-MATCH-TITLE-WIDTH-20260915: esta
+    // MISMA variable ahora también gobierna el ancho de campos/CTA/
+    // Google/enlaces (vía `crossAxisAlignment.stretch` de la columna
+    // exterior de [_buildFormColumn], que ya usa `titleBlockWidth` como
+    // ancho del `ConstrainedBox` de abajo) — el dueño pidió
+    // explícitamente "el mismo ancho exacto que sus títulos", así que
+    // reutiliza la MISMA fuente de verdad en vez de duplicar la fórmula.
     final double screenWidth = MediaQuery.of(context).size.width;
     final double titleBlockAvailable = screenWidth - 2 * AppSpacing.md;
     final double titleBlockWidth = titleBlockAvailable < 630.0 ? titleBlockAvailable : 630.0;
@@ -700,7 +708,7 @@ class _LoginPageState extends ConsumerState<LoginPage> {
                     compact: true,
                     floatingOverPhoto: true,
                     narrowContentWidth: panelWidth,
-                    narrowContentKey: 'login-landscape-panel-width',
+                    narrowContentKey: 'login-landscape-subtitle-width',
                   ),
                 ),
               ),
@@ -996,28 +1004,35 @@ class _LoginPageState extends ConsumerState<LoginPage> {
     // el dueño pidió que este grupo se sienta "más junto", sin tocar
     // `sectionGap`/`dividerGap` en el resto del formulario.
     bool tightenBottomActions = false,
-    // KORIXA-SCREEN01-SCREEN02-TITLE-SINGLE-LINE-LANDSCAPE-20260915: `null`
+    // KORIXA-SCREEN01-SCREEN02-CONTROLS-MATCH-TITLE-WIDTH-20260915: `null`
     // (default) preserva el comportamiento EXACTO de siempre para
-    // portrait/desktop — título/subtítulo/campos/CTA siguen todos
+    // portrait/desktop — logo/título/subtítulo/campos/CTA siguen todos
     // estirados al mismo ancho de columna (`crossAxisAlignment.stretch`
     // de [content]). Cuando no es `null` (SOLO phone landscape, ver
-    // [_buildPhoneLandscape]), subtítulo+campos+CTA+Google+enlaces se
-    // envuelven en su propio `SizedBox` de este ancho (el `panelWidth`
-    // aprobado de siempre, SIN CAMBIOS) para que solo el título/logo de
-    // arriba puedan usar el ancho más generoso que le da su propio
-    // `ConstrainedBox` exterior — el objetivo es una sola línea en el
-    // título sin re-ensanchar campos/CTA.
+    // [_buildPhoneLandscape]), el SUBTÍTULO (únicamente) se envuelve en
+    // su propio `SizedBox` de este ancho (el `panelWidth` aprobado de
+    // siempre — fórmula de SCREEN_03, SIN CAMBIOS por esta tarea) para
+    // que quede en su tamaño histórico mientras logo/título/campos/CTA/
+    // Google/enlaces comparten el ancho más generoso del título
+    // (`titleBlockWidth`, heredado vía `crossAxisAlignment.stretch` de
+    // esta misma columna exterior — ver [_buildPhoneLandscape]).
+    //
+    // Antes de KORIXA-SCREEN01-SCREEN02-CONTROLS-MATCH-TITLE-WIDTH-
+    // 20260915 este mismo parámetro también envolvía
+    // campos+CTA+Google+enlaces (tarea KORIXA-SCREEN01-SCREEN02-TITLE-
+    // SINGLE-LINE-LANDSCAPE-20260915) — el dueño ahora pide
+    // explícitamente lo contrario para esos controles (mismo ancho que
+    // el título, no el de SCREEN_03), así que se sacaron de este
+    // `SizedBox` y pasaron a ser hijos directos de la columna exterior.
     double? narrowContentWidth,
-    // Alineamiento horizontal del bloque re-angostado dentro del bloque
-    // ancho de título — debe coincidir con el borde de anclaje real del
-    // panel (`centerRight` en Login, panel anclado a la derecha) para que
-    // campos/CTA queden exactamente en la misma posición que antes.
+    // Alineamiento horizontal del bloque re-angostado (ahora solo el
+    // subtítulo) — debe coincidir con el borde de anclaje real del panel
+    // (`centerRight` en Login, panel anclado a la derecha).
     AlignmentGeometry narrowContentAlignment = Alignment.centerRight,
-    // Mismo `Key` que antes tenía el `ConstrainedBox` exterior
-    // (`login-landscape-panel-width`) — se reubica aquí, en el `SizedBox`
-    // que ahora sí mide el ancho real de campos/CTA, para que las
-    // pruebas `LOGIN_LANDSCAPE_*_MATCHES_SCREEN03_WIDTH` (ya aprobadas,
-    // tarea anterior) seguir midiendo exactamente lo mismo sin cambios.
+    // `Key` del `SizedBox` que envuelve el subtítulo re-angostado —
+    // `login-landscape-subtitle-width` (antes `login-landscape-panel-
+    // width`, renombrado porque ya no mide campos/CTA, solo el
+    // subtítulo — ver arriba).
     String? narrowContentKey,
   }) {
     final TextTheme textTheme = Theme.of(context).textTheme;
@@ -1426,15 +1441,26 @@ class _LoginPageState extends ConsumerState<LoginPage> {
                 SizedBox(height: compact ? AppSpacing.sm : AppSpacing.lg),
               ],
               titleWidget,
-              // KORIXA-SCREEN01-SCREEN02-TITLE-SINGLE-LINE-LANDSCAPE-
+              // KORIXA-SCREEN01-SCREEN02-CONTROLS-MATCH-TITLE-WIDTH-
               // 20260915: cuando `narrowContentWidth` no es `null` (SOLO
-              // phone landscape), subtítulo+campos+CTA+Google+enlaces se
-              // re-angostan a ese ancho (el `panelWidth` aprobado de
-              // siempre) dentro de un `SizedBox` propio, alineado al
-              // mismo borde que ancla el panel — el título de arriba
-              // queda solo, libre de usar el ancho más generoso de su
-              // `ConstrainedBox` exterior. Portrait/desktop (`null`)
-              // preservan exactamente la misma lista plana de siempre.
+              // phone landscape), el SUBTÍTULO (únicamente) se re-angosta
+              // a ese ancho (el `panelWidth` aprobado de siempre — SIN
+              // CAMBIOS, sigue siendo la fórmula de SCREEN_03) dentro de
+              // un `SizedBox` propio, alineado al mismo borde que ancla
+              // el panel. `controlChildren` (campos/CTA/Google/enlaces)
+              // YA NO se re-angostan aquí — el dueño pidió explícitamente
+              // que compartan el ancho del título, así que quedan como
+              // hijos directos de esta columna exterior, heredando su
+              // ancho completo (`titleBlockWidth`, vía
+              // `crossAxisAlignment.stretch`) exactamente igual que
+              // `titleWidget` arriba.
+              //
+              // KORIXA-SCREEN01-SCREEN02-TITLE-SINGLE-LINE-LANDSCAPE-
+              // 20260915 (comportamiento anterior, ahora solo aplica al
+              // subtítulo): el título de arriba queda libre de usar el
+              // ancho más generoso de su `ConstrainedBox` exterior.
+              // Portrait/desktop (`null`) preservan exactamente la misma
+              // lista plana de siempre.
               if (narrowContentWidth != null)
                 Align(
                   alignment: narrowContentAlignment,
@@ -1447,8 +1473,6 @@ class _LoginPageState extends ConsumerState<LoginPage> {
                       children: <Widget>[
                         SizedBox(height: titleToSubtitleGap ?? AppSpacing.sm),
                         subtitleWidget,
-                        SizedBox(height: effectiveSectionGap),
-                        ...controlChildren,
                       ],
                     ),
                   ),
@@ -1456,9 +1480,9 @@ class _LoginPageState extends ConsumerState<LoginPage> {
               else ...<Widget>[
                 SizedBox(height: titleToSubtitleGap ?? AppSpacing.sm),
                 subtitleWidget,
-                SizedBox(height: effectiveSectionGap),
-                ...controlChildren,
               ],
+              SizedBox(height: effectiveSectionGap),
+              ...controlChildren,
             ],
           );
 

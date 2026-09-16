@@ -646,12 +646,19 @@ class _PhoneLandscapeWelcomeContent extends StatelessWidget {
                               // antes el indicador quedaba estirado a lo ancho
                               // completo de la columna (`crossAxisAlignment.
                               // stretch`) con sus barras pegadas a la izquierda
-                              // — el CTA de abajo, en cambio, es más angosto
-                              // que la columna (`ctaWidth`, 90% del contenido).
-                              // Mismo patrón que en desktop: se envuelve en un
-                              // `SizedBox` del ancho EXACTO del CTA + `Align`
-                              // al mismo borde izquierdo, luego `Center` adentro
-                              // — así ambos comparten centro horizontal real.
+                              // — se envuelve en un `SizedBox` de `ctaWidth`
+                              // (90% del contenido, SIN CAMBIOS) + `Align` al
+                              // mismo borde izquierdo, luego `Center` adentro.
+                              //
+                              // KORIXA-SCREEN01-SCREEN02-CONTROLS-MATCH-TITLE-
+                              // WIDTH-20260915: el CTA ya NO vive dentro de
+                              // este `ConstrainedBox` (acotado a
+                              // `contentMaxWidth`, la fórmula angosta de
+                              // SCREEN_03) — se movió afuera, como hermano
+                              // directo del título en la columna exterior, para
+                              // poder usar `titleBlockWidth` (más ancho) sin que
+                              // este `ConstrainedBox` se lo recorte. El
+                              // indicador se queda aquí, sin cambios.
                               Align(
                                 alignment: Alignment.centerLeft,
                                 child: SizedBox(
@@ -659,39 +666,39 @@ class _PhoneLandscapeWelcomeContent extends StatelessWidget {
                                   child: const Center(child: _PhoneLandscapeOnboardingIndicator()),
                                 ),
                               ),
-                              const SizedBox(height: AppSpacing.md),
-                              // KORIXA-SCREEN01-LANDSCAPE-CTA-MICRO-REDUCTION-
-                              // 20260906: el dueño pidió el CTA "un poco menos
-                              // dominante" — 10% más angosto que el ancho que
-                              // stretch le daba antes (el mismo ancho que
-                              // título/subtítulo, que NO cambian — el indicador
-                              // comparte `ctaWidth` con el CTA desde KORIXA-
-                              // SCREEN01-CENTER-PAGE-INDICATORS-20260910, ver
-                              // arriba). `Align` en vez de dejar que el `Column`
-                              // (`crossAxisAlignment.stretch`) lo estire: solo
-                              // el CTA se saca de ese comportamiento, título y
-                              // subtítulo siguen ocupando el ancho completo de
-                              // la columna exactamente igual que antes. Alto
-                              // sin cambios (56, dentro del rango 52-58 pedido)
-                              // — el encargo pide reducir SOLO el ancho.
-                              Align(
-                                alignment: Alignment.centerLeft,
-                                child: SizedBox(
-                                  width: ctaWidth,
-                                  child: PrimaryGradientButton(
-                                    key: const Key('welcome-landscape-cta'),
-                                    label: l10n.welcomeGetStarted,
-                                    // KORIXA-WELCOME-SINGLE-CTA-NAVIGATION-
-                                    // PR127-20260910: navega a
-                                    // `AppRoute.login` — ver docblock de
-                                    // [WelcomePage].
-                                    onPressed: () => context.go(AppRoute.login),
-                                    height: 56,
-                                    fontSize: 16,
-                                  ),
-                                ),
-                              ),
                             ],
+                          ),
+                        ),
+                        const SizedBox(height: AppSpacing.md),
+                        // KORIXA-SCREEN01-SCREEN02-CONTROLS-MATCH-TITLE-
+                        // WIDTH-20260915: `titleBlockWidth` (antes `ctaWidth`,
+                        // ver KORIXA-SCREEN01-LANDSCAPE-CTA-MICRO-REDUCTION-
+                        // 20260906) — el dueño pidió explícitamente que el CTA
+                        // "Comenzar" tenga el mismo ancho EXACTO que el bloque
+                        // del título (`min(630, viewportWidth - 24)`), no el
+                        // de subtítulo/indicador. Por eso el CTA ahora es
+                        // hermano DIRECTO del título en la columna exterior
+                        // (antes vivía dentro del `ConstrainedBox` angosto de
+                        // arriba, que lo habría recortado de vuelta a
+                        // `contentMaxWidth`). Solo el CTA cambia: altura (56),
+                        // gradiente, texto y lógica de `onPressed` quedan
+                        // intactos. El indicador de 3 barras (arriba) YA NO
+                        // comparte ancho/centro con el CTA — antes ambos
+                        // usaban `ctaWidth` (KORIXA-SCREEN01-CENTER-PAGE-
+                        // INDICATORS-20260910), pero este encargo solo
+                        // autorizó tocar el CTA.
+                        SizedBox(
+                          width: titleBlockWidth,
+                          child: PrimaryGradientButton(
+                            key: const Key('welcome-landscape-cta'),
+                            label: l10n.welcomeGetStarted,
+                            // KORIXA-WELCOME-SINGLE-CTA-NAVIGATION-
+                            // PR127-20260910: navega a
+                            // `AppRoute.login` — ver docblock de
+                            // [WelcomePage].
+                            onPressed: () => context.go(AppRoute.login),
+                            height: 56,
+                            fontSize: 16,
                           ),
                         ),
                       ],
