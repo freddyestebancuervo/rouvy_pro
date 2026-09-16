@@ -775,16 +775,15 @@ class _PhoneLandscapeHeroImage extends StatelessWidget {
 /// Indicador de teléfono en horizontal — mismas 3 barras (1 activa + 2
 /// inactivas), mismo orden/gradiente/color que el resto de la app.
 ///
-/// KORIXA-SCREEN01-LANDSCAPE-INDICATOR-BARS-REFINEMENT-20260915: 20×4
-/// (antes 16×3) — el dueño pidió verlas "un poco más largas y un poco
-/// más gruesas" sin exagerar. +25% de largo (16→20) y +33% de grosor
-/// (3→4, el incremento entero más chico posible ya que `barHeight` se
-/// renderiza en píxeles físicos íntegros). `gap` se mantiene en 4 —el
-/// encargo pide conservar "la misma separación visual coherente entre
-/// barras", y ese valor no cambia el look de la separación, solo el
-/// tamaño de las barras en sí. Exclusivo de esta composición (phone
-/// landscape de SCREEN_01) — portrait/desktop siguen con sus propios
-/// tamaños (18×4 y 24×4 respectivamente, sin tocar).
+/// KORIXA-SCREEN01-LANDSCAPE-INDICATOR-EXACT-SIZE-20260915: 35×6, gap 4
+/// — valores EXACTOS pedidos por el dueño (antes 20×4, gap 4 —
+/// KORIXA-SCREEN01-LANDSCAPE-INDICATOR-BARS-REFINEMENT-20260915). El
+/// `gap` no cambia (ya estaba en 4). Gradiente de la barra activa y
+/// color gris de las 2 inactivas sin tocar — vienen de `_IndicatorBar`
+/// en `dark_tech_indicators.dart`, que este widget no modifica.
+/// Exclusivo de esta composición (phone landscape de SCREEN_01) —
+/// portrait/desktop siguen con sus propios tamaños (18×4 y 24×4
+/// respectivamente, sin tocar).
 class _PhoneLandscapeOnboardingIndicator extends StatelessWidget {
   const _PhoneLandscapeOnboardingIndicator();
 
@@ -792,8 +791,8 @@ class _PhoneLandscapeOnboardingIndicator extends StatelessWidget {
   Widget build(BuildContext context) {
     return const ThreeBarIndicator(
       key: Key('welcome-indicator-row'),
-      barWidth: 20,
-      barHeight: 4,
+      barWidth: 35,
+      barHeight: 6,
       gap: 4,
     );
   }

@@ -3,6 +3,7 @@ import 'package:flutter/rendering.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 import 'package:rouvy_pro/app/theme/app_colors.dart';
+import 'package:rouvy_pro/app/theme/app_gradients.dart';
 import 'package:rouvy_pro/core/design_system/dark_tech_buttons.dart';
 import 'package:rouvy_pro/features/auth/presentation/pages/welcome_page.dart';
 
@@ -273,12 +274,12 @@ void main() {
       );
       expect(bars.length, 3, reason: '$label debe mostrar exactamente 3 líneas indicadoras');
 
-      // KORIXA-SCREEN01-LANDSCAPE-INDICATOR-BARS-REFINEMENT-20260915:
-      // 20×4 (antes 16×3) — cada barra mide el `Container` completo, sin
+      // KORIXA-SCREEN01-LANDSCAPE-INDICATOR-EXACT-SIZE-20260915: 35×6
+      // (antes 20×4) — cada barra mide el `Container` completo, sin
       // importar si es la activa o una inactiva.
       for (final Container bar in bars) {
-        expect(bar.constraints?.maxWidth, 20.0, reason: '$label: cada barra debe medir 20 de largo');
-        expect(bar.constraints?.maxHeight, 4.0, reason: '$label: cada barra debe medir 4 de grosor');
+        expect(bar.constraints?.maxWidth, 35.0, reason: '$label: cada barra debe medir 35 de largo');
+        expect(bar.constraints?.maxHeight, 6.0, reason: '$label: cada barra debe medir 6 de grosor');
       }
 
       // KORIXA-SCREEN01-SCREEN02-CONTROLS-MATCH-RENDERED-TITLE-LENGTH-
@@ -333,12 +334,14 @@ void main() {
   });
 
   // ---------------------------------------------------------------------
-  // KORIXA-SCREEN01-LANDSCAPE-INDICATOR-BARS-REFINEMENT-20260915: las 3
-  // barras del indicador deben medir 20×4 (antes 16×3) en los 5
-  // viewports obligatorios, sin overflow y sin perder el centrado
-  // compartido con el CTA.
+  // KORIXA-SCREEN01-LANDSCAPE-INDICATOR-EXACT-SIZE-20260915: las 3
+  // barras del indicador deben medir EXACTAMENTE 35×6 (antes 20×4, gap
+  // 4 sin cambios) en los 5 viewports obligatorios, sin overflow, sin
+  // moverse de su posición actual y sin perder el centrado compartido
+  // con el CTA. La 1ra barra conserva el gradiente activo; la 2da y 3ra
+  // conservan `DarkTech.border` (gris inactivo).
   // ---------------------------------------------------------------------
-  const List<Size> indicatorBarsRefinementViewports = <Size>[
+  const List<Size> indicatorExactSizeViewports = <Size>[
     Size(740, 360),
     Size(812, 375),
     Size(844, 390),
@@ -346,28 +349,49 @@ void main() {
     Size(932, 430),
   ];
 
-  for (final Size size in indicatorBarsRefinementViewports) {
+  for (final Size size in indicatorExactSizeViewports) {
     testWidgets(
-      'WELCOME_LANDSCAPE_${size.width.toInt()}x${size.height.toInt()}_INDICATOR_BARS_REFINED = PASS',
+      'WELCOME_LANDSCAPE_${size.width.toInt()}x${size.height.toInt()}_INDICATOR_EXACT_SIZE = PASS',
       (WidgetTester tester) async {
         await pumpWelcomePage(tester, surfaceSize: size);
         expect(tester.takeException(), isNull, reason: 'no debe haber overflow en ${size.width.toInt()}x${size.height.toInt()}');
 
-        final Iterable<Container> bars = tester.widgetList<Container>(
-          find.descendant(of: find.byKey(const Key('welcome-indicator-row')), matching: find.byType(Container)),
-        );
-        expect(bars.length, 3);
+        final List<Container> bars = tester
+            .widgetList<Container>(find.descendant(of: find.byKey(const Key('welcome-indicator-row')), matching: find.byType(Container)))
+            .toList();
+        expect(bars.length, 3, reason: 'INDICATOR debe seguir mostrando exactamente 3 líneas');
         for (final Container bar in bars) {
-          expect(bar.constraints?.maxWidth, 20.0, reason: 'largo nuevo de cada barra (antes 16)');
-          expect(bar.constraints?.maxHeight, 4.0, reason: 'grosor nuevo de cada barra (antes 3)');
+          expect(bar.constraints?.maxWidth, 35.0, reason: 'INDICATOR_WIDTH debe ser 35px');
+          expect(bar.constraints?.maxHeight, 6.0, reason: 'INDICATOR_HEIGHT debe ser 6px');
         }
 
-        // El indicador debe seguir compartiendo centro horizontal con el
-        // CTA — sin cambios por este ajuste, que solo toca el tamaño de
-        // las barras, no su alineación/centrado.
+        // Estilo: 1ra barra con gradiente activo, 2da/3ra en gris
+        // inactivo (`DarkTech.border`) — sin cambios de color/gradiente
+        // por este ajuste de tamaño.
+        final BoxDecoration firstDecoration = bars[0].decoration! as BoxDecoration;
+        expect(firstDecoration.gradient, AppGradients.primaryCta, reason: 'la 1ra barra debe conservar el gradiente activo');
+        for (final Container inactiveBar in bars.sublist(1)) {
+          final BoxDecoration decoration = inactiveBar.decoration! as BoxDecoration;
+          expect(decoration.gradient, isNull, reason: 'las barras inactivas no deben tener gradiente');
+          expect(decoration.color, DarkTech.border, reason: 'las barras inactivas deben conservar el gris actual');
+        }
+
+        // Separación horizontal entre líneas: 4px (SizedBox entre cada
+        // par de barras dentro del `Row` de `ThreeBarIndicator`).
+        final List<SizedBox> gaps = tester
+            .widgetList<SizedBox>(find.descendant(of: find.byKey(const Key('welcome-indicator-row')), matching: find.byType(SizedBox)))
+            .toList();
+        expect(gaps.length, 2, reason: 'debe haber 2 separadores entre las 3 barras');
+        for (final SizedBox gap in gaps) {
+          expect(gap.width, 4.0, reason: 'INDICATOR_GAP debe ser 4px');
+        }
+
+        // El indicador NO debe moverse de su posición actual: sigue
+        // compartiendo centro horizontal con el CTA, igual que antes de
+        // este ajuste de tamaño.
         final Offset ctaCenter = tester.getCenter(find.byKey(const Key('welcome-landscape-cta')));
         final Offset indicatorCenter = tester.getCenter(find.byKey(const Key('welcome-indicator-row')));
-        expect(indicatorCenter.dx, closeTo(ctaCenter.dx, 0.5));
+        expect(indicatorCenter.dx, closeTo(ctaCenter.dx, 0.5), reason: 'el indicador debe seguir centrado respecto al CTA');
       },
     );
   }
