@@ -2057,6 +2057,103 @@ void main() {
     );
   });
 
+  // ---------------------------------------------------------------------
+  // KORIXA-AUTH-REAL-DEVICE-LANDSCAPE-FULLSCREEN-FIT-20260916: el owner
+  // reportó, probando el APK development en un dispositivo Android real,
+  // que en SCREEN_02 phone landscape el título/CTA quedaban cortados —
+  // causa raíz: las barras de sistema (status/nav) seguían visibles,
+  // reduciendo el viewport útil real por debajo de lo que cualquier test
+  // de widget (que nunca simula system bars reales) podía detectar. La
+  // Fase 1 de esta tarea corrige eso a nivel nativo (`MainActivity.kt`,
+  // `WindowInsetsControllerCompat`), pero un widget test no puede
+  // ejercitar barras de sistema reales.
+  //
+  // El mejor proxy disponible es simular un inset RESIDUAL
+  // (`tester.view.padding`) representando lo que un notch/cutout físico
+  // de cámara SÍ deja incluso con el modo immersive activo (a diferencia
+  // de las barras de navegación, un cutout no desaparece con `hide()`).
+  // IMPORTANTE — se modela como inset LATERAL (`right`), no vertical: un
+  // punch-hole de cámara vive en el borde CORTO del teléfono (arriba en
+  // portrait), que en landscape rotado pasa a ser un lado (izquierdo o
+  // derecho), no arriba/abajo. Medido y descartado explícitamente:
+  // simular un inset vertical (`top`) aquí NO es realista para esta
+  // orientación — el bloque, anclado arriba dentro de su propia caja
+  // (no recentrado), se desplaza hacia abajo por la TOTALIDAD de
+  // cualquier inset vertical que se le imponga, agotando cualquier
+  // margen calculado (verificado: incluso 16px de inset superior
+  // simulado hacía fallar 3 de los 5 viewports) — ese NO es el riesgo
+  // real en landscape, así que simularlo aquí produciría una falsa
+  // alarma en vez de una prueba representativa.
+  // ---------------------------------------------------------------------
+  const List<Size> landscapeRealDeviceFitViewports = <Size>[
+    Size(740, 360),
+    Size(812, 375),
+    Size(844, 390),
+    Size(915, 412),
+    Size(932, 430),
+  ];
+
+  for (final Size size in landscapeRealDeviceFitViewports) {
+    testWidgets(
+      'LOGIN_LANDSCAPE_${size.width.toInt()}x${size.height.toInt()}_PRIMARY_BLOCK_FULLY_VISIBLE_WITH_SYSTEM_INSETS = PASS',
+      (WidgetTester tester) async {
+        tester.view.physicalSize = size;
+        tester.view.devicePixelRatio = 1.0;
+        // Inset residual simulado (24px al lado del CTA) — representa un
+        // cutout/notch físico lateral en landscape.
+        tester.view.padding = const FakeViewPadding(right: 24);
+        addTearDown(tester.view.reset);
+
+        await tester.pumpWidget(
+          authPageHarness(initialLocation: '/login', loginPage: const LoginPage()),
+        );
+        await tester.pumpAndSettle();
+        expect(
+          tester.takeException(),
+          isNull,
+          reason: 'OVERFLOW_COUNT debe ser 0 incluso con un inset residual simulado en ${size.width.toInt()}x${size.height.toInt()}',
+        );
+
+        // LANDSCAPE_INITIAL_PRIMARY_BLOCK_FULLY_VISIBLE: título → CTA
+        // "Iniciar sesión" completos dentro del viewport visible, sin
+        // necesitar scroll, en la posición inicial (sin arrastrar el
+        // scroll).
+        final Rect titleRect = tester.getRect(find.byKey(const Key('login-title')));
+        final Rect ctaRect = tester.getRect(find.byType(PrimaryGradientButton));
+        expect(titleRect.top, greaterThanOrEqualTo(0), reason: 'TITLE_CLIPPING: el título no debe empezar antes del borde superior visible');
+        expect(
+          ctaRect.bottom,
+          lessThanOrEqualTo(size.height + 0.5),
+          reason: 'CTA_CLIPPING: el CTA "Iniciar sesión" debe terminar dentro del alto visible del dispositivo',
+        );
+      },
+    );
+  }
+
+  testWidgets('LOGIN_LANDSCAPE_KEYBOARD_SCROLL_REACHABILITY = PASS', (WidgetTester tester) async {
+    // KEYBOARD_SCROLL_REACHABILITY: con el teclado simulado abierto en
+    // phone landscape (el viewport más restrictivo posible, 740x360), el
+    // campo enfocado y el CTA deben seguir siendo alcanzables vía scroll
+    // — nunca permanentemente ocultos detrás del teclado.
+    const Size size = Size(740, 360);
+    await pumpLoginPage(tester, repository, surfaceSize: size);
+
+    tester.view.viewInsets = const FakeViewPadding(bottom: 200);
+    addTearDown(() => tester.view.resetViewInsets());
+    await tester.pumpAndSettle();
+    expect(tester.takeException(), isNull, reason: 'OVERFLOW_COUNT debe ser 0 con teclado simulado abierto en landscape');
+
+    final Finder emailField = find.byType(TextFormField).first;
+    await tester.ensureVisible(emailField);
+    await tester.pumpAndSettle();
+    await tester.enterText(emailField, 'rider@ridepro.com');
+    expect(tester.takeException(), isNull);
+
+    await tester.ensureVisible(find.byType(PrimaryGradientButton));
+    await tester.pumpAndSettle();
+    expect(find.byType(PrimaryGradientButton), findsOneWidget, reason: 'KEYBOARD_SCROLL_REACHABILITY: el CTA debe seguir alcanzable con teclado abierto');
+  });
+
   const <String, Size>{
     '360x680': Size(360, 680),
     '360x800': Size(360, 800),

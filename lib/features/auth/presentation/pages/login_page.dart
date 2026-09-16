@@ -783,12 +783,7 @@ class _LoginPageState extends ConsumerState<LoginPage> {
                     // por portrait/desktop — el indicador ya vive, sin
                     // cambios de código, exactamente entre "olvidé mi
                     // contraseña" y el CTA dentro de `controlChildren` (ver
-                    // más abajo). `indicatorTopGap`/`indicatorToCtaGap` se
-                    // dejan en `null` (heredan `effectiveSectionGap`/
-                    // `sectionGap` = `AppSpacing.sm`, 8, en `compact`) —
-                    // espaciado limpio y moderado, consistente con el
-                    // resto de esta composición, sin inventar un valor
-                    // nuevo.
+                    // más abajo).
                     //
                     // KORIXA-THREE-SCREEN-INDICATORS-SIZE-AND-SCREEN03-
                     // CENTERING-20260916: 32×4, separación 4 — tamaño
@@ -799,6 +794,31 @@ class _LoginPageState extends ConsumerState<LoginPage> {
                     indicatorBarWidth: 32,
                     indicatorBarHeight: 4,
                     indicatorBarGap: 4,
+                    // KORIXA-AUTH-REAL-DEVICE-LANDSCAPE-FULLSCREEN-FIT-
+                    // 20260916: ajuste vertical mínimo de última
+                    // instancia (Fase 2, punto 3 — "reducir SOLO gaps
+                    // verticales phone-landscape"), NO un rediseño.
+                    // Medido (test desechable, ver informe de la tarea)
+                    // el bloque real logo→CTA mide 369px de alto; incluso
+                    // asumiendo CERO barras de sistema (el mejor caso
+                    // posible tras el fix nativo de Fase 1), el espacio
+                    // disponible en el viewport más chico obligatorio
+                    // (740×360, tras el padding de `KorixaScrollEdgeSafety`)
+                    // es de solo 344px — un déficit real de 25px que
+                    // NINGÚN fix de barras de sistema puede cerrar por sí
+                    // solo, confirmando que Fase 2 sí hacía falta (no solo
+                    // Fase 1). Combinado con la reducción del gap logo→
+                    // título (`AppSpacing.xs`, ver más arriba),
+                    // `titleToSubtitleGap`/`contentSectionGap`/
+                    // `fieldSpacingGap` abajo y `forgotPasswordButtonPadding`
+                    // más abajo, cierra ese déficit sin tocar campos, CTA,
+                    // anchos ni tipografía.
+                    indicatorTopGap: 4,
+                    indicatorToCtaGap: 4,
+                    titleToSubtitleGap: AppSpacing.xs,
+                    contentSectionGap: AppSpacing.xs,
+                    fieldSpacingGap: AppSpacing.xs,
+                    forgotPasswordButtonPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
                   ),
                 ),
               ),
@@ -1542,7 +1562,16 @@ class _LoginPageState extends ConsumerState<LoginPage> {
             children: <Widget>[
               if (showLogo) ...<Widget>[
                 logoWidget,
-                SizedBox(height: compact ? AppSpacing.sm : AppSpacing.lg),
+                // KORIXA-AUTH-REAL-DEVICE-LANDSCAPE-FULLSCREEN-FIT-
+                // 20260916: `xs` (4, antes `sm`=8) en `compact` — ajuste
+                // vertical mínimo de última instancia (Fase 2, punto 3:
+                // "reducir SOLO gaps verticales phone-landscape"), parte
+                // de cerrar un déficit real medido de 25px en el
+                // viewport más chico (740×360) entre el logo y el CTA,
+                // incluso asumiendo cero barras de sistema. `compact` es
+                // exclusivo de phone landscape — portrait sigue con `lg`
+                // (20) sin cambios.
+                SizedBox(height: compact ? AppSpacing.xs : AppSpacing.lg),
               ],
               titleWidget,
               // KORIXA-SCREEN01-SCREEN02-TITLE-SINGLE-LINE-LANDSCAPE-

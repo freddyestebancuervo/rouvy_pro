@@ -77,3 +77,14 @@ kotlin {
 flutter {
     source = "../.."
 }
+
+dependencies {
+    // KORIXA-AUTH-REAL-DEVICE-LANDSCAPE-FULLSCREEN-FIT-20260916:
+    // `WindowCompat`/`WindowInsetsControllerCompat` (usados en
+    // `MainActivity.kt` para el modo immersive moderno) viven en
+    // `androidx.core` — declarado explícitamente en vez de confiar en
+    // que el embedding de Flutter lo traiga transitivamente, para que
+    // una futura actualización del engine no rompa este build en
+    // silencio.
+    implementation("androidx.core:core-ktx:1.13.1")
+}
