@@ -107,7 +107,7 @@ abstract class AppLocalizations {
   /// No description provided for @welcomeTitle.
   ///
   /// In es, this message translates to:
-  /// **'Conecta tu energía.'**
+  /// **'Conecta tu energía'**
   String get welcomeTitle;
 
   /// No description provided for @welcomeSubtitle.

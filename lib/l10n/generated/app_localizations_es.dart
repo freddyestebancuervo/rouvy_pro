@@ -12,7 +12,7 @@ class AppLocalizationsEs extends AppLocalizations {
   String get appName => 'RidePro';
 
   @override
-  String get welcomeTitle => 'Conecta tu energía.';
+  String get welcomeTitle => 'Conecta tu energía';
 
   @override
   String get welcomeSubtitle =>

@@ -1760,7 +1760,12 @@ void main() {
     );
     await tester.pumpAndSettle();
 
-    expect(find.text('Conecta tu energía.'), findsOneWidget, reason: 'SCREEN01_UNCHANGED: título de Welcome intacto');
+    // KORIXA-SCREEN01-REMOVE-TITLE-PERIOD-20260915: el texto en sí SÍ
+    // cambió (se quitó el punto final, único cambio autorizado por esa
+    // tarea) — este test verifica que SCREEN_01 no cambió por CAUSA de
+    // este archivo (login_page.dart), no que el texto sea idéntico byte
+    // a byte para siempre.
+    expect(find.text('Conecta tu energía'), findsOneWidget, reason: 'SCREEN01_UNCHANGED: título de Welcome intacto');
     expect(
       find.text('Entrena, compite y vive rutas increíbles en indoor y outdoor.'),
       findsOneWidget,

@@ -33,8 +33,11 @@ void main() {
   }
 
   testWidgets('WELCOME_TITLE_APPROVED_COPY = PASS', (WidgetTester tester) async {
+    // KORIXA-SCREEN01-REMOVE-TITLE-PERIOD-20260915: 'Conecta tu energía'
+    // (antes 'Conecta tu energía.') — el dueño pidió quitar únicamente
+    // el punto final.
     await pumpWelcomePage(tester);
-    expect(find.text('Conecta tu energía.'), findsOneWidget);
+    expect(find.text('Conecta tu energía'), findsOneWidget);
   });
 
   testWidgets('WELCOME_SUBTITLE_APPROVED_COPY = PASS', (WidgetTester tester) async {
@@ -235,7 +238,7 @@ void main() {
       // layout de escritorio. "Iniciar sesión" ya no existe (KORIXA-
       // WELCOME-SINGLE-CTA-NAVIGATION-PR127-20260910).
       expect(find.text('Iniciar sesión'), findsNothing);
-      expect(find.text('Conecta tu energía.'), findsOneWidget);
+      expect(find.text('Conecta tu energía'), findsOneWidget);
       expect(find.text('Entrena, compite y vive rutas increíbles en indoor y outdoor.'), findsOneWidget);
       expect(find.text('Comenzar'), findsOneWidget);
     });
@@ -561,7 +564,7 @@ void main() {
   testWidgets('OUTER_LIGHT_THEME_DARK_TECH = PASS', (WidgetTester tester) async {
     await pumpWelcomePage(tester, theme: ThemeData.light());
 
-    final Text title = tester.widget<Text>(find.text('Conecta tu energía.'));
+    final Text title = tester.widget<Text>(find.text('Conecta tu energía'));
     expect(title.style?.color, DarkTech.textPrimary);
   });
 
@@ -603,7 +606,7 @@ void main() {
       expect(hasDesktopLogo(tester), isTrue, reason: '$label debe mostrar el logo de escritorio');
       expect(find.byType(PrimaryGradientButton), findsOneWidget, reason: '$label: el CTA de escritorio debe existir');
       expect(find.byKey(const Key('welcome-desktop-cta')), findsOneWidget, reason: '$label: debe ser el CTA de escritorio, no el de teléfono en horizontal');
-      expect(find.text('Conecta tu energía.'), findsOneWidget, reason: '$label: el título debe seguir visible');
+      expect(find.text('Conecta tu energía'), findsOneWidget, reason: '$label: el título debe seguir visible');
       expect(find.text('Iniciar sesión'), findsNothing, reason: '$label: la acción secundaria ya no existe');
     });
   }
